@@ -1,0 +1,1728 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root {
+    --canvas: #FAF8F4;
+    --surface: #FFFFFF;
+    --surface-2: #FCFBF8;
+    --ink: #3B3A36;
+    --muted: #8C887F;
+    --faint: #B6B2A8;
+    --line: #ECE9E1;
+    --line-2: #E3DFD5;
+    --sage: #9DBE9C;
+    --sage-bg: #EEF4EC;
+    --sage-ink: #4E6B4D;
+    --sky: #A6C3D6;
+    --sky-bg: #EAF1F6;
+    --sky-ink: #436076;
+    --lav: #BDB1D4;
+    --lav-bg: #F0ECF6;
+    --lav-ink: #5B4E78;
+    --peach: #E2C198;
+    --peach-bg: #F8F1E5;
+    --peach-ink: #8A6630;
+    --rose: #D7A2A2;
+    --rose-bg: #F7EBEB;
+    --rose-ink: #8E4F4F;
+    --shadow: 0 1px 2px rgba(59, 58, 54, .04), 0 4px 16px rgba(59, 58, 54, .05);
+    --radius: 14px;
+  }
+
+  * {
+    box-sizing: border-box
+  }
+
+  html,
+  body {
+    margin: 0;
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased
+  }
+
+  .serif {
+    font-family: Georgia, "Times New Roman", serif
+  }
+
+  input,
+  select,
+  textarea,
+  button {
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--ink)
+  }
+
+  button {
+    cursor: pointer
+  }
+
+  ::-webkit-scrollbar {
+    height: 9px;
+    width: 9px
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--line-2);
+    border-radius: 9px
+  }
+
+  .wrap {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 0 20px 80px
+  }
+
+  /* top bar */
+  .top {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    background: rgba(250, 248, 244, .86);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line)
+  }
+
+  .top-in {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap
+  }
+
+  .brand {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.15
+  }
+
+  .brand b {
+    font-weight: 600;
+    font-size: 17px;
+    letter-spacing: .2px
+  }
+
+  .brand span {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: .4px;
+    text-transform: uppercase
+  }
+
+  .seg {
+    display: inline-flex;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 3px
+  }
+
+  .seg button {
+    border: 0;
+    background: transparent;
+    padding: 7px 16px;
+    border-radius: 999px;
+    color: var(--muted);
+    font-weight: 500;
+    transition: .15s
+  }
+
+  .seg button.on {
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: var(--shadow)
+  }
+
+  .spacer {
+    flex: 1
+  }
+
+  .op {
+    display: flex;
+    align-items: center;
+    gap: 7px
+  }
+
+  .op input {
+    border: 1px solid var(--line-2);
+    border-radius: 9px;
+    padding: 7px 10px;
+    background: var(--surface);
+    width: 140px
+  }
+
+  .op label {
+    font-size: 11px;
+    color: var(--muted)
+  }
+
+  .ghost {
+    border: 1px solid var(--line-2);
+    background: var(--surface);
+    border-radius: 9px;
+    padding: 7px 12px;
+    color: var(--ink);
+    font-weight: 500
+  }
+
+  .ghost:hover {
+    border-color: var(--faint)
+  }
+
+  /* tabs */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin: 20px 0 22px;
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap
+  }
+
+  .tabs button {
+    border: 0;
+    background: transparent;
+    padding: 11px 4px;
+    margin-right: 22px;
+    color: var(--muted);
+    font-weight: 500;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: .15s
+  }
+
+  .tabs button.on {
+    color: var(--ink);
+    border-color: var(--ink)
+  }
+
+  .tabs .badge {
+    display: inline-block;
+    margin-left: 7px;
+    background: var(--rose-bg);
+    color: var(--rose-ink);
+    font-size: 10px;
+    font-weight: 700;
+    border-radius: 999px;
+    padding: 1px 7px;
+    vertical-align: middle
+  }
+
+  /* cards/grid */
+  .grid {
+    display: grid;
+    gap: 14px
+  }
+
+  .kpis {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr))
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow)
+  }
+
+  .kpi {
+    padding: 16px 18px
+  }
+
+  .kpi .lab {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .5px
+  }
+
+  .kpi .val {
+    font-size: 30px;
+    font-weight: 600;
+    margin-top: 6px;
+    letter-spacing: -.5px
+  }
+
+  .kpi .sub {
+    font-size: 12px;
+    color: var(--faint);
+    margin-top: 2px
+  }
+
+  .sec {
+    margin-top: 26px
+  }
+
+  .sec-h {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 12px
+  }
+
+  .sec-h h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600
+  }
+
+  .sec-h .hint {
+    font-size: 12px;
+    color: var(--muted)
+  }
+
+  .pad {
+    padding: 18px 20px
+  }
+
+  /* chips */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap
+  }
+
+  .chip .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%
+  }
+
+  .c-none {
+    background: #F1EFE9;
+    color: #8C887F
+  }
+
+  .c-none .dot {
+    background: #B6B2A8
+  }
+
+  .c-prog {
+    background: var(--sky-bg);
+    color: var(--sky-ink)
+  }
+
+  .c-prog .dot {
+    background: var(--sky)
+  }
+
+  .c-done {
+    background: var(--sage-bg);
+    color: var(--sage-ink)
+  }
+
+  .c-done .dot {
+    background: var(--sage)
+  }
+
+  .c-issue {
+    background: var(--rose-bg);
+    color: var(--rose-ink)
+  }
+
+  .c-issue .dot {
+    background: var(--rose)
+  }
+
+  .c-app {
+    background: var(--peach-bg);
+    color: var(--peach-ink)
+  }
+
+  .c-app .dot {
+    background: var(--peach)
+  }
+
+  /* progress */
+  .bar {
+    height: 6px;
+    background: #F0EEE8;
+    border-radius: 6px;
+    overflow: hidden
+  }
+
+  .bar i {
+    display: block;
+    height: 100%;
+    background: var(--sage);
+    border-radius: 6px;
+    transition: width .3s
+  }
+
+  .stagebar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 0;
+    border-top: 1px solid var(--line)
+  }
+
+  .stagebar:first-child {
+    border-top: 0
+  }
+
+  .stagebar .nm {
+    width: 200px;
+    font-size: 13px;
+    color: var(--ink)
+  }
+
+  .stagebar .meter {
+    flex: 1
+  }
+
+  .stagebar .pc {
+    width: 96px;
+    text-align: right;
+    font-size: 12px;
+    color: var(--muted)
+  }
+
+  /* table */
+  table {
+    border-collapse: collapse;
+    width: 100%
+  }
+
+  th,
+  td {
+    text-align: left;
+    padding: 11px 12px;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+    vertical-align: middle
+  }
+
+  th {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: var(--muted);
+    font-weight: 600
+  }
+
+  td.num,
+  th.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums
+  }
+
+  tr:last-child td {
+    border-bottom: 0
+  }
+
+  .tbl-wrap {
+    overflow: auto;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface)
+  }
+
+  /* product list */
+  .plist {
+    display: flex;
+    flex-direction: column;
+    gap: 10px
+  }
+
+  .prow {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden
+  }
+
+  .phead {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 16px;
+    cursor: pointer
+  }
+
+  .phead:hover {
+    background: var(--surface-2)
+  }
+
+  .psku {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    padding: 2px 8px
+  }
+
+  .pname {
+    font-weight: 600
+  }
+
+  .pvend {
+    font-size: 12px;
+    color: var(--muted)
+  }
+
+  .pprog {
+    width: 130px
+  }
+
+  .pbody {
+    border-top: 1px solid var(--line);
+    background: var(--surface-2);
+    padding: 6px 4px
+  }
+
+  .chev {
+    color: var(--faint);
+    transition: .2s;
+    font-size: 12px
+  }
+
+  .chev.open {
+    transform: rotate(90deg)
+  }
+
+  /* stage editor */
+  .stage {
+    display: grid;
+    grid-template-columns: 180px 150px 1fr 86px;
+    gap: 10px;
+    align-items: start;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--line)
+  }
+
+  .stage:last-child {
+    border-bottom: 0
+  }
+
+  .stage .lab {
+    font-weight: 500;
+    padding-top: 7px
+  }
+
+  .stage .meta {
+    grid-column: 1/-1;
+    font-size: 11px;
+    color: var(--faint);
+    margin-top: -4px
+  }
+
+  label.fld {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--muted)
+  }
+
+  select,
+  input.txt,
+  textarea {
+    border: 1px solid var(--line-2);
+    border-radius: 9px;
+    padding: 8px 10px;
+    background: var(--surface);
+    width: 100%
+  }
+
+  textarea {
+    resize: vertical;
+    min-height: 34px
+  }
+
+  .mini {
+    padding: 7px 12px;
+    border: 1px solid var(--line-2);
+    border-radius: 9px;
+    background: var(--surface);
+    font-weight: 600;
+    color: var(--sage-ink)
+  }
+
+  .mini:hover {
+    background: var(--sage-bg);
+    border-color: var(--sage)
+  }
+
+  .mini.saved {
+    background: var(--sage-bg);
+    border-color: var(--sage);
+    color: var(--sage-ink)
+  }
+
+  /* store grid */
+  .stgrid {
+    width: 100%
+  }
+
+  .stgrid input.txt {
+    padding: 6px 8px
+  }
+
+  .recv {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 12px
+  }
+
+  .recv input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--sage)
+  }
+
+  /* alerts */
+  .alert {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--rose);
+    background: var(--rose-bg);
+    border-radius: 11px;
+    margin-bottom: 8px
+  }
+
+  .alert .ic {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--rose);
+    color: #fff;
+    display: grid;
+    place-items: center;
+    font-weight: 700;
+    font-size: 13px
+  }
+
+  .alert .tx {
+    flex: 1;
+    font-size: 13px;
+    color: var(--rose-ink)
+  }
+
+  .alert b {
+    color: var(--ink)
+  }
+
+  .empty {
+    text-align: center;
+    color: var(--faint);
+    padding: 46px 20px;
+    font-size: 13px
+  }
+
+  /* modal */
+  .scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(59, 58, 54, .28);
+    backdrop-filter: blur(2px);
+    z-index: 50;
+    display: grid;
+    place-items: center;
+    padding: 20px
+  }
+
+  .modal {
+    background: var(--surface);
+    border-radius: 18px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, .18);
+    width: min(560px, 100%);
+    max-height: 90vh;
+    overflow: auto
+  }
+
+  .modal h3 {
+    margin: 0;
+    padding: 20px 22px;
+    border-bottom: 1px solid var(--line);
+    font-size: 16px
+  }
+
+  .mbody {
+    padding: 20px 22px;
+    display: grid;
+    gap: 14px
+  }
+
+  .mrow {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px
+  }
+
+  .mfoot {
+    padding: 16px 22px;
+    border-top: 1px solid var(--line);
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px
+  }
+
+  .primary {
+    background: var(--ink);
+    color: #fff;
+    border: 0;
+    border-radius: 10px;
+    padding: 9px 18px;
+    font-weight: 600
+  }
+
+  .primary:hover {
+    background: #2c2b28
+  }
+
+  .danger {
+    color: var(--rose-ink);
+    background: transparent;
+    border: 0;
+    font-weight: 600;
+    font-size: 12px
+  }
+
+  .danger:hover {
+    text-decoration: underline
+  }
+
+  .toolbar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 16px;
+    flex-wrap: wrap
+  }
+
+  .search {
+    flex: 1;
+    min-width: 200px
+  }
+
+  .search input {
+    border: 1px solid var(--line-2);
+    border-radius: 10px;
+    padding: 9px 12px;
+    background: var(--surface);
+    width: 100%
+  }
+
+  .seg.sm button {
+    padding: 6px 12px;
+    font-size: 12px
+  }
+
+  .audit-act {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .4px;
+    text-transform: uppercase;
+    color: var(--lav-ink);
+    background: var(--lav-bg);
+    border-radius: 6px;
+    padding: 2px 7px
+  }
+
+  .tag {
+    font-size: 11px;
+    color: var(--muted)
+  }
+
+  .legend {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 10px
+  }
+
+  .note {
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--sky-bg);
+    border: 1px solid #D8E5EE;
+    border-radius: 10px;
+    padding: 10px 13px
+  }
+
+  @media(max-width:720px) {
+    .stage {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .stage .lab {
+      grid-column: 1/-1
+    }
+
+    .phead {
+      flex-wrap: wrap
+    }
+
+    .pprog {
+      width: 100%
+    }
+  }
+</style>
+<div id="root"></div>
+<script type="text/babel">
+  const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+  /* ---------- constants ---------- */
+  const DIVISIONS = ["KOC Cards", "Bombay Cards"];
+  const STORES = ["Chamrajpet", "HSR Layout", "Sahakar Nagar", "Hoodi", "Jayanagar", "Bommasandra", "Hyderabad", "Mysore", "Vizag", "Hubli", "Chitradurga"];
+  const STAGES = [
+    { k: "barcoding", n: "Bar Coding" },
+    { k: "content", n: "Content" },
+    { k: "photography", n: "Photography" },
+    { k: "videography", n: "Videography" },
+    { k: "videoedit", n: "Video Editing" },
+    { k: "images", n: "Images Uploaded" },
+    { k: "backend", n: "Backend Listing (App)" },
+    { k: "website", n: "Website Listing (Shopify)" },
+    { k: "scan", n: "Scan Before Dispatch" },
+    { k: "qc", n: "Final QC / Audit" },
+  ];
+  const STATUSES = ["Not Started", "In Progress", "Completed", "Issue"];
+  const STAGE_COLS = STAGES.filter(s => s.k !== "qc"); // process stages used as bulk columns (QC handled via qc_verdict/qc_issues)
+  const DEFAULT_VENDORS = {
+    "KOC Cards": ["KOC", "Patrika", "Mayur", "Rasiklal", "Venis", "Ferry Card", "Mack Mark", "Shubham", "Mani Creation", "Jimit", "Reel Card", "Swamy Cards", "Remco", "Sanskurti", "Aakarshak"],
+    "Bombay Cards": []
+  };
+
+  /* ---------- storage helpers (shared across the team) ---------- */
+  //const SHARED=true;
+  //async function sget(key, shared){ try{ const r=await window.storage.get(key,shared); return r?JSON.parse(r.value):null; }catch(e){ return null; } }
+  //async function sset(key,val,shared){ try{ await window.storage.set(key,JSON.stringify(val),shared); }catch(e){ console.error("save",e);} }
+
+  /* ---------- Google Sheets backend ---------- */
+  // const APPS_SCRIPT_URL = "PASTE_YOUR_APPS_SCRIPT_URL_HERE"; // ← only thing you change
+  const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwhvIeomL6wiBH_3LgbskV__BNy0j_w1BlOBVz53oLZa2LRTD1aH79zeXPbsNCqYAE/exec";
+  async function sget(key) { /* operator-only local fallback */
+    try { return JSON.parse(localStorage.getItem(key)); } catch (e) { return null; }
+  }
+  async function sset(key, val) { localStorage.setItem(key, JSON.stringify(val)); }
+
+  // async function apiPost(action, payload) {
+  //   const r = await fetch(APPS_SCRIPT_URL, { method: "POST", body: JSON.stringify({ action, payload }) });
+  //   return r.json();
+  // }
+
+  async function apiPost(action, payload) {
+    try {
+      const r = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        redirect: "follow",
+        headers: { "Content-Type": "text/plain" },
+        body: JSON.stringify({ action, payload })
+      });
+      const text = await r.text();
+      try {
+        const json = JSON.parse(text);
+        if (json.error) console.error("API error:", json.error, "| action:", action);
+        return json;
+      } catch (e) {
+        console.error("Non-JSON response for action:", action, "| body:", text.slice(0, 300));
+        return { error: text };
+      }
+    } catch (e) {
+      console.error("Fetch failed for action:", action, e);
+      return { error: e.message };
+    }
+  }
+  // async function apiGet() {
+  //   const r = await fetch(`${APPS_SCRIPT_URL}?action=getAll`);
+  //   return r.json();
+  // }
+  async function apiGet() {
+    try {
+      const r = await fetch(`${APPS_SCRIPT_URL}?action=getAll&t=${Date.now()}`, {
+        redirect: "follow",
+        cache: "no-store"
+      });
+      const text = await r.text();
+      try { return JSON.parse(text); }
+      catch (e) { console.error("getAll parse error:", text.slice(0, 300)); return { products: [], audit: [], vendors: {} }; }
+    } catch (e) {
+      console.error("getAll fetch failed:", e);
+      return { products: [], audit: [], vendors: {} };
+    }
+  }
+
+
+  /* ---------- utils ---------- */
+  const now = () => new Date().toISOString();
+  const uid = () => Math.random().toString(36).slice(2, 9);
+  function fmt(iso) {
+    if (!iso) return "—"; const d = new Date(iso);
+    return d.toLocaleString("en-IN", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+  }
+  function statusClass(s) { return s === "Completed" ? "c-done" : s === "In Progress" ? "c-prog" : s === "Issue" ? "c-issue" : "c-none"; }
+  function normStatus(v) {
+    const m = {
+      "not started": "Not Started", "notstarted": "Not Started", "in progress": "In Progress", "inprogress": "In Progress",
+      "progress": "In Progress", "wip": "In Progress", "pending": "In Progress", "completed": "Completed", "complete": "Completed",
+      "done": "Completed", "approved": "Completed", "issue": "Issue", "issues": "Issue", "error": "Issue"
+    };
+    return m[String(v).trim().toLowerCase()] || null;
+  }
+  function normBool(v) { return /^(y|yes|true|1|received|recd|done|✓|x)$/i.test(String(v).trim()); }
+  function normDate(v) {
+    if (v instanceof Date && !isNaN(v)) return v.toISOString().slice(0, 10);
+    if (typeof v === "number") { const d = new Date(Date.UTC(1899, 11, 30) + v * 86400000); return d.toISOString().slice(0, 10); }
+    return String(v).trim();
+  }
+  function fieldFromProduct(p, h) {
+    if (["division", "sku", "name", "vendor", "inward", "qty", "note"].includes(h)) return p[h] ?? "";
+    if (h === "qc_verdict") return p.verdict || "";
+    if (h === "qc_issues") return p.issues || "";
+    const mm = h.match(/^(.+)_(status|person|comments)$/);
+    if (mm && p.stages[mm[1]]) return p.stages[mm[1]][mm[2]] || "";
+    return "";
+  }
+  const PROD_HEADERS = (() => {
+    const h = ["division", "sku", "name", "vendor", "inward", "qty", "note"];
+    STAGE_COLS.forEach(s => h.push(s.k + "_status", s.k + "_person", s.k + "_comments")); h.push("qc_verdict", "qc_issues"); return h;
+  })();
+  const STORE_HEADERS = ["division", "sku", "store", "dispatched", "received", "missing", "damaged", "notes"];
+  function blankProduct(division, vendor) {
+    const stages = {}; STAGES.forEach(s => stages[s.k] = { status: "Not Started", person: "", comments: "", at: "" });
+    const stores = {}; STORES.forEach(st => stores[st] = { dispatched: 0, received: false, receivedAt: "", receivedBy: "", missing: 0, damaged: 0, notes: "", at: "" });
+    return {
+      id: uid(), division, sku: "", name: "", vendor: vendor || "", inward: "", qty: 0, note: "",
+      stages, stores, verdict: "", issues: "", createdAt: now(), updatedAt: now()
+    };
+  }
+
+  /* ---------- small components ---------- */
+  function Chip({ status }) { return <span className={"chip " + statusClass(status)}><span className="dot" />{status}</span>; }
+  function Progress({ pct }) { return <div className="bar"><i style={{ width: pct + "%" }} /></div>; }
+
+  function productPct(p) {
+    const done = STAGES.filter(s => p.stages[s.k].status === "Completed").length;
+    return Math.round(done / STAGES.length * 100);
+  }
+
+  /* ============================================================= */
+  function App() {
+    const [loading, setLoading] = useState(true);
+    const [syncing, setSyncing] = useState(false);
+    const [syncOk, setSyncOk] = useState(false);
+    const [division, setDivision] = useState("KOC Cards");
+    const [tab, setTab] = useState("overview");
+    const [operator, setOperator] = useState("");
+    const [products, setProducts] = useState([]);
+    const [audit, setAudit] = useState([]);
+    const [vendors, setVendors] = useState(DEFAULT_VENDORS);
+
+    const load = useCallback(async () => {
+      setSyncing(true);
+      const data = await apiGet();
+      if (data.products) {
+        setProducts(data.products);
+        setAudit(data.audit || []);
+        setVendors(data.vendors || DEFAULT_VENDORS);
+      }
+      const op = await sget("ct:operator");
+      if (op) setOperator(op);
+      setLoading(false);
+      setSyncing(false);
+      setSyncOk(true);
+      setTimeout(() => setSyncOk(false), 2000);
+    }, []);
+    useEffect(() => {
+      load();
+      const iv = setInterval(load, 30000);
+      return () => clearInterval(iv);
+    }, [load]);
+    // useEffect(() => { load(); }, [load]);
+
+    const logAudit = useCallback(async (action, entity, detail) => {
+      const entry = { id: uid(), at: now(), actor: operator || "Unattributed", action, entity, detail, division };
+      setAudit(prev => [entry, ...prev].slice(0, 800));
+      apiPost("appendAudit", entry); // fire-and-forget
+    }, [operator, division]);
+
+    const upsertProduct = useCallback(async (prod, isNew) => {
+      prod.updatedAt = now();
+      const next = isNew ? [prod, ...products] : products.map(x => x.id === prod.id ? prod : x);
+      setProducts(next);
+      await apiPost("upsertProduct", prod);
+      logAudit(isNew ? "Added product" : "Edited product", prod.sku || prod.name || "product",
+        `${prod.name || "(unnamed)"} · ${prod.vendor || "no vendor"} · qty ${prod.qty}`);
+    }, [products, logAudit]);
+
+    const patchStage = useCallback(async (pid, stageKey, patch) => {
+      const next = products.map(p => {
+        if (p.id !== pid) return p;
+        const stages = { ...p.stages, [stageKey]: { ...p.stages[stageKey], ...patch, at: now() } };
+        return { ...p, stages, updatedAt: now() };
+      });
+      setProducts(next);
+      const updated = next.find(x => x.id === pid);
+      await apiPost("upsertProduct", updated);
+      const sn = STAGES.find(s => s.k === stageKey).n;
+      logAudit("Stage update", `${updated.name || updated.sku || "product"}`, `${sn} → ${patch.status || updated.stages[stageKey].status}${patch.person ? (" · " + patch.person) : ""}`);
+    }, [products, logAudit]);
+
+    const patchQC = useCallback(async (pid, patch) => {
+      const next = products.map(p => p.id === pid ? { ...p, ...patch, updatedAt: now() } : p);
+      setProducts(next);
+      const updated = next.find(x => x.id === pid);
+      await apiPost("upsertProduct", updated);
+      logAudit("Final audit", `${updated.name || updated.sku || "product"}`, `Verdict: ${patch.verdict || updated.verdict || "—"}`);
+    }, [products, logAudit]);
+
+    const patchStore = useCallback(async (pid, store, patch) => {
+      const next = products.map(p => {
+        if (p.id !== pid) return p;
+        const stores = { ...p.stores, [store]: { ...p.stores[store], ...patch, at: now() } };
+        return { ...p, stores, updatedAt: now() };
+      });
+      setProducts(next);
+      const updated = next.find(x => x.id === pid);
+      const s = updated.stores[store];
+      await apiPost("upsertStore", { productId: pid, store, storeData: s, division: updated.division, sku: updated.sku });
+      let detail = `${store}: disp ${s.dispatched}, recv ${s.received ? "yes" : "no"}`;
+      if (s.missing > 0 || s.damaged > 0) detail += ` · ⚠ missing ${s.missing}, damaged ${s.damaged}`;
+      logAudit((s.missing > 0 || s.damaged > 0) ? "Issue reported" : "Store update", `${updated.name || updated.sku || "product"}`, detail);
+    }, [products, logAudit]);
+
+    const removeProduct = useCallback(async (pid) => {
+      const p = products.find(x => x.id === pid);
+      setProducts(products.filter(x => x.id !== pid));
+      await apiPost("deleteProduct", { id: pid });
+      logAudit("Deleted product", `${p?.name || p?.sku || "product"}`, p?.vendor || "");
+    }, [products, logAudit]);
+
+    const addVendor = useCallback(async (div, name) => {
+      if (!name) return;
+      const list = vendors[div] || []; if (list.includes(name)) return;
+      const next = { ...vendors, [div]: [...list, name].sort() };
+      setVendors(next);
+      await apiPost("setVendors", next);
+    }, [vendors]);
+
+    const saveOperator = async (v) => { setOperator(v); await sset("ct:operator", v); };
+
+    const bulkProducts = useCallback(async (rows, uploadedBy) => {
+      let created = 0, updated = 0; const errs = []; const newV = new Set();
+      let next = [...products]; const changed = [];
+      rows.forEach((row, i) => {
+        const sku = String(row.sku || "").trim();
+        if (!sku || sku.toUpperCase().includes("EXAMPLE")) return;
+        const div = DIVISIONS.includes(String(row.division || "").trim()) ? String(row.division).trim() : division;
+        let existing = next.find(p => p.division === div && p.sku.toLowerCase() === sku.toLowerCase());
+        let prod, isNew = false;
+        // if (existing) { prod = { ...existing, stages: { ...existing.stages } }; }
+        if (existing) {
+          prod = {
+            ...existing,
+            stages: Object.fromEntries(
+              Object.entries(existing.stages).map(([k, v]) => [k, { ...v }])
+            ),
+            stores: Object.fromEntries(
+              Object.entries(existing.stores).map(([k, v]) => [k, { ...v }])
+            )
+          };
+        }
+        else { prod = blankProduct(div, ""); prod.sku = sku; isNew = true; }
+        const g = (k) => row[k] !== "" && row[k] != null;
+        if (g("name")) prod.name = String(row.name).trim();
+        if (g("vendor")) { prod.vendor = String(row.vendor).trim(); if (!(vendors[div] || []).includes(prod.vendor)) newV.add(div + "|" + prod.vendor); }
+        if (g("inward")) prod.inward = normDate(row.inward);
+        if (g("qty") && !isNaN(+row.qty)) prod.qty = +row.qty;
+        if (g("note")) prod.note = String(row.note).trim();
+        STAGE_COLS.forEach(s => {
+          const k = s.k; let touched = false; const cur = { ...prod.stages[k] };
+          const st = row[k + "_status"], pe = row[k + "_person"], co = row[k + "_comments"];
+          if (st !== "" && st != null) { const ns = normStatus(st); if (ns) { cur.status = ns; touched = true; } else errs.push(`Row ${i + 2}: invalid status "${st}" in ${k}_status`); }
+          if (pe !== "" && pe != null) { cur.person = String(pe).trim(); touched = true; }
+          if (co !== "" && co != null) { cur.comments = String(co).trim(); touched = true; }
+          if (touched) { cur.at = now(); prod.stages[k] = cur; }
+        });
+        if (g("qc_verdict")) { const v = String(row.qc_verdict).trim(); if (/appro/i.test(v)) prod.verdict = "Approved"; else if (/issue/i.test(v)) prod.verdict = "Issues Found"; }
+        if (g("qc_issues")) prod.issues = String(row.qc_issues).trim();
+        prod.updatedAt = now();
+        if (isNew) { next = [prod, ...next]; created++; } else { next = next.map(p => p.id === prod.id ? prod : p); updated++; }
+        changed.push(prod);
+      });
+      setProducts(next);
+      // Send all products in ONE request instead of N separate ones
+      await apiPost("batchUpsertProducts", changed);
+      newV.forEach(s => { const [d, n] = s.split("|"); addVendor(d, n); });
+      logAudit("Bulk import", `${created + updated} products`,
+        `${created} created, ${updated} updated · uploaded by ${uploadedBy || operator || "unknown"}${errs.length ? ` · ${errs.length} field errors` : ""}`);
+      return { created, updated, errs };
+    }, [products, division, vendors, addVendor, logAudit]);
+
+    const bulkStores = useCallback(async (rows) => {
+      let updated = 0; const errs = []; let next = [...products]; const changedStores = [];
+      rows.forEach((row, i) => {
+        const sku = String(row.sku || "").trim();
+        if (!sku || sku.toUpperCase().includes("EXAMPLE")) return;
+        const div = DIVISIONS.includes(String(row.division || "").trim()) ? String(row.division).trim() : division;
+        const store = String(row.store || "").trim();
+        if (!STORES.includes(store)) { errs.push(`Row ${i + 2}: unknown store "${store}"`); return; }
+        const existing = next.find(p => p.division === div && p.sku.toLowerCase() === sku.toLowerCase());
+        if (!existing) { errs.push(`Row ${i + 2}: product "${sku}" not found in ${div}`); return; }
+        const np = { ...existing, stores: { ...existing.stores } }; const s = { ...np.stores[store] };
+        const g = (k) => row[k] !== "" && row[k] != null;
+        if (g("dispatched") && !isNaN(+row.dispatched)) s.dispatched = +row.dispatched;
+        if (g("missing") && !isNaN(+row.missing)) s.missing = +row.missing;
+        if (g("damaged") && !isNaN(+row.damaged)) s.damaged = +row.damaged;
+        if (g("notes")) s.notes = String(row.notes).trim();
+        if (g("received")) {
+          const rv = normBool(row.received);
+          if (rv && !s.received) { s.received = true; s.receivedAt = now(); s.receivedBy = operator || "bulk"; }
+          else if (!rv) { s.received = false; } else { s.received = true; }
+        }
+        s.at = now(); np.stores[store] = s; np.updatedAt = now();
+        next = next.map(p => p.id === np.id ? np : p);
+        changedStores.push({ productId: np.id, store, storeData: s, division: div, sku });
+        updated++;
+      });
+      setProducts(next);
+      await apiPost("batchUpsertStores", changedStores);
+      logAudit("Bulk store import", `${updated} store rows`, errs.length ? `${errs.length} errors` : "ok");
+      return { updated, errs };
+    }, [products, division, operator, logAudit]);
+
+    const divProducts = useMemo(() => products.filter(p => p.division === division), [products, division]);
+    const openIssues = useMemo(() => {
+      const list = [];
+      divProducts.forEach(p => STORES.forEach(st => {
+        const s = p.stores[st];
+        if (s && (s.missing > 0 || s.damaged > 0)) list.push({ p, store: st, s });
+      }));
+      return list;
+    }, [divProducts]);
+
+    if (loading) return <div className="empty serif" style={{ paddingTop: 120, fontSize: 18 }}>Loading workspace…</div>;
+
+    return (
+      <div>
+        <div className="top"><div className="top-in">
+          <div className="brand"><b>Card Flow</b><span>Production · Listing · Dispatch</span></div>
+          <div className="seg">
+            {DIVISIONS.map(d => (
+              <button key={d} className={division === d ? "on" : ""} onClick={() => setDivision(d)}>{d}</button>
+            ))}
+          </div>
+          <div className="spacer" />
+          <div className="op">
+            <label>You</label>
+            <input value={operator} placeholder="your name" onChange={e => saveOperator(e.target.value)} />
+          </div>
+          <button className="ghost" onClick={load} disabled={syncing}
+            style={{
+              color: syncOk ? "var(--sage-ink)" : undefined,
+              borderColor: syncOk ? "var(--sage)" : undefined
+            }}>
+            {syncing ? "Syncing…" : syncOk ? "✓ Synced" : "↻ Sync"}
+          </button>
+        </div></div>
+
+        <div className="wrap">
+          <div className="tabs">
+            {[["overview", "Overview"], ["products", "Products & Pipeline"], ["dispatch", "Dispatch & Stores"], ["bulk", "Bulk Upload"], ["audit", "Audit Log"]].map(([k, n]) => (
+              <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>
+                {n}{k === "dispatch" && openIssues.length > 0 ? <span className="badge">{openIssues.length}</span> : null}
+              </button>
+            ))}
+          </div>
+
+          {tab === "overview" && <Overview division={division} products={divProducts} issues={openIssues} go={setTab} />}
+          {tab === "products" && <Products division={division} products={divProducts} vendors={vendors[division] || []}
+            onUpsert={upsertProduct} onStage={patchStage} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} />}
+          {tab === "dispatch" && <Dispatch products={divProducts} onStore={patchStore} onStage={patchStage} operator={operator} />}
+          {tab === "bulk" && <Bulk division={division} products={products} divProducts={divProducts} bulkProducts={bulkProducts} bulkStores={bulkStores} operator={operator} />}
+          {tab === "audit" && <AuditLog audit={audit.filter(a => a.division === division)} />}
+        </div>
+      </div>
+    );
+  }
+
+  /* ---------------- OVERVIEW ---------------- */
+  function Overview({ division, products, issues, go }) {
+    const total = products.length;
+    const fullyDone = products.filter(p => productPct(p) === 100).length;
+    const inProd = products.filter(p => { const v = productPct(p); return v > 0 && v < 100; }).length;
+    const notStarted = products.filter(p => productPct(p) === 0).length;
+    let dispatched = 0, received = 0, missing = 0, damaged = 0;
+    products.forEach(p => STORES.forEach(st => {
+      const s = p.stores[st]; dispatched += s.dispatched || 0;
+      if (s.received) received++; missing += s.missing || 0; damaged += s.damaged || 0;
+    }));
+    const stageStats = STAGES.map(s => ({
+      ...s,
+      done: products.filter(p => p.stages[s.k].status === "Completed").length,
+      issue: products.filter(p => p.stages[s.k].status === "Issue").length
+    }));
+    const storeStats = STORES.map(st => {
+      let d = 0, r = 0, m = 0, dm = 0, pending = 0;
+      products.forEach(p => { const s = p.stores[st]; d += s.dispatched || 0; if (s.received) r++; else if (s.dispatched > 0) pending++; m += s.missing || 0; dm += s.damaged || 0; });
+      return { st, d, r, m, dm, pending };
+    });
+
+    return (
+      <div>
+        <div className="grid kpis">
+          <div className="card kpi"><div className="lab">Products</div><div className="val">{total}</div><div className="sub">{division}</div></div>
+          <div className="card kpi"><div className="lab">Listing Complete</div><div className="val" style={{ color: "var(--sage-ink)" }}>{fullyDone}</div><div className="sub">all stages done</div></div>
+          <div className="card kpi"><div className="lab">In Production</div><div className="val" style={{ color: "var(--sky-ink)" }}>{inProd}</div><div className="sub">{notStarted} not started</div></div>
+          <div className="card kpi"><div className="lab">Cards Dispatched</div><div className="val">{dispatched}</div><div className="sub">{received} store receipts confirmed</div></div>
+          <div className="card kpi"><div className="lab">Missing / Damaged</div><div className="val" style={{ color: (missing + damaged) ? "var(--rose-ink)" : "var(--ink)" }}>{missing} / {damaged}</div><div className="sub">open across stores</div></div>
+        </div>
+
+        {issues.length > 0 && (
+          <div className="sec">
+            <div className="sec-h"><h3>Live alerts · missing & damaged</h3><span className="hint">reported by store executives</span></div>
+            {issues.slice(0, 8).map((x, i) => (
+              <div className="alert" key={i}>
+                <div className="ic">!</div>
+                <div className="tx">
+                  <b>{x.store}</b> — {x.s.missing > 0 ? `${x.s.missing} missing` : ""}{x.s.missing > 0 && x.s.damaged > 0 ? ", " : ""}{x.s.damaged > 0 ? `${x.s.damaged} damaged` : ""}
+                  {" · "}<b>{x.p.name || x.p.sku || "product"}</b> ({x.p.vendor || "—"})
+                  {x.s.notes ? ` · "${x.s.notes}"` : ""} <span className="tag">· {fmt(x.s.at)}</span>
+                </div>
+                <button className="ghost" onClick={() => go("dispatch")}>Resolve</button>
+              </div>
+            ))}
+            {issues.length > 8 && <div className="tag" style={{ marginTop: 6 }}>+{issues.length - 8} more in Dispatch & Stores</div>}
+          </div>
+        )}
+
+        <div className="sec">
+          <div className="sec-h"><h3>Pipeline progress</h3><span className="hint">manufacturing → listing → dispatch</span></div>
+          <div className="card pad">
+            {stageStats.map(s => (
+              <div className="stagebar" key={s.k}>
+                <div className="nm">{s.n}{s.issue > 0 && <span className="tag" style={{ color: "var(--rose-ink)" }}> · {s.issue} issue</span>}</div>
+                <div className="meter"><Progress pct={total ? Math.round(s.done / total * 100) : 0} /></div>
+                <div className="pc">{s.done}/{total} done</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="sec">
+          <div className="sec-h"><h3>Store receipt status</h3><span className="hint">{STORES.length} stores</span></div>
+          <div className="tbl-wrap">
+            <table>
+              <thead><tr><th>Store</th><th className="num">Dispatched</th><th className="num">Receipts ✓</th><th className="num">Pending</th><th className="num">Missing</th><th className="num">Damaged</th><th>Status</th></tr></thead>
+              <tbody>
+                {storeStats.map(r => (
+                  <tr key={r.st}>
+                    <td><b>{r.st}</b></td>
+                    <td className="num">{r.d}</td>
+                    <td className="num">{r.r}</td>
+                    <td className="num">{r.pending}</td>
+                    <td className="num" style={{ color: r.m ? "var(--rose-ink)" : "inherit" }}>{r.m}</td>
+                    <td className="num" style={{ color: r.dm ? "var(--rose-ink)" : "inherit" }}>{r.dm}</td>
+                    <td>{(r.m || r.dm) ? <Chip status="Issue" /> : r.pending === 0 && r.d > 0 ? <Chip status="Completed" /> : r.d > 0 ? <Chip status="In Progress" /> : <Chip status="Not Started" />}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ---------------- PRODUCTS ---------------- */
+  function Products({ division, products, vendors, onUpsert, onStage, onQC, onRemove, addVendor }) {
+    const [q, setQ] = useState("");
+    const [open, setOpen] = useState({});
+    const [modal, setModal] = useState(false);
+    const filtered = products.filter(p => {
+      const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase(); return t.includes(q.toLowerCase());
+    });
+    return (
+      <div>
+        <div className="toolbar">
+          <div className="search"><input placeholder="Search SKU, product or vendor…" value={q} onChange={e => setQ(e.target.value)} /></div>
+          <button className="primary" onClick={() => setModal(true)}>+ Add product</button>
+        </div>
+        {filtered.length === 0 ? <div className="card empty">No products yet for {division}. Add your first SKU to begin tracking its full pipeline.</div> :
+          <div className="plist">
+            {filtered.map(p => (
+              <ProductRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))}
+                onStage={onStage} onQC={onQC} onRemove={onRemove} />
+            ))}
+          </div>}
+        <div className="legend">
+          {STATUSES.map(s => <span key={s}><Chip status={s} /></span>)}
+        </div>
+        {modal && <AddModal division={division} vendors={vendors} addVendor={addVendor}
+          onClose={() => setModal(false)} onSave={(prod) => { onUpsert(prod, true); setModal(false); }} />}
+      </div>
+    );
+  }
+
+  function ProductRow({ p, open, toggle, onStage, onQC, onRemove }) {
+    const pct = productPct(p);
+    const hasIssue = STAGES.some(s => p.stages[s.k].status === "Issue");
+    return (
+      <div className="prow">
+        <div className="phead" onClick={toggle}>
+          <span className={"chev " + (open ? "open" : "")}>▶</span>
+          <span className="psku">{p.sku || "no-sku"}</span>
+          <span className="pname">{p.name || "(unnamed)"}</span>
+          <span className="pvend">· {p.vendor || "—"} · {p.qty || 0} cards</span>
+          <div className="spacer" style={{ flex: 1 }} />
+          {hasIssue && <Chip status="Issue" />}
+          {p.verdict === "Approved" && <span className="chip c-done"><span className="dot" />QC Approved</span>}
+          <div className="pprog"><Progress pct={pct} /></div>
+          <span className="tag" style={{ width: 38, textAlign: "right" }}>{pct}%</span>
+        </div>
+        {open && (
+          <div className="pbody">
+            {STAGES.map(s => s.k === "qc"
+              ? <QCStage key={s.k} p={p} onQC={onQC} />
+              : <StageEditor key={s.k} p={p} stage={s} onStage={onStage} />)}
+            <div style={{ padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span className="tag">Inward {p.inward || "—"} · created {fmt(p.createdAt)} · last update {fmt(p.updatedAt)}</span>
+              <button className="danger" onClick={() => { if (confirm("Delete this product?")) onRemove(p.id); }}>Delete product</button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function StageEditor({ p, stage, onStage }) {
+    const cur = p.stages[stage.k];
+    const [status, setStatus] = useState(cur.status);
+    const [person, setPerson] = useState(cur.person);
+    const [comments, setComments] = useState(cur.comments);
+    const [saved, setSaved] = useState(false);
+    useEffect(() => { setStatus(cur.status); setPerson(cur.person); setComments(cur.comments); }, [cur.status, cur.person, cur.comments]);
+    const dirty = status !== cur.status || person !== cur.person || comments !== cur.comments;
+    const save = () => { onStage(p.id, stage.k, { status, person, comments }); setSaved(true); setTimeout(() => setSaved(false), 1400); };
+    return (
+      <div className="stage">
+        <div className="lab">{stage.n}</div>
+        <label className="fld">Status
+          <select value={status} onChange={e => setStatus(e.target.value)}>
+            {STATUSES.map(s => <option key={s}>{s}</option>)}
+          </select>
+        </label>
+        <label className="fld">Responsible · comments
+          <input className="txt" placeholder="person" value={person} onChange={e => setPerson(e.target.value)} style={{ marginBottom: 6 }} />
+          <input className="txt" placeholder="comments (e.g. 27 of 30 cards)" value={comments} onChange={e => setComments(e.target.value)} />
+        </label>
+        <button className={"mini " + (saved ? "saved" : "")} disabled={!dirty && !saved} onClick={save}>{saved ? "Saved ✓" : "Save"}</button>
+        <div className="meta">{cur.at ? `Last set ${fmt(cur.at)}${cur.person ? (" by " + cur.person) : ""}` : "Not yet updated"}</div>
+      </div>
+    );
+  }
+
+  function QCStage({ p, onQC }) {
+    const [verdict, setVerdict] = useState(p.verdict || "");
+    const [issues, setIssues] = useState(p.issues || "");
+    const [saved, setSaved] = useState(false);
+    useEffect(() => { setVerdict(p.verdict || ""); setIssues(p.issues || ""); }, [p.verdict, p.issues]);
+    const dirty = verdict !== (p.verdict || "") || issues !== (p.issues || "");
+    const save = () => { onQC(p.id, { verdict, issues }); setSaved(true); setTimeout(() => setSaved(false), 1400); };
+    return (
+      <div className="stage" style={{ background: "var(--surface)" }}>
+        <div className="lab">Final QC / Audit</div>
+        <label className="fld">Verdict
+          <select value={verdict} onChange={e => setVerdict(e.target.value)}>
+            <option value="">— pending review —</option>
+            <option>Approved</option>
+            <option>Issues Found</option>
+          </select>
+        </label>
+        <label className="fld">Auditor notes / issues after final audit
+          <textarea placeholder="e.g. colour difference on 3 cards, content typo…" value={issues} onChange={e => setIssues(e.target.value)} />
+        </label>
+        <button className={"mini " + (saved ? "saved" : "")} disabled={!dirty && !saved} onClick={save}>{saved ? "Saved ✓" : "Save"}</button>
+      </div>
+    );
+  }
+
+  function AddModal({ division, vendors, addVendor, onClose, onSave }) {
+    const [f, setF] = useState(() => blankProduct(division, ""));
+    const [newVendor, setNewVendor] = useState("");
+    const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+    const showVendor = division !== "KOC Cards";
+    return (
+      <div className="scrim" onClick={onClose}>
+        <div className="modal" onClick={e => e.stopPropagation()}>
+          <h3 className="serif">New product · {division}</h3>
+          <div className="mbody">
+            <div className="mrow">
+              <label className="fld">SKU / Barcode<input className="txt" value={f.sku} onChange={e => set("sku", e.target.value)} placeholder="e.g. KOC-00142" /></label>
+              <label className="fld">Card quantity<input className="txt" type="number" value={f.qty} onChange={e => set("qty", +e.target.value)} /></label>
+            </div>
+            <label className="fld">Product name<input className="txt" value={f.name} onChange={e => set("name", e.target.value)} placeholder="design / card name" /></label>
+            {showVendor ? (
+              <div className="mrow">
+                <label className="fld">Vendor
+                  <select value={f.vendor} onChange={e => set("vendor", e.target.value)}>
+                    <option value="">— select —</option>
+                    {vendors.map(v => <option key={v}>{v}</option>)}
+                  </select>
+                </label>
+                <label className="fld">Inward date<input className="txt" type="date" value={f.inward} onChange={e => set("inward", e.target.value)} /></label>
+              </div>
+            ) : (
+              <label className="fld">Inward date<input className="txt" type="date" value={f.inward} onChange={e => set("inward", e.target.value)} /></label>
+            )}
+            {showVendor && (
+              <div className="mrow">
+                <label className="fld">Add a new vendor
+                  <input className="txt" value={newVendor} onChange={e => setNewVendor(e.target.value)} placeholder="vendor name" />
+                </label>
+                <button className="ghost" style={{ alignSelf: "end" }} onClick={() => { addVendor(division, newVendor.trim()); set("vendor", newVendor.trim()); setNewVendor(""); }}>Add vendor</button>
+              </div>
+            )}
+            <label className="fld">Note (optional)<textarea value={f.note} onChange={e => set("note", e.target.value)} placeholder="old/new split, set number, etc." /></label>
+          </div>
+          <div className="mfoot">
+            <button className="ghost" onClick={onClose}>Cancel</button>
+            <button className="primary" onClick={() => onSave(f)}>Create product</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ---------------- DISPATCH & STORES ---------------- */
+  function Dispatch({ products, onStore, onStage, operator }) {
+    const [q, setQ] = useState("");
+    const [open, setOpen] = useState({});
+    const filtered = products.filter(p => (p.sku + " " + p.name + " " + p.vendor).toLowerCase().includes(q.toLowerCase()));
+    return (
+      <div>
+        <div className="note">Cards are scanned before dispatch, then sent to each store. Store executives confirm receipt and flag any missing or damaged cards here — those surface instantly on the Overview alerts.</div>
+        <div className="toolbar" style={{ marginTop: 14 }}>
+          <div className="search"><input placeholder="Search product to dispatch / receive…" value={q} onChange={e => setQ(e.target.value)} /></div>
+        </div>
+        {filtered.length === 0 ? <div className="card empty">No products to dispatch yet.</div> :
+          <div className="plist">
+            {filtered.map(p => (
+              <DispatchRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))}
+                onStore={onStore} onStage={onStage} operator={operator} />
+            ))}
+          </div>}
+      </div>
+    );
+  }
+
+  function DispatchRow({ p, open, toggle, onStore, onStage, operator }) {
+    const scan = p.stages.scan;
+    const recvCount = STORES.filter(st => p.stores[st].received).length;
+    const dispCount = STORES.filter(st => p.stores[st].dispatched > 0).length;
+    const issueCount = STORES.filter(st => p.stores[st].missing > 0 || p.stores[st].damaged > 0).length;
+    return (
+      <div className="prow">
+        <div className="phead" onClick={toggle}>
+          <span className={"chev " + (open ? "open" : "")}>▶</span>
+          <span className="psku">{p.sku || "no-sku"}</span>
+          <span className="pname">{p.name || "(unnamed)"}</span>
+          <span className="pvend">· {p.vendor || "—"}</span>
+          <div style={{ flex: 1 }} />
+          {scan.status === "Completed" ? <span className="chip c-done"><span className="dot" />Scanned</span> : <span className="chip c-app"><span className="dot" />Not scanned</span>}
+          {issueCount > 0 && <span className="chip c-issue"><span className="dot" />{issueCount} store issue</span>}
+          <span className="tag">{recvCount}/{STORES.length} received</span>
+        </div>
+        {open && (
+          <div className="pbody">
+            <div style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 14, borderBottom: "1px solid var(--line)" }}>
+              <label className="recv">
+                <input type="checkbox" checked={scan.status === "Completed"}
+                  onChange={e => onStage(p.id, "scan", { status: e.target.checked ? "Completed" : "Not Started", person: operator || scan.person })} />
+                <b>Scanned before dispatch</b>
+              </label>
+              <span className="tag">{scan.at ? `${fmt(scan.at)}${scan.person ? (" · " + scan.person) : ""}` : "awaiting scan"}</span>
+            </div>
+            <div className="tbl-wrap" style={{ border: 0, borderRadius: 0 }}>
+              <table className="stgrid">
+                <thead><tr><th>Store</th><th className="num">Dispatched</th><th>Received</th><th className="num">Missing</th><th className="num">Damaged</th><th>Note</th><th></th></tr></thead>
+                <tbody>
+                  {STORES.map(st => <StoreCell key={st} p={p} store={st} onStore={onStore} operator={operator} />)}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function StoreCell({ p, store, onStore, operator }) {
+    const s = p.stores[store];
+    const [d, setD] = useState(s.dispatched);
+    const [r, setR] = useState(s.received);
+    const [m, setM] = useState(s.missing);
+    const [dm, setDm] = useState(s.damaged);
+    const [notes, setNotes] = useState(s.notes);
+    const [saved, setSaved] = useState(false);
+    useEffect(() => { setD(s.dispatched); setR(s.received); setM(s.missing); setDm(s.damaged); setNotes(s.notes); },
+      [s.dispatched, s.received, s.missing, s.damaged, s.notes]);
+    const dirty = d !== s.dispatched || r !== s.received || m !== s.missing || dm !== s.damaged || notes !== s.notes;
+    const save = () => {
+      onStore(p.id, store, {
+        dispatched: +d, received: r, missing: +m, damaged: +dm, notes,
+        receivedAt: r && !s.received ? now() : s.receivedAt, receivedBy: r && !s.received ? (operator || "") : s.receivedBy
+      });
+      setSaved(true); setTimeout(() => setSaved(false), 1300);
+    };
+    const flagged = (+m > 0 || +dm > 0);
+    return (
+      <tr style={flagged ? { background: "var(--rose-bg)" } : null}>
+        <td><b>{store}</b>{s.received && <div className="tag">recv {fmt(s.receivedAt)}{s.receivedBy ? (" · " + s.receivedBy) : ""}</div>}</td>
+        <td className="num" style={{ width: 90 }}><input className="txt" type="number" value={d} onChange={e => setD(e.target.value)} style={{ textAlign: "right" }} /></td>
+        <td style={{ width: 90 }}><label className="recv"><input type="checkbox" checked={r} onChange={e => setR(e.target.checked)} />received</label></td>
+        <td className="num" style={{ width: 84 }}><input className="txt" type="number" value={m} onChange={e => setM(e.target.value)} style={{ textAlign: "right" }} /></td>
+        <td className="num" style={{ width: 84 }}><input className="txt" type="number" value={dm} onChange={e => setDm(e.target.value)} style={{ textAlign: "right" }} /></td>
+        <td style={{ minWidth: 160 }}><input className="txt" placeholder="optional" value={notes} onChange={e => setNotes(e.target.value)} /></td>
+        <td style={{ width: 80 }}><button className={"mini " + (saved ? "saved" : "")} disabled={!dirty && !saved} onClick={save}>{saved ? "✓" : "Save"}</button></td>
+      </tr>
+    );
+  }
+
+  /* ---------------- BULK UPLOAD ---------------- */
+  function makeWorkbook(headers, dataRows, sheetName, instructions) {
+    const aoa = [headers, ...dataRows];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = headers.map(h => ({ wch: Math.max(12, Math.min(h.length + 4, 24)) }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    if (instructions) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(instructions), "Instructions"); }
+    return wb;
+  }
+  function readSheet(file, cb) {
+    const isCsv = /\.csv$/i.test(file.name);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = isCsv ? XLSX.read(e.target.result, { type: "string" })
+          : XLSX.read(new Uint8Array(e.target.result), { type: "array", cellDates: true });
+        const sn = wb.SheetNames.find(n => /product|store|template|data/i.test(n)) || wb.SheetNames[0];
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { defval: "" });
+        cb(rows, null);
+      } catch (err) { cb(null, err.message); }
+    };
+    if (isCsv) reader.readAsText(file); else reader.readAsArrayBuffer(file);
+  }
+
+  function Bulk({ division, products, divProducts, bulkProducts, bulkStores, operator }) {
+    const downloadProductTemplate = (withData) => {
+      const ex1 = PROD_HEADERS.map(h => {
+        const v = {
+          division: division, sku: "EXAMPLE-001 (delete this row)", name: "Sample design", vendor: (DEFAULT_VENDORS[division] || [])[0] || "Vendor name",
+          inward: "2026-06-01", qty: 30, note: "old/new split etc", barcoding_status: "Completed", barcoding_person: "Vijaya",
+          content_status: "In Progress", photography_status: "Not Started", qc_verdict: "", qc_issues: ""
+        };
+        return v[h] !== undefined ? v[h] : "";
+      });
+      const ex2 = PROD_HEADERS.map(h => h === "sku" ? "EXAMPLE-002 (delete this row)" : h === "division" ? division : h === "name" ? "Another design" : h === "qty" ? 12 : "");
+      const data = withData ? divProducts.map(p => PROD_HEADERS.map(h => fieldFromProduct(p, h))) : [ex1, ex2];
+      const instr = [
+        ["How to use the Products & Pipeline sheet"],
+        [""],
+        ["1. One row = one product / SKU. The 'sku' column is the key and must be unique within a division."],
+        ["2. Re-uploading a file UPDATES products that already exist (matched on division + sku) and CREATES any new ones."],
+        ["3. Leave a cell BLANK to keep the existing value. Only filled cells are written — nothing gets wiped."],
+        ["4. Allowed division values: " + DIVISIONS.join(" / ") + ". If blank, the currently selected division is used."],
+        ["5. Allowed *_status values: " + STATUSES.join(", ") + " (also accepts done/complete/pending — auto-mapped)."],
+        ["6. Each stage has three columns: <stage>_status, <stage>_person, <stage>_comments."],
+        ["7. Stages, in order: " + STAGE_COLS.map(s => s.n).join(" → ") + "."],
+        ["8. qc_verdict accepts: Approved / Issues Found. qc_issues is free text for the auditor."],
+        ["9. inward date format: YYYY-MM-DD (e.g. 2026-06-01)."],
+        ["10. Delete the EXAMPLE rows before uploading. Rows with a blank sku are ignored."],
+        ["11. Tip: use 'Export current products' to download everything as-is, edit in Excel, then re-upload."],
+      ];
+      XLSX.writeFile(makeWorkbook(PROD_HEADERS, data, "Products", instr), withData ? "card_products_export.xlsx" : "card_products_template.xlsx");
+    };
+    const downloadStoreTemplate = (withData) => {
+      const ex1 = STORE_HEADERS.map(h => ({ division: division, sku: "EXAMPLE-001 (delete this row)", store: STORES[0], dispatched: 30, received: "yes", missing: 0, damaged: 0, notes: "" })[h] ?? "");
+      const ex2 = STORE_HEADERS.map(h => ({ division: division, sku: "EXAMPLE-001 (delete this row)", store: STORES[1], dispatched: 30, received: "no", missing: 2, damaged: 1, notes: "2 missing, 1 bent corner" })[h] ?? "");
+      let data = [ex1, ex2];
+      if (withData) {
+        data = []; divProducts.forEach(p => STORES.forEach(st => {
+          const s = p.stores[st];
+          data.push(STORE_HEADERS.map(h => ({ division: p.division, sku: p.sku, store: st, dispatched: s.dispatched, received: s.received ? "yes" : "no", missing: s.missing, damaged: s.damaged, notes: s.notes })[h] ?? ""));
+        }));
+      }
+      const instr = [
+        ["How to use the Store Dispatch & Receipts sheet"],
+        [""],
+        ["1. One row = one product at one store. Fill a row for every product/store you want to update."],
+        ["2. Products must already exist (matched on division + sku). Create them first via the Products sheet."],
+        ["3. Allowed store values: " + STORES.join(", ") + "."],
+        ["4. received accepts: yes/no (or true/false, 1/0). Marking 'yes' stamps the receipt date/time automatically."],
+        ["5. dispatched / missing / damaged are whole numbers. Any missing or damaged > 0 raises a live alert on Overview."],
+        ["6. Leave a cell blank to keep the existing value. Delete EXAMPLE rows before uploading."],
+      ];
+      XLSX.writeFile(makeWorkbook(STORE_HEADERS, data, "Stores", instr), withData ? "card_stores_export.xlsx" : "card_stores_template.xlsx");
+    };
+
+    return (
+      <div>
+        <div className="note">Built for scale — download a template, fill it in Excel (or export what's already here, edit, and re-upload), then import thousands of rows at once. Re-uploading updates existing SKUs and adds new ones; blank cells are never overwritten. Imports apply across both divisions based on each row's <b>division</b> column.</div>
+        <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(320px,1fr))", marginTop: 16 }}>
+          <BulkPanel
+            title="Products & Pipeline"
+            blurb="Add new designs and update any pipeline step — bar coding, content, photography, videography, video editing, images, App & Shopify listing, scan, and final QC — all in one sheet."
+            headers={PROD_HEADERS}
+            onTemplate={() => downloadProductTemplate(false)}
+            onExport={() => downloadProductTemplate(true)}
+            exportLabel={`Export current products (${divProducts.length})`}
+            runImport={bulkProducts}
+            operator={operator}
+            summarize={(rows) => {
+              let create = 0, update = 0;
+              rows.forEach(r => {
+                const sku = String(r.sku || "").trim(); if (!sku || sku.toUpperCase().includes("EXAMPLE")) return;
+                const div = DIVISIONS.includes(String(r.division || "").trim()) ? String(r.division).trim() : division;
+                (products.some(p => p.division === div && p.sku.toLowerCase() === sku.toLowerCase()) ? update++ : create++);
+              });
+              return `${create} new · ${update} updates`;
+            }}
+            resultText={(r) => `${r.created} created, ${r.updated} updated${r.errs.length ? ` · ${r.errs.length} field warning(s)` : ""}`}
+          />
+          <BulkPanel
+            title="Store Dispatch & Receipts"
+            blurb="Bulk-record dispatched quantities, store receipts, and any missing or damaged cards across all 11 stores. Flagged shortages appear instantly on the Overview."
+            headers={STORE_HEADERS}
+            onTemplate={() => downloadStoreTemplate(false)}
+            onExport={() => downloadStoreTemplate(true)}
+            exportLabel="Export current store data"
+            runImport={bulkStores}
+            operator={operator}
+            summarize={(rows) => { const n = rows.filter(r => String(r.sku || "").trim() && !String(r.sku).toUpperCase().includes("EXAMPLE")).length; return `${n} store row(s)`; }}
+            resultText={(r) => `${r.updated} store rows updated${r.errs.length ? ` · ${r.errs.length} error(s)` : ""}`}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  function BulkPanel({ title, blurb, headers, onTemplate, onExport, exportLabel, runImport, summarize, resultText, operator }) {
+    const [rows, setRows] = useState(null);
+    const [fname, setFname] = useState("");
+    const [err, setErr] = useState("");
+    const [result, setResult] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const inputRef = useRef();
+    const pick = (e) => {
+      const f = e.target.files[0]; if (!f) return; setErr(""); setResult(null); setRows(null); setFname(f.name);
+      readSheet(f, (r, e2) => { if (e2) { setErr(e2); } else { setRows(r); } });
+    };
+    const confirm = async () => {
+      if (!operator || !operator.trim()) {
+        alert('Please enter your name in the "You" field at the top before uploading.');
+        return;
+      }
+      setBusy(true);
+      const res = await runImport(rows, operator.trim());
+      setResult(res); setRows(null); setFname("");
+      if (inputRef.current) inputRef.current.value = "";
+      setBusy(false);
+    };
+    return (
+      <div className="card pad">
+        <h3 style={{ margin: "0 0 6px", fontSize: 15 }}>{title}</h3>
+        <p className="tag" style={{ margin: "0 0 14px", lineHeight: 1.55 }}>{blurb}</p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <button className="ghost" onClick={onTemplate}>⬇ Blank template</button>
+          <button className="ghost" onClick={onExport}>⬇ {exportLabel}</button>
+        </div>
+        <div style={{ borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+          {(!operator || !operator.trim()) && (
+            <div style={{
+              background: "var(--peach-bg)", border: "1px solid var(--peach)",
+              borderRadius: 9, padding: "9px 13px", marginBottom: 10,
+              fontSize: 12, color: "var(--peach-ink)"
+            }}>
+              ⚠ Enter your name in the <b>"You"</b> field (top right) before uploading — it will be recorded in the audit log.
+            </div>
+          )}
+
+          <label className="fld" style={{ marginBottom: 10 }}>Upload filled sheet (.xlsx or .csv)
+            <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" onChange={pick} className="txt" />
+          </label>
+          {err && <div className="alert" style={{ borderColor: "var(--rose)" }}><div className="ic">!</div><div className="tx">Couldn't read file: {err}</div></div>}
+          {rows && !err && (
+            <div className="card" style={{ boxShadow: "none", background: "var(--surface-2)", padding: "12px 14px", marginBottom: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span className="tag"><b>{fname}</b> — {rows.length} row(s) read · {summarize(rows)}</span>
+                <button className="primary" disabled={busy} onClick={confirm}>{busy ? "Importing…" : "Confirm import"}</button>
+              </div>
+            </div>
+          )}
+          {result && (
+            <div className="card" style={{ boxShadow: "none", background: "var(--sage-bg)", border: "1px solid var(--sage)", padding: "12px 14px" }}>
+              <b style={{ color: "var(--sage-ink)" }}>Imported ✓</b> <span className="tag">{resultText(result)}</span>
+              {result.errs && result.errs.length > 0 && (
+                <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+                  {result.errs.slice(0, 6).map((m, i) => <li key={i} className="tag" style={{ color: "var(--rose-ink)" }}>{m}</li>)}
+                  {result.errs.length > 6 && <li className="tag">+{result.errs.length - 6} more…</li>}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  /* ---------------- AUDIT ---------------- */
+  function AuditLog({ audit }) {
+    const [q, setQ] = useState("");
+    const rows = audit.filter(a => (a.action + " " + a.entity + " " + a.detail + " " + a.actor).toLowerCase().includes(q.toLowerCase()));
+    return (
+      <div>
+        <div className="note">A complete, timestamped trail of every action — additions, stage updates, final-audit verdicts, store receipts and reported issues. This is your system-level audit; the per-product sign-off lives in the Final QC / Audit stage.</div>
+        <div className="toolbar" style={{ marginTop: 14 }}>
+          <div className="search"><input placeholder="Filter the log…" value={q} onChange={e => setQ(e.target.value)} /></div>
+          <span className="tag">{rows.length} entries</span>
+        </div>
+        {rows.length === 0 ? <div className="card empty">No activity recorded yet.</div> :
+          <div className="tbl-wrap">
+            <table>
+              <thead><tr><th style={{ width: 150 }}>When</th><th style={{ width: 130 }}>Action</th><th style={{ width: 120 }}>By</th><th>Item</th><th>Detail</th></tr></thead>
+              <tbody>
+                {rows.map(a => (
+                  <tr key={a.id}>
+                    <td className="tag" style={{ whiteSpace: "nowrap" }}>{fmt(a.at)}</td>
+                    <td><span className="audit-act">{a.action}</span></td>
+                    <td>{a.actor}</td>
+                    <td><b>{a.entity}</b></td>
+                    <td className="tag">{a.detail}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>}
+      </div>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
