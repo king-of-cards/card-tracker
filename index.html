@@ -144,6 +144,61 @@
     box-shadow: var(--shadow)
   }
 
+  /* left sidebar */
+  .body-shell {
+    display: flex;
+    max-width: 1240px;
+    margin: 0 auto;
+    align-items: flex-start
+  }
+
+  .sidebar {
+    width: 200px;
+    flex-shrink: 0;
+    position: sticky;
+    top: 73px;
+    padding: 20px 12px 80px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px
+  }
+
+  .sidebar .sb-label {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: .4px;
+    text-transform: uppercase;
+    margin: 6px 0 4px 10px
+  }
+
+  .sidebar button {
+    border: 0;
+    background: transparent;
+    text-align: left;
+    padding: 9px 12px;
+    border-radius: 9px;
+    color: var(--muted);
+    font-weight: 500;
+    transition: .15s
+  }
+
+  .sidebar button:hover {
+    background: var(--surface-2)
+  }
+
+  .sidebar button.on {
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: var(--shadow)
+  }
+
+  .body-shell .wrap {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 0 20px 80px
+  }
+
   .spacer {
     flex: 1
   }
@@ -795,12 +850,11 @@
     { k: "content", n: "Content" },
     { k: "photography", n: "Photography" },
     { k: "videography", n: "Videography" },
+    { k: "dimensions", n: "Dimensions" },
     { k: "videoedit", n: "Video Editing" },
-    { k: "images", n: "Images Uploaded" },
     { k: "backend", n: "Backend Listing (App)" },
     { k: "website", n: "Website Listing (Shopify)" },
-    { k: "scan", n: "Scan Before Dispatch" },
-    { k: "qc", n: "Final QC / Audit" },
+    { k: "qc", n: "Final QC / Audit" }
   ];
   const STATUSES = ["Not Started", "In Progress", "Completed", "Issue"];
   const STAGE_COLS = STAGES.filter(s => s.k !== "qc"); // process stages used as bulk columns (QC handled via qc_verdict/qc_issues)
@@ -808,6 +862,56 @@
     "KOC Cards": ["KOC", "Patrika", "Mayur", "Rasiklal", "Venis", "Ferry Card", "Mack Mark", "Shubham", "Mani Creation", "Jimit", "Reel Card", "Swamy Cards", "Remco", "Sanskurti", "Aakarshak"],
     "Bombay Cards": []
   };
+
+  /* ---------- roles & permissions (hardcoded, no backend) ---------- */
+  const USERS = {
+    "backend@kingofcards.in": {
+      password: "backend@123",
+      role: "backend",
+      permissions: ["backend", "barcoding", "content", "overview"]
+    },
+    "video@kingofcards.in": {
+      password: "video@123",
+      role: "photography",
+      permissions: ["photography", "videography", "videoedit", "overview"]
+    },
+    "admin@kingofcards.in": {
+      password: "admin@123",
+      role: "admin",
+      permissions: ["barcoding", "overview"]
+    },
+    "Rahul.b@kingofcards.in": {
+      password: "rahul@123",
+      role: "leading_process",
+      permissions: ["all", "overview"]
+    },
+    "gungun@kingofcards.in": {
+      password: "gungun@1234",
+      role: "leading_process",
+      permissions: ["all", "overview"]
+    }
+  };
+  // Maps each pipeline stage (and dispatch/audit areas) to the permission required to edit it.
+  const STAGE_PERMISSION_MAP = {
+    barcoding: "barcoding",
+    content: "content",
+    photography: "photography",
+    videography: "videography",
+    dimensions: "photography",
+    videoedit: "videoedit",
+    backend: "backend",
+    website: "backend",
+    qc: "qc"
+  };
+  function hasPermission(currentUser, permission) {
+    if (!currentUser) return false;
+    if (currentUser.permissions.includes("all")) return true;
+    return currentUser.permissions.includes(permission);
+  }
+  function userLabel(email) {
+    if (!email || !USERS[email]) return email || "";
+    return `${email} (${USERS[email].role})`;
+  }
 
   /* ---------- storage helpers (shared across the team) ---------- */
   //const SHARED=true;
@@ -918,27 +1022,46 @@
   function Progress({ pct }) { return <div className="bar"><i style={{ width: pct + "%" }} /></div>; }
 
   function productPct(p) {
-    const done = STAGES.filter(s => p.stages[s.k].status === "Completed").length;
+    const done = STAGES.filter(s => p.stages[s.k]?.status === "Completed").length;
     return Math.round(done / STAGES.length * 100);
   }
-
   /* ============================================================= */
   function App() {
     const [loading, setLoading] = useState(true);
     const [syncing, setSyncing] = useState(false);
+    const [savingCount, setSavingCount] = useState(0);
     const [syncOk, setSyncOk] = useState(false);
     const [division, setDivision] = useState("KOC Cards");
     const [tab, setTab] = useState("overview");
     const [operator, setOperator] = useState("");
+    const [loginEmail, setLoginEmail] = useState("");
+    const currentUser = USERS[loginEmail] || null;
     const [products, setProducts] = useState([]);
     const [audit, setAudit] = useState([]);
     const [vendors, setVendors] = useState(DEFAULT_VENDORS);
 
     const load = useCallback(async () => {
+      if (savingCount > 0) return; // don't overwrite mid-save
+      setSyncing(true);
       setSyncing(true);
       const data = await apiGet();
       if (data.products) {
-        setProducts(data.products);
+        const patched = data.products.map(p => {
+          const stages = { ...p.stages };
+          STAGES.forEach(s => {
+            if (!stages[s.k]) {
+              stages[s.k] = { status: "Not Started", person: "", comments: "", at: "" };
+            }
+          });
+          const stores = { ...p.stores };
+          STORES.forEach(st => {
+            if (!stores[st]) {
+              stores[st] = { dispatched: 0, received: false, receivedAt: "", receivedBy: "", missing: 0, damaged: 0, notes: "", at: "" };
+            }
+          });
+          return { ...p, stages, stores };
+        });
+        setProducts(patched);
         setAudit(data.audit || []);
         setVendors(data.vendors || DEFAULT_VENDORS);
       }
@@ -966,7 +1089,9 @@
       prod.updatedAt = now();
       const next = isNew ? [prod, ...products] : products.map(x => x.id === prod.id ? prod : x);
       setProducts(next);
+      setSavingCount(c => c + 1);
       await apiPost("upsertProduct", prod);
+      setSavingCount(c => c - 1);
       logAudit(isNew ? "Added product" : "Edited product", prod.sku || prod.name || "product",
         `${prod.name || "(unnamed)"} · ${prod.vendor || "no vendor"} · qty ${prod.qty}`);
     }, [products, logAudit]);
@@ -979,7 +1104,9 @@
       });
       setProducts(next);
       const updated = next.find(x => x.id === pid);
+      setSavingCount(c => c + 1);
       await apiPost("upsertProduct", updated);
+      setSavingCount(c => c - 1);
       const sn = STAGES.find(s => s.k === stageKey).n;
       logAudit("Stage update", `${updated.name || updated.sku || "product"}`, `${sn} → ${patch.status || updated.stages[stageKey].status}${patch.person ? (" · " + patch.person) : ""}`);
     }, [products, logAudit]);
@@ -988,23 +1115,10 @@
       const next = products.map(p => p.id === pid ? { ...p, ...patch, updatedAt: now() } : p);
       setProducts(next);
       const updated = next.find(x => x.id === pid);
+      setSavingCount(c => c + 1);
       await apiPost("upsertProduct", updated);
+      setSavingCount(c => c - 1);
       logAudit("Final audit", `${updated.name || updated.sku || "product"}`, `Verdict: ${patch.verdict || updated.verdict || "—"}`);
-    }, [products, logAudit]);
-
-    const patchStore = useCallback(async (pid, store, patch) => {
-      const next = products.map(p => {
-        if (p.id !== pid) return p;
-        const stores = { ...p.stores, [store]: { ...p.stores[store], ...patch, at: now() } };
-        return { ...p, stores, updatedAt: now() };
-      });
-      setProducts(next);
-      const updated = next.find(x => x.id === pid);
-      const s = updated.stores[store];
-      await apiPost("upsertStore", { productId: pid, store, storeData: s, division: updated.division, sku: updated.sku });
-      let detail = `${store}: disp ${s.dispatched}, recv ${s.received ? "yes" : "no"}`;
-      if (s.missing > 0 || s.damaged > 0) detail += ` · ⚠ missing ${s.missing}, damaged ${s.damaged}`;
-      logAudit((s.missing > 0 || s.damaged > 0) ? "Issue reported" : "Store update", `${updated.name || updated.sku || "product"}`, detail);
     }, [products, logAudit]);
 
     const removeProduct = useCallback(async (pid) => {
@@ -1023,6 +1137,13 @@
     }, [vendors]);
 
     const saveOperator = async (v) => { setOperator(v); await sset("ct:operator", v); };
+
+    const handleLogin = async (email) => {
+      setLoginEmail(email);
+      if (email && (!operator || !operator.trim())) {
+        await saveOperator(email);
+      }
+    };
 
     const bulkProducts = useCallback(async (rows, uploadedBy) => {
       let created = 0, updated = 0; const errs = []; const newV = new Set();
@@ -1108,31 +1229,20 @@
     }, [products, division, operator, logAudit]);
 
     const divProducts = useMemo(() => products.filter(p => p.division === division), [products, division]);
-    const openIssues = useMemo(() => {
-      const list = [];
-      divProducts.forEach(p => STORES.forEach(st => {
-        const s = p.stores[st];
-        if (s && (s.missing > 0 || s.damaged > 0)) list.push({ p, store: st, s });
-      }));
-      return list;
-    }, [divProducts]);
+    useEffect(() => {
+      if ((tab === "bulk" || tab === "audit") && !hasPermission(currentUser, "all")) setTab("overview");
+    }, [tab, currentUser]);
 
     if (loading) return <div className="empty serif" style={{ paddingTop: 120, fontSize: 18 }}>Loading workspace…</div>;
+    if (!currentUser) return <LoginScreen onLogin={handleLogin} />;
 
     return (
       <div>
         <div className="top"><div className="top-in">
-          <div className="brand"><b>Card Flow</b><span>Production · Listing · Dispatch</span></div>
-          <div className="seg">
-            {DIVISIONS.map(d => (
-              <button key={d} className={division === d ? "on" : ""} onClick={() => setDivision(d)}>{d}</button>
-            ))}
-          </div>
+          <div className="brand"><b>Card Tracker</b></div>
           <div className="spacer" />
-          <div className="op">
-            <label>You</label>
-            <input value={operator} placeholder="your name" onChange={e => saveOperator(e.target.value)} />
-          </div>
+          <span className="tag">{loginEmail} · {currentUser.role}</span>
+          <button className="ghost" onClick={() => handleLogin("")}>Switch user</button>
           <button className="ghost" onClick={load} disabled={syncing}
             style={{
               color: syncOk ? "var(--sage-ink)" : undefined,
@@ -1142,47 +1252,78 @@
           </button>
         </div></div>
 
-        <div className="wrap">
-          <div className="tabs">
-            {[["overview", "Overview"], ["products", "Products & Pipeline"], ["dispatch", "Dispatch & Stores"], ["bulk", "Bulk Upload"], ["audit", "Audit Log"]].map(([k, n]) => (
-              <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>
-                {n}{k === "dispatch" && openIssues.length > 0 ? <span className="badge">{openIssues.length}</span> : null}
-              </button>
+        <div className="body-shell">
+          <div className="sidebar">
+            {DIVISIONS.map(d => (
+              <button key={d} className={division === d ? "on" : ""} onClick={() => setDivision(d)}>{d}</button>
             ))}
           </div>
 
-          {tab === "overview" && <Overview division={division} products={divProducts} issues={openIssues} go={setTab} />}
-          {tab === "products" && <Products division={division} products={divProducts} vendors={vendors[division] || []}
-            onUpsert={upsertProduct} onStage={patchStage} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} />}
-          {tab === "dispatch" && <Dispatch products={divProducts} onStore={patchStore} onStage={patchStage} operator={operator} />}
-          {tab === "bulk" && <Bulk division={division} products={products} divProducts={divProducts} bulkProducts={bulkProducts} bulkStores={bulkStores} operator={operator} />}
-          {tab === "audit" && <AuditLog audit={audit.filter(a => a.division === division)} />}
+          <div className="wrap">
+            <div className="tabs">
+              {[["overview", "Overview"], ["products", "Products & Pipeline"], ["bulk", "Bulk Upload"], ["audit", "Audit Log"]]
+                .filter(([k]) => (k === "bulk" || k === "audit") ? hasPermission(currentUser, "all") : true)
+                .map(([k, n]) => (
+                  <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{n}</button>
+                ))}
+            </div>
+
+            {tab === "overview" && <Overview division={division} products={divProducts} />}
+            {tab === "products" && <Products division={division} products={divProducts} vendors={vendors[division] || []} currentUser={currentUser}
+              onUpsert={upsertProduct} onStage={patchStage} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} />}
+            {tab === "bulk" && <Bulk division={division} products={products} divProducts={divProducts} bulkProducts={bulkProducts} bulkStores={bulkStores} operator={operator} />}
+            {tab === "audit" && <AuditLog audit={audit.filter(a => a.division === division)} />}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ---------------- LOGIN ---------------- */
+  function LoginScreen({ onLogin }) {
+    const [email, setEmail] = useState("");
+    const [password, setPassword] = useState("");
+    const [err, setErr] = useState("");
+    const submit = () => {
+      const key = Object.keys(USERS).find(k => k.toLowerCase() === email.trim().toLowerCase());
+      if (!key) { setErr("Unknown email."); return; }
+      if (USERS[key].password !== password) { setErr("Incorrect password."); return; }
+      setErr(""); onLogin(key);
+    };
+    return (
+      <div className="wrap" style={{ display: "grid", placeItems: "center", minHeight: "100vh" }}>
+        <div className="card pad" style={{ width: "min(380px, 100%)" }}>
+          <div className="brand" style={{ marginBottom: 18 }}>
+            <b className="serif" style={{ fontSize: 20 }}>Card Tracker</b>
+          </div>
+          <label className="fld" style={{ marginBottom: 12 }}>Email
+            <input className="txt" type="email" value={email} placeholder="you@kingofcards.in"
+              onChange={e => { setEmail(e.target.value); setErr(""); }}
+              onKeyDown={e => { if (e.key === "Enter") submit(); }} />
+          </label>
+          <label className="fld" style={{ marginBottom: 14 }}>Password
+            <input className="txt" type="password" value={password} placeholder="password"
+              onChange={e => { setPassword(e.target.value); setErr(""); }}
+              onKeyDown={e => { if (e.key === "Enter") submit(); }} />
+          </label>
+          {err && <div className="alert" style={{ borderColor: "var(--rose)" }}><div className="ic">!</div><div className="tx">{err}</div></div>}
+          <button className="primary" style={{ width: "100%" }} disabled={!email || !password} onClick={submit}>Log in</button>
         </div>
       </div>
     );
   }
 
   /* ---------------- OVERVIEW ---------------- */
-  function Overview({ division, products, issues, go }) {
+  function Overview({ division, products }) {
     const total = products.length;
     const fullyDone = products.filter(p => productPct(p) === 100).length;
     const inProd = products.filter(p => { const v = productPct(p); return v > 0 && v < 100; }).length;
     const notStarted = products.filter(p => productPct(p) === 0).length;
-    let dispatched = 0, received = 0, missing = 0, damaged = 0;
-    products.forEach(p => STORES.forEach(st => {
-      const s = p.stores[st]; dispatched += s.dispatched || 0;
-      if (s.received) received++; missing += s.missing || 0; damaged += s.damaged || 0;
-    }));
     const stageStats = STAGES.map(s => ({
       ...s,
       done: products.filter(p => p.stages[s.k].status === "Completed").length,
       issue: products.filter(p => p.stages[s.k].status === "Issue").length
     }));
-    const storeStats = STORES.map(st => {
-      let d = 0, r = 0, m = 0, dm = 0, pending = 0;
-      products.forEach(p => { const s = p.stores[st]; d += s.dispatched || 0; if (s.received) r++; else if (s.dispatched > 0) pending++; m += s.missing || 0; dm += s.damaged || 0; });
-      return { st, d, r, m, dm, pending };
-    });
 
     return (
       <div>
@@ -1190,30 +1331,10 @@
           <div className="card kpi"><div className="lab">Products</div><div className="val">{total}</div><div className="sub">{division}</div></div>
           <div className="card kpi"><div className="lab">Listing Complete</div><div className="val" style={{ color: "var(--sage-ink)" }}>{fullyDone}</div><div className="sub">all stages done</div></div>
           <div className="card kpi"><div className="lab">In Production</div><div className="val" style={{ color: "var(--sky-ink)" }}>{inProd}</div><div className="sub">{notStarted} not started</div></div>
-          <div className="card kpi"><div className="lab">Cards Dispatched</div><div className="val">{dispatched}</div><div className="sub">{received} store receipts confirmed</div></div>
-          <div className="card kpi"><div className="lab">Missing / Damaged</div><div className="val" style={{ color: (missing + damaged) ? "var(--rose-ink)" : "var(--ink)" }}>{missing} / {damaged}</div><div className="sub">open across stores</div></div>
         </div>
 
-        {issues.length > 0 && (
-          <div className="sec">
-            <div className="sec-h"><h3>Live alerts · missing & damaged</h3><span className="hint">reported by store executives</span></div>
-            {issues.slice(0, 8).map((x, i) => (
-              <div className="alert" key={i}>
-                <div className="ic">!</div>
-                <div className="tx">
-                  <b>{x.store}</b> — {x.s.missing > 0 ? `${x.s.missing} missing` : ""}{x.s.missing > 0 && x.s.damaged > 0 ? ", " : ""}{x.s.damaged > 0 ? `${x.s.damaged} damaged` : ""}
-                  {" · "}<b>{x.p.name || x.p.sku || "product"}</b> ({x.p.vendor || "—"})
-                  {x.s.notes ? ` · "${x.s.notes}"` : ""} <span className="tag">· {fmt(x.s.at)}</span>
-                </div>
-                <button className="ghost" onClick={() => go("dispatch")}>Resolve</button>
-              </div>
-            ))}
-            {issues.length > 8 && <div className="tag" style={{ marginTop: 6 }}>+{issues.length - 8} more in Dispatch & Stores</div>}
-          </div>
-        )}
-
         <div className="sec">
-          <div className="sec-h"><h3>Pipeline progress</h3><span className="hint">manufacturing → listing → dispatch</span></div>
+          <div className="sec-h"><h3>Pipeline progress</h3><span className="hint">manufacturing → listing</span></div>
           <div className="card pad">
             {stageStats.map(s => (
               <div className="stagebar" key={s.k}>
@@ -1224,37 +1345,16 @@
             ))}
           </div>
         </div>
-
-        <div className="sec">
-          <div className="sec-h"><h3>Store receipt status</h3><span className="hint">{STORES.length} stores</span></div>
-          <div className="tbl-wrap">
-            <table>
-              <thead><tr><th>Store</th><th className="num">Dispatched</th><th className="num">Receipts ✓</th><th className="num">Pending</th><th className="num">Missing</th><th className="num">Damaged</th><th>Status</th></tr></thead>
-              <tbody>
-                {storeStats.map(r => (
-                  <tr key={r.st}>
-                    <td><b>{r.st}</b></td>
-                    <td className="num">{r.d}</td>
-                    <td className="num">{r.r}</td>
-                    <td className="num">{r.pending}</td>
-                    <td className="num" style={{ color: r.m ? "var(--rose-ink)" : "inherit" }}>{r.m}</td>
-                    <td className="num" style={{ color: r.dm ? "var(--rose-ink)" : "inherit" }}>{r.dm}</td>
-                    <td>{(r.m || r.dm) ? <Chip status="Issue" /> : r.pending === 0 && r.d > 0 ? <Chip status="Completed" /> : r.d > 0 ? <Chip status="In Progress" /> : <Chip status="Not Started" />}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
       </div>
     );
   }
 
   /* ---------------- PRODUCTS ---------------- */
-  function Products({ division, products, vendors, onUpsert, onStage, onQC, onRemove, addVendor }) {
+  function Products({ division, products, vendors, currentUser, onUpsert, onStage, onQC, onRemove, addVendor }) {
     const [q, setQ] = useState("");
     const [open, setOpen] = useState({});
     const [modal, setModal] = useState(false);
+    const canAdd = hasPermission(currentUser, "all");
     const filtered = products.filter(p => {
       const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase(); return t.includes(q.toLowerCase());
     });
@@ -1262,13 +1362,13 @@
       <div>
         <div className="toolbar">
           <div className="search"><input placeholder="Search SKU, product or vendor…" value={q} onChange={e => setQ(e.target.value)} /></div>
-          <button className="primary" onClick={() => setModal(true)}>+ Add product</button>
+          {canAdd && <button className="primary" onClick={() => setModal(true)}>+ Add product</button>}
         </div>
         {filtered.length === 0 ? <div className="card empty">No products yet for {division}. Add your first SKU to begin tracking its full pipeline.</div> :
           <div className="plist">
             {filtered.map(p => (
               <ProductRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))}
-                onStage={onStage} onQC={onQC} onRemove={onRemove} />
+                currentUser={currentUser} onStage={onStage} onQC={onQC} onRemove={onRemove} />
             ))}
           </div>}
         <div className="legend">
@@ -1280,9 +1380,10 @@
     );
   }
 
-  function ProductRow({ p, open, toggle, onStage, onQC, onRemove }) {
+  function ProductRow({ p, open, toggle, currentUser, onStage, onQC, onRemove }) {
     const pct = productPct(p);
     const hasIssue = STAGES.some(s => p.stages[s.k].status === "Issue");
+    const canDelete = hasPermission(currentUser, "all");
     return (
       <div className="prow">
         <div className="phead" onClick={toggle}>
@@ -1298,12 +1399,15 @@
         </div>
         {open && (
           <div className="pbody">
-            {STAGES.map(s => s.k === "qc"
-              ? <QCStage key={s.k} p={p} onQC={onQC} />
-              : <StageEditor key={s.k} p={p} stage={s} onStage={onStage} />)}
+            {STAGES.map(s => {
+              if (s.k === "website") return null; // Website Listing (Shopify) stage hidden per request
+              return s.k === "qc"
+                ? <QCStage key={s.k} p={p} currentUser={currentUser} onQC={onQC} />
+                : <StageEditor key={s.k} p={p} stage={s} currentUser={currentUser} onStage={onStage} />;
+            })}
             <div style={{ padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span className="tag">Inward {p.inward || "—"} · created {fmt(p.createdAt)} · last update {fmt(p.updatedAt)}</span>
-              <button className="danger" onClick={() => { if (confirm("Delete this product?")) onRemove(p.id); }}>Delete product</button>
+              {canDelete && <button className="danger" onClick={() => { if (confirm("Delete this product?")) onRemove(p.id); }}>Delete product</button>}
             </div>
           </div>
         )}
@@ -1311,54 +1415,96 @@
     );
   }
 
-  function StageEditor({ p, stage, onStage }) {
-    const cur = p.stages[stage.k];
+  function StageEditor({ p, stage, currentUser, onStage }) {
+    const cur = p.stages[stage.k] || { status: "Not Started", person: "", comments: "", at: "" };
     const [status, setStatus] = useState(cur.status);
     const [person, setPerson] = useState(cur.person);
     const [comments, setComments] = useState(cur.comments);
+    const [width, setWidth] = useState(cur.width || "");
+    const [height, setHeight] = useState(cur.height || "");
+    const [depth, setDepth] = useState(cur.depth || "");
     const [saved, setSaved] = useState(false);
-    useEffect(() => { setStatus(cur.status); setPerson(cur.person); setComments(cur.comments); }, [cur.status, cur.person, cur.comments]);
-    const dirty = status !== cur.status || person !== cur.person || comments !== cur.comments;
-    const save = () => { onStage(p.id, stage.k, { status, person, comments }); setSaved(true); setTimeout(() => setSaved(false), 1400); };
+    const prevSaved = useRef({});
+
+    useEffect(() => {
+      const saved = {
+        status: cur.status, person: cur.person, comments: cur.comments,
+        width: cur.width || "", height: cur.height || "", depth: cur.depth || ""
+      };
+      const prev = prevSaved.current;
+      if (
+        prev.status !== saved.status || prev.person !== saved.person ||
+        prev.comments !== saved.comments || prev.width !== saved.width ||
+        prev.height !== saved.height || prev.depth !== saved.depth
+      ) {
+        prevSaved.current = saved;
+        setStatus(saved.status);
+        setPerson(saved.person);
+        setComments(saved.comments);
+        setWidth(saved.width);
+        setHeight(saved.height);
+        setDepth(saved.depth);
+      }
+    }, [cur.status, cur.person, cur.comments, cur.width, cur.height, cur.depth]);
+    const dirty = status !== cur.status || person !== cur.person || comments !== cur.comments
+      || width !== (cur.width || "") || height !== (cur.height || "") || depth !== (cur.depth || "");
+    const canEdit = hasPermission(currentUser, STAGE_PERMISSION_MAP[stage.k]);
+    const save = () => {
+      const patch = { status, person, comments };
+      if (stage.k === "dimensions") { patch.width = width; patch.height = height; patch.depth = depth; }
+      onStage(p.id, stage.k, patch);
+      setSaved(true); setTimeout(() => setSaved(false), 1400);
+    };
     return (
       <div className="stage">
         <div className="lab">{stage.n}</div>
         <label className="fld">Status
-          <select value={status} onChange={e => setStatus(e.target.value)}>
+          <select value={status} disabled={!canEdit} onChange={e => setStatus(e.target.value)}>
             {STATUSES.map(s => <option key={s}>{s}</option>)}
           </select>
         </label>
         <label className="fld">Responsible · comments
-          <input className="txt" placeholder="person" value={person} onChange={e => setPerson(e.target.value)} style={{ marginBottom: 6 }} />
-          <input className="txt" placeholder="comments (e.g. 27 of 30 cards)" value={comments} onChange={e => setComments(e.target.value)} />
+          <input className="txt" placeholder="person" value={person} disabled={!canEdit} onChange={e => setPerson(e.target.value)} style={{ marginBottom: 6 }} />
+          <input className="txt" placeholder="comments (e.g. 27 of 30 cards)" value={comments} disabled={!canEdit} onChange={e => setComments(e.target.value)} />
+          {stage.k === "dimensions" && (
+            <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+              <input className="txt" placeholder="Width (mm)" value={width} disabled={!canEdit}
+                onChange={e => setWidth(e.target.value)} />
+              <input className="txt" placeholder="Height (mm)" value={height} disabled={!canEdit}
+                onChange={e => setHeight(e.target.value)} />
+              <input className="txt" placeholder="Depth (mm)" value={depth} disabled={!canEdit}
+                onChange={e => setDepth(e.target.value)} />
+            </div>
+          )}
         </label>
-        <button className={"mini " + (saved ? "saved" : "")} disabled={!dirty && !saved} onClick={save}>{saved ? "Saved ✓" : "Save"}</button>
+        <button className={"mini " + (saved ? "saved" : "")} disabled={!canEdit || (!dirty && !saved)} onClick={save}>{saved ? "Saved ✓" : "Save"}</button>
         <div className="meta">{cur.at ? `Last set ${fmt(cur.at)}${cur.person ? (" by " + cur.person) : ""}` : "Not yet updated"}</div>
       </div>
     );
   }
 
-  function QCStage({ p, onQC }) {
+  function QCStage({ p, currentUser, onQC }) {
     const [verdict, setVerdict] = useState(p.verdict || "");
     const [issues, setIssues] = useState(p.issues || "");
     const [saved, setSaved] = useState(false);
     useEffect(() => { setVerdict(p.verdict || ""); setIssues(p.issues || ""); }, [p.verdict, p.issues]);
     const dirty = verdict !== (p.verdict || "") || issues !== (p.issues || "");
+    const canEdit = hasPermission(currentUser, STAGE_PERMISSION_MAP.qc);
     const save = () => { onQC(p.id, { verdict, issues }); setSaved(true); setTimeout(() => setSaved(false), 1400); };
     return (
       <div className="stage" style={{ background: "var(--surface)" }}>
         <div className="lab">Final QC / Audit</div>
         <label className="fld">Verdict
-          <select value={verdict} onChange={e => setVerdict(e.target.value)}>
+          <select value={verdict} disabled={!canEdit} onChange={e => setVerdict(e.target.value)}>
             <option value="">— pending review —</option>
             <option>Approved</option>
             <option>Issues Found</option>
           </select>
         </label>
         <label className="fld">Auditor notes / issues after final audit
-          <textarea placeholder="e.g. colour difference on 3 cards, content typo…" value={issues} onChange={e => setIssues(e.target.value)} />
+          <textarea placeholder="e.g. colour difference on 3 cards, content typo…" value={issues} disabled={!canEdit} onChange={e => setIssues(e.target.value)} />
         </label>
-        <button className={"mini " + (saved ? "saved" : "")} disabled={!dirty && !saved} onClick={save}>{saved ? "Saved ✓" : "Save"}</button>
+        <button className={"mini " + (saved ? "saved" : "")} disabled={!canEdit || (!dirty && !saved)} onClick={save}>{saved ? "Saved ✓" : "Save"}</button>
       </div>
     );
   }
@@ -1407,101 +1553,6 @@
           </div>
         </div>
       </div>
-    );
-  }
-
-  /* ---------------- DISPATCH & STORES ---------------- */
-  function Dispatch({ products, onStore, onStage, operator }) {
-    const [q, setQ] = useState("");
-    const [open, setOpen] = useState({});
-    const filtered = products.filter(p => (p.sku + " " + p.name + " " + p.vendor).toLowerCase().includes(q.toLowerCase()));
-    return (
-      <div>
-        <div className="note">Cards are scanned before dispatch, then sent to each store. Store executives confirm receipt and flag any missing or damaged cards here — those surface instantly on the Overview alerts.</div>
-        <div className="toolbar" style={{ marginTop: 14 }}>
-          <div className="search"><input placeholder="Search product to dispatch / receive…" value={q} onChange={e => setQ(e.target.value)} /></div>
-        </div>
-        {filtered.length === 0 ? <div className="card empty">No products to dispatch yet.</div> :
-          <div className="plist">
-            {filtered.map(p => (
-              <DispatchRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))}
-                onStore={onStore} onStage={onStage} operator={operator} />
-            ))}
-          </div>}
-      </div>
-    );
-  }
-
-  function DispatchRow({ p, open, toggle, onStore, onStage, operator }) {
-    const scan = p.stages.scan;
-    const recvCount = STORES.filter(st => p.stores[st].received).length;
-    const dispCount = STORES.filter(st => p.stores[st].dispatched > 0).length;
-    const issueCount = STORES.filter(st => p.stores[st].missing > 0 || p.stores[st].damaged > 0).length;
-    return (
-      <div className="prow">
-        <div className="phead" onClick={toggle}>
-          <span className={"chev " + (open ? "open" : "")}>▶</span>
-          <span className="psku">{p.sku || "no-sku"}</span>
-          <span className="pname">{p.name || "(unnamed)"}</span>
-          <span className="pvend">· {p.vendor || "—"}</span>
-          <div style={{ flex: 1 }} />
-          {scan.status === "Completed" ? <span className="chip c-done"><span className="dot" />Scanned</span> : <span className="chip c-app"><span className="dot" />Not scanned</span>}
-          {issueCount > 0 && <span className="chip c-issue"><span className="dot" />{issueCount} store issue</span>}
-          <span className="tag">{recvCount}/{STORES.length} received</span>
-        </div>
-        {open && (
-          <div className="pbody">
-            <div style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 14, borderBottom: "1px solid var(--line)" }}>
-              <label className="recv">
-                <input type="checkbox" checked={scan.status === "Completed"}
-                  onChange={e => onStage(p.id, "scan", { status: e.target.checked ? "Completed" : "Not Started", person: operator || scan.person })} />
-                <b>Scanned before dispatch</b>
-              </label>
-              <span className="tag">{scan.at ? `${fmt(scan.at)}${scan.person ? (" · " + scan.person) : ""}` : "awaiting scan"}</span>
-            </div>
-            <div className="tbl-wrap" style={{ border: 0, borderRadius: 0 }}>
-              <table className="stgrid">
-                <thead><tr><th>Store</th><th className="num">Dispatched</th><th>Received</th><th className="num">Missing</th><th className="num">Damaged</th><th>Note</th><th></th></tr></thead>
-                <tbody>
-                  {STORES.map(st => <StoreCell key={st} p={p} store={st} onStore={onStore} operator={operator} />)}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  function StoreCell({ p, store, onStore, operator }) {
-    const s = p.stores[store];
-    const [d, setD] = useState(s.dispatched);
-    const [r, setR] = useState(s.received);
-    const [m, setM] = useState(s.missing);
-    const [dm, setDm] = useState(s.damaged);
-    const [notes, setNotes] = useState(s.notes);
-    const [saved, setSaved] = useState(false);
-    useEffect(() => { setD(s.dispatched); setR(s.received); setM(s.missing); setDm(s.damaged); setNotes(s.notes); },
-      [s.dispatched, s.received, s.missing, s.damaged, s.notes]);
-    const dirty = d !== s.dispatched || r !== s.received || m !== s.missing || dm !== s.damaged || notes !== s.notes;
-    const save = () => {
-      onStore(p.id, store, {
-        dispatched: +d, received: r, missing: +m, damaged: +dm, notes,
-        receivedAt: r && !s.received ? now() : s.receivedAt, receivedBy: r && !s.received ? (operator || "") : s.receivedBy
-      });
-      setSaved(true); setTimeout(() => setSaved(false), 1300);
-    };
-    const flagged = (+m > 0 || +dm > 0);
-    return (
-      <tr style={flagged ? { background: "var(--rose-bg)" } : null}>
-        <td><b>{store}</b>{s.received && <div className="tag">recv {fmt(s.receivedAt)}{s.receivedBy ? (" · " + s.receivedBy) : ""}</div>}</td>
-        <td className="num" style={{ width: 90 }}><input className="txt" type="number" value={d} onChange={e => setD(e.target.value)} style={{ textAlign: "right" }} /></td>
-        <td style={{ width: 90 }}><label className="recv"><input type="checkbox" checked={r} onChange={e => setR(e.target.checked)} />received</label></td>
-        <td className="num" style={{ width: 84 }}><input className="txt" type="number" value={m} onChange={e => setM(e.target.value)} style={{ textAlign: "right" }} /></td>
-        <td className="num" style={{ width: 84 }}><input className="txt" type="number" value={dm} onChange={e => setDm(e.target.value)} style={{ textAlign: "right" }} /></td>
-        <td style={{ minWidth: 160 }}><input className="txt" placeholder="optional" value={notes} onChange={e => setNotes(e.target.value)} /></td>
-        <td style={{ width: 80 }}><button className={"mini " + (saved ? "saved" : "")} disabled={!dirty && !saved} onClick={save}>{saved ? "✓" : "Save"}</button></td>
-      </tr>
     );
   }
 
@@ -1588,7 +1639,7 @@
         <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(320px,1fr))", marginTop: 16 }}>
           <BulkPanel
             title="Products & Pipeline"
-            blurb="Add new designs and update any pipeline step — bar coding, content, photography, videography, video editing, images, App & Shopify listing, scan, and final QC — all in one sheet."
+            blurb="Add new designs and update any pipeline step — bar coding, content, photography, videography, video editing, App listing, and final QC — all in one sheet."
             headers={PROD_HEADERS}
             onTemplate={() => downloadProductTemplate(false)}
             onExport={() => downloadProductTemplate(true)}
