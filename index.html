@@ -837,6 +837,11 @@
     min-height: 36px
   }
 
+  .done-pill-wrap:hover .done-popup {
+    opacity: 1 !important;
+  }
+
+
   .mini {
     padding: 8px 12px;
     border: 1px solid var(--line2);
@@ -1480,7 +1485,7 @@
             {tab === "products" && <Products division={division} products={divProducts} vendors={vendors[division] || []} onUpsert={upsertProduct} onStage={patchStage} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} />}
             {tab === "dispatch" && <Dispatch products={divProducts} onStore={patchStore} onStage={patchStage} operator={operator} />}
             {tab === "bulk" && <Bulk division={division} products={products} divProducts={divProducts} bulkProducts={bulkProducts} bulkStores={bulkStores} />}
-            {tab === "audit" && <AuditLog audit={audit.filter(a => a.division === division)} />}
+            {tab === "audit" && <AuditLog audit={audit.filter(a => a.division === division)} products={products} onStage={patchStage} />}
           </div>
         </main>
       </div>
@@ -1649,7 +1654,37 @@
         </div>
         {open && (
           <div className="pbody">
-            {STAGES.map((s, i) => s.k === "qc" ? <QCStage key={s.k} p={p} idx={i + 1} onQC={onQC} /> : <StageEditor key={s.k} p={p} stage={s} idx={i + 1} onStage={onStage} />)}
+            {/* Active stage cards grid */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "14px 16px" }}>
+              {STAGES.filter(s => s.k !== "qc" && p.stages[s.k].status !== "Completed").map((s, i) => (
+                <StageEditor key={s.k} p={p} stage={s} idx={STAGES.findIndex(st => st.k === s.k) + 1} onStage={onStage} />
+              ))}
+            </div>
+            {/* Completed stages — pill popup style */}
+            {STAGES.filter(s => s.k !== "qc" && p.stages[s.k].status === "Completed").length > 0 && (
+              <div style={{ borderTop: "1px solid var(--line)", padding: "10px 16px", background: "var(--sage-bg)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "var(--sage-ink)", letterSpacing: ".6px", textTransform: "uppercase", whiteSpace: "nowrap" }}>Done</span>
+                {STAGES.filter(s => s.k !== "qc" && p.stages[s.k].status === "Completed").map(s => {
+                  const st = p.stages[s.k];
+                  return (
+                    <div key={s.k} style={{ position: "relative", display: "inline-block" }} className="done-pill-wrap">
+                      <span className="done-pill" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "var(--card)", border: "1px solid var(--sage)", borderRadius: 999, padding: "3px 11px", fontSize: 12, color: "var(--sage-ink)", fontWeight: 600, cursor: "default" }}>
+                        ✓ {s.n}
+                      </span>
+                      <div className="done-popup" style={{ position: "absolute", bottom: "calc(100% + 7px)", left: "50%", transform: "translateX(-50%)", background: "var(--ink)", color: "#fff", borderRadius: 9, padding: "8px 12px", fontSize: 11.5, whiteSpace: "nowrap", zIndex: 10, pointerEvents: "none", opacity: 0, transition: "opacity .15s", lineHeight: 1.6, boxShadow: "var(--shadow-lg)" }}>
+                        <b style={{ color: "var(--sage)" }}>✓ {s.n}</b><br />
+                        {st.person && <span>By: {st.person}<br /></span>}
+                        {st.comments && <span>Note: {st.comments}<br /></span>}
+                        <span style={{ color: "#B3AFA4" }}>{st.at ? fmt(st.at) : "—"}</span>
+                        <div style={{ position: "absolute", bottom: -5, left: "50%", transform: "translateX(-50%)", width: 10, height: 10, background: "var(--ink)", borderRadius: 2, rotate: "45deg" }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {/* QC always at the bottom */}
+            <QCStage p={p} idx={STAGES.length} onQC={onQC} />
             <div style={{ padding: "13px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span className="tag">Inward {p.inward || "—"} · created {fmt(p.createdAt)} · updated {fmt(p.updatedAt)}</span>
               <button className="danger" onClick={() => { if (confirm("Delete this product?")) onRemove(p.id); }}>Delete product</button>
@@ -1659,24 +1694,36 @@
       </div>
     );
   }
+
   function StageEditor({ p, stage, idx, onStage }) {
     const cur = p.stages[stage.k];
     const [status, setStatus] = useState(cur.status), [person, setPerson] = useState(cur.person), [comments, setComments] = useState(cur.comments), [saved, setSaved] = useState(false);
     useEffect(() => { setStatus(cur.status); setPerson(cur.person); setComments(cur.comments); }, [cur.status, cur.person, cur.comments]);
     const dirty = status !== cur.status || person !== cur.person || comments !== cur.comments;
-    const save = () => { onStage(p.id, stage.k, { status, person, comments }); setSaved(true); setTimeout(() => setSaved(false), 1400); };
+    const save = () => {
+      onStage(p.id, stage.k, { status, person, comments });
+      setSaved(true);
+      if (status === "Completed") {
+        setTimeout(() => setHidden(true), 600);
+      }
+      setTimeout(() => setSaved(false), 1400);
+    };
+    if (cur.status === "Completed") return null;
     return (
-      <div className="stage">
-        <div className="lab"><span className="stnum">{idx}</span>{stage.n}</div>
-        <label className="fld">Status<select value={status} onChange={e => setStatus(e.target.value)}>{STATUSES.map(s => <option key={s}>{s}</option>)}</select></label>
-        <label className="fld">Responsible · comments
-          <input className="txt" placeholder="person" value={person} onChange={e => setPerson(e.target.value)} style={{ marginBottom: 6 }} />
-          <input className="txt" placeholder="comments (e.g. 27 of 30 cards)" value={comments} onChange={e => setComments(e.target.value)} /></label>
-        <button className={"mini " + (saved ? "saved" : "")} disabled={!dirty && !saved} onClick={save}>{saved ? "Saved ✓" : "Save"}</button>
-        <div className="meta">{cur.at ? `Last set ${fmt(cur.at)}${cur.person ? (" by " + cur.person) : ""}` : "Not yet updated"}</div>
+      <div style={{ background: "var(--card)", border: "1px solid var(--line)", borderRadius: 11, padding: "12px 14px", display: "flex", alignItems: "center", gap: 14, boxShadow: "var(--shadow)" }}>
+        <span className="stnum" style={{ flex: "0 0 22px" }}>{idx}</span>
+        <span style={{ fontWeight: 600, fontSize: 13, width: 150, flexShrink: 0 }}>{stage.n}</span>
+        <select value={status} onChange={e => setStatus(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 9px", background: "var(--bg)", fontSize: 12, width: 130, flexShrink: 0 }}>
+          {STATUSES.map(s => <option key={s}>{s}</option>)}
+        </select>
+        <input className="txt" placeholder="person" value={person} onChange={e => setPerson(e.target.value)} style={{ fontSize: 12, padding: "6px 9px", width: 110, flexShrink: 0 }} />
+        <input className="txt" placeholder="comments…" value={comments} onChange={e => setComments(e.target.value)} style={{ fontSize: 12, padding: "6px 9px", flex: 1, minWidth: 0 }} />
+        <span style={{ fontSize: 10.5, color: "var(--faint)", whiteSpace: "nowrap", flexShrink: 0 }}>{cur.at ? fmt(cur.at) : "—"}</span>
+        <button className={"mini " + (saved ? "saved" : "")} disabled={!dirty && !saved} onClick={save} style={{ flexShrink: 0 }}>{saved ? "✓" : "Save"}</button>
       </div>
     );
   }
+
   function QCStage({ p, idx, onQC }) {
     const [verdict, setVerdict] = useState(p.verdict || ""), [issues, setIssues] = useState(p.issues || ""), [saved, setSaved] = useState(false);
     useEffect(() => { setVerdict(p.verdict || ""); setIssues(p.issues || ""); }, [p.verdict, p.issues]);
@@ -1691,6 +1738,7 @@
       </div>
     );
   }
+
   function AddModal({ division, vendors, addVendor, onClose, onSave }) {
     const [f, setF] = useState(() => blankProduct(division, "")); const [nv, setNv] = useState("");
     const set = (k, v) => setF(p => ({ ...p, [k]: v }));
@@ -1787,6 +1835,7 @@
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, sheetName);
     if (instructions) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(instructions), "Instructions"); return wb;
   }
+
   function readSheet(file, cb) {
     const isCsv = /\.csv$/i.test(file.name); const reader = new FileReader();
     reader.onload = e => {
@@ -1886,22 +1935,94 @@
   }
 
   /* ---------------- AUDIT ---------------- */
-  function AuditLog({ audit }) {
+  function AuditLog({ audit, products, onStage }) {
     const [q, setQ] = useState("");
-    const rows = audit.filter(a => (a.action + " " + a.entity + " " + a.detail + " " + a.actor).toLowerCase().includes(q.toLowerCase()));
+
+    // Build completed stage rows directly from products data
+    const completedRows = [];
+    products.forEach(p => {
+      STAGES.forEach(s => {
+        const st = p.stages[s.k];
+        if (st.status === "Completed") {
+          completedRows.push({
+            id: p.id + "_" + s.k,
+            productId: p.id,
+            sku: p.sku,
+            stageName: s.n,
+            stageKey: s.k,
+            person: st.person || "—",
+            comments: st.comments || "",
+            at: st.at || "",
+            division: p.division
+          });
+        }
+      });
+    });
+
+    // Sort newest first
+    completedRows.sort((a, b) => new Date(b.at) - new Date(a.at));
+
+    const filtered = completedRows.filter(r =>
+      (r.sku + " " + r.stageName + " " + r.person + " " + r.comments)
+        .toLowerCase().includes(q.toLowerCase())
+    );
+
+    const moveBack = (row) => {
+      const prod = products.find(p => p.id === row.productId);
+      if (!prod) return;
+      onStage(prod.id, row.stageKey, { status: "In Progress", person: prod.stages[row.stageKey].person, comments: prod.stages[row.stageKey].comments });
+    };
+
     return (
       <div>
-        <div className="note">A complete, timestamped trail of every action — additions, stage updates, final-audit verdicts, store receipts and reported issues. This is your system-level audit; the per-product sign-off lives in the Final QC / Audit stage.</div>
-        <div className="toolbar" style={{ marginTop: 14 }}><div className="search">{I.search({})}<input placeholder="Filter the log…" value={q} onChange={e => setQ(e.target.value)} /></div><span className="tag">{rows.length} entries</span></div>
-        {rows.length === 0 ? <div className="card empty">No activity recorded yet.</div> :
-          <div className="tbl-wrap">
-            <table><thead><tr><th style={{ width: 140 }}>When</th><th style={{ width: 130 }}>Action</th><th style={{ width: 120 }}>By</th><th>Item</th><th>Detail</th></tr></thead>
-              <tbody>{rows.map(a => (<tr key={a.id}><td className="tag" style={{ whiteSpace: "nowrap" }}>{fmt(a.at)}</td><td><span className="audit-act">{a.action}</span></td><td>{a.actor}</td><td><b>{a.entity}</b></td><td className="tag">{a.detail}</td></tr>))}</tbody>
+        <div className="note">Showing all completed stages across all products — directly from live data. Use <b>↩ In Progress</b> to move a stage back if needed.</div>
+        <div className="toolbar" style={{ marginTop: 14 }}>
+          <div className="search">{I.search({})}<input placeholder="Filter by SKU, stage, person…" value={q} onChange={e => setQ(e.target.value)} /></div>
+          <span className="tag">{filtered.length} completed stages</span>
+        </div>
+        {filtered.length === 0
+          ? <div className="card empty">No completed stages yet.</div>
+          : <div className="tbl-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ width: 140 }}>When</th>
+                  <th style={{ width: 110 }}>SKU</th>
+                  <th style={{ width: 160 }}>Stage</th>
+                  <th style={{ width: 120 }}>By</th>
+                  <th>Comments</th>
+                  <th style={{ width: 120 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(r => (
+                  <tr key={r.id} style={{ background: "var(--sage-bg)" }}>
+                    <td className="tag" style={{ whiteSpace: "nowrap" }}>{fmt(r.at)}</td>
+                    <td><span className="psku">{r.sku}</span></td>
+                    <td>
+                      <span className="audit-act" style={{ background: "var(--sage)", color: "#fff" }}>
+                        ✓ {r.stageName}
+                      </span>
+                    </td>
+                    <td style={{ fontWeight: 600 }}>{r.person}</td>
+                    <td className="tag">{r.comments || "—"}</td>
+                    <td>
+                      <button
+                        onClick={() => { if (confirm("Move back to In Progress?")) moveBack(r); }}
+                        style={{ fontSize: 11, padding: "4px 10px", border: "1px solid var(--sky)", borderRadius: 7, background: "var(--sky-bg)", color: "var(--sky-ink)", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
+                        ↩ In Progress
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
             </table>
-          </div>}
+          </div>
+        }
       </div>
     );
   }
+
 
   ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 </script>
