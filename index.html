@@ -860,7 +860,7 @@
   const STAGE_COLS = STAGES.filter(s => s.k !== "qc"); // process stages used as bulk columns (QC handled via qc_verdict/qc_issues)
   const DEFAULT_VENDORS = {
     "KOC Cards": ["KOC", "Patrika", "Mayur", "Rasiklal", "Venis", "Ferry Card", "Mack Mark", "Shubham", "Mani Creation", "Jimit", "Reel Card", "Swamy Cards", "Remco", "Sanskurti", "Aakarshak"],
-    "Bombay Cards": []
+    "Bombay Cards": ["Rasiklal & Bros", "Patrika Palace", "Real Cards", "JIMIT CARDS", "Aakarshak Cards", "Devarajan & sons", "Sanskruti Cards", "Rama Cards", "Mack Mark", "Phoenix Cards", "Remco Cards", "Venis Cards", "Mani Creation", "Rickabchand", "Shankheshwar Cards", "Shubham Cards", "Creative Crafts", "Ferry Cards", "Swamy Cards"]
   };
 
   /* ---------- roles & permissions (hardcoded, no backend) ---------- */
@@ -1063,7 +1063,10 @@
         });
         setProducts(patched);
         setAudit(data.audit || []);
-        setVendors(data.vendors || DEFAULT_VENDORS);
+        setVendors(data.vendors && Object.keys(data.vendors).length > 0
+           ? data.vendors
+           : DEFAULT_VENDORS
+        );
       }
       const op = await sget("ct:operator");
       if (op) setOperator(op);
@@ -1468,11 +1471,11 @@
           <input className="txt" placeholder="comments (e.g. 27 of 30 cards)" value={comments} disabled={!canEdit} onChange={e => setComments(e.target.value)} />
           {stage.k === "dimensions" && (
             <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-              <input className="txt" placeholder="Width (mm)" value={width} disabled={!canEdit}
+              <input className="txt" placeholder="Width (cm)" value={width} disabled={!canEdit}
                 onChange={e => setWidth(e.target.value)} />
-              <input className="txt" placeholder="Height (mm)" value={height} disabled={!canEdit}
+              <input className="txt" placeholder="Height (cm)" value={height} disabled={!canEdit}
                 onChange={e => setHeight(e.target.value)} />
-              <input className="txt" placeholder="Depth (mm)" value={depth} disabled={!canEdit}
+              <input className="txt" placeholder="Weight (g)" value={depth} disabled={!canEdit}
                 onChange={e => setDepth(e.target.value)} />
             </div>
           )}
@@ -1513,7 +1516,7 @@
     const [f, setF] = useState(() => blankProduct(division, ""));
     const [newVendor, setNewVendor] = useState("");
     const set = (k, v) => setF(p => ({ ...p, [k]: v }));
-    const showVendor = division !== "KOC Cards";
+    const showVendor = true;
     return (
       <div className="scrim" onClick={onClose}>
         <div className="modal" onClick={e => e.stopPropagation()}>
