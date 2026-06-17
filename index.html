@@ -1530,13 +1530,52 @@
         <div className="sec ov-grid">
           <div className="card pad">
             <div className="sec-h" style={{ marginBottom: 6 }}><h3>Pipeline progress</h3><span className="hint">manufacturing → listing → dispatch</span></div>
-            {stageStats.map(s => (
-              <div className="stagebar" key={s.k}>
-                <div className="nm">{s.n}{s.issue > 0 && <span className="tag" style={{ color: "var(--rose-ink)" }}> · {s.issue} issue</span>}</div>
-                <div className="meter"><Bar pct={total ? Math.round(s.done / total * 100) : 0} /></div>
-                <div className="pc">{s.done}/{total}</div>
-              </div>
-            ))}
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", padding: "8px 10px", color: "var(--muted)", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: ".6px", borderBottom: "1px solid var(--line)", width: 180 }}>Stage</th>
+                    <th style={{ textAlign: "center", padding: "8px 10px", color: "#B3AFA4", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: ".6px", borderBottom: "1px solid var(--line)" }}>Not Started</th>
+                    <th style={{ textAlign: "center", padding: "8px 10px", color: "var(--sky-ink)", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: ".6px", borderBottom: "1px solid var(--line)" }}>In Progress</th>
+                    <th style={{ textAlign: "center", padding: "8px 10px", color: "var(--sage-ink)", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: ".6px", borderBottom: "1px solid var(--line)" }}>Completed</th>
+                    <th style={{ textAlign: "center", padding: "8px 10px", color: "var(--rose-ink)", fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: ".6px", borderBottom: "1px solid var(--line)" }}>Issue</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stageStats.map(s => {
+                    const notStarted = products.filter(p => p.stages[s.k].status === "Not Started").length;
+                    const inProgress = products.filter(p => p.stages[s.k].status === "In Progress").length;
+                    const completed = products.filter(p => p.stages[s.k].status === "Completed").length;
+                    const issue = products.filter(p => p.stages[s.k].status === "Issue").length;
+                    return (
+                      <tr key={s.k} style={{ borderBottom: "1px solid var(--line)" }}>
+                        <td style={{ padding: "10px 10px", fontWeight: 600, fontSize: 13 }}>{s.n}</td>
+                        <td style={{ textAlign: "center", padding: "10px 10px" }}>
+                          {notStarted > 0
+                            ? <span style={{ background: "#F0EEE8", color: "#8C887E", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{notStarted}</span>
+                            : <span style={{ color: "var(--faint)" }}>—</span>}
+                        </td>
+                        <td style={{ textAlign: "center", padding: "10px 10px" }}>
+                          {inProgress > 0
+                            ? <span style={{ background: "var(--sky-bg)", color: "var(--sky-ink)", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{inProgress}</span>
+                            : <span style={{ color: "var(--faint)" }}>—</span>}
+                        </td>
+                        <td style={{ textAlign: "center", padding: "10px 10px" }}>
+                          {completed > 0
+                            ? <span style={{ background: "var(--sage-bg)", color: "var(--sage-ink)", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{completed}</span>
+                            : <span style={{ color: "var(--faint)" }}>—</span>}
+                        </td>
+                        <td style={{ textAlign: "center", padding: "10px 10px" }}>
+                          {issue > 0
+                            ? <span style={{ background: "var(--rose-bg)", color: "var(--rose-ink)", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{issue}</span>
+                            : <span style={{ color: "var(--faint)" }}>—</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
           <div className="card pad">
             <div className="sec-h" style={{ marginBottom: 10 }}><h3>Status mix</h3></div>
