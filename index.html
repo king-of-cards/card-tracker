@@ -1413,6 +1413,11 @@
     if (role === "master" || role === "admin") return true;
     // assign tab only for master/admin
     if (tabKey === "assign") return false;
+    // bulk tab — only if member has "bulk" in their stages
+    if (tabKey === "bulk") {
+      const stages = (auth.stages || "").split(",").map(s => s.trim());
+      return stages.includes("bulk");
+    }
     // members only see overview and products
     return ["overview", "products"].includes(tabKey);
   }
@@ -2413,7 +2418,9 @@
 
   function AssignWork({ division, products, allProducts, teamMembers, assignments, onSaveTeam, onSaveAssignments, auth }) {
     const [subTab, setSubTab] = useState("members");
+    //const [newName, setNewName] = useState(""), [newEmail, setNewEmail] = useState(""), [newPass, setNewPass] = useState(""), [newRole, setNewRole] = useState("backend"), [addErr, setAddErr] = useState("");
     const [newName, setNewName] = useState(""), [newEmail, setNewEmail] = useState(""), [newPass, setNewPass] = useState(""), [newRole, setNewRole] = useState("backend"), [addErr, setAddErr] = useState("");
+    const [addMsg, setAddMsg] = useState("");
     const [selMember, setSelMember] = useState("");
     const [selVendor, setSelVendor] = useState("");
     const [selSkus, setSelSkus] = useState([]);
@@ -2434,28 +2441,67 @@
         .map(p => p.sku);
     }, [filteredProducts, selMember, divAssignments]);
 
+    // const addMember = async () => {
+    //   if (!newName.trim() || !newEmail.trim() || !newPass.trim()) { setAddErr("Name, email and password are required."); return; }
+    //   const id = newName.trim().toLowerCase().replace(/\s+/g, "_");
+    //   if (teamMembers.find(m => m.id === id && m.division === division)) { setAddErr("A member with this name already exists."); return; }
+
+    //   // stages based on role
+    //   // const roleStages = {
+    //   //   backend: "barcoding,content,backend,website",
+    //   //   content: "barcoding,content,backend,website",
+    //   //   photography: "photography,videography,videoedit,images",
+    //   //   videography: "photography,videography,videoedit,images"
+    //   // };
+
+    //   if (selectedStages.length === 0) { setAddErr("Select at least one stage for this member."); return; }
+    //   const stages = selectedStages.join(",");
+    //   // const stages = roleStages[newRole] || "barcoding,content,backend,website";
+
+    //   const m = {
+    //     id,
+    //     name: newName.trim(),
+    //     email: newEmail.trim(),
+    //     password: newPass.trim(),
+    //     role: "member",
+    //     stages,
+    //     division,
+    //     joinedAt: now()
+    //   };
+    //   const updatedTeam = [...teamMembers, m];
+    //   onSaveTeam(updatedTeam);
+
+    //   // Save to Users sheet
+    //   const existingUsers = await gsGetUsers();
+    //   const alreadyExists = existingUsers.find(u => u.email.toLowerCase() === newEmail.trim().toLowerCase());
+    //   if (!alreadyExists) {
+    //     await gsPost("saveUsers", [...existingUsers, {
+    //       email: newEmail.trim(),
+    //       password: newPass.trim(),
+    //       name: newName.trim(),
+    //       role: "member",
+    //       stages
+    //     }]);
+    //   }
+
+    //   setNewName(""); setNewEmail(""); setNewPass(""); setAddErr(""); setSelectedStages([]);
+    // };
+
+
     const addMember = async () => {
       if (!newName.trim() || !newEmail.trim() || !newPass.trim()) { setAddErr("Name, email and password are required."); return; }
       const id = newName.trim().toLowerCase().replace(/\s+/g, "_");
       if (teamMembers.find(m => m.id === id && m.division === division)) { setAddErr("A member with this name already exists."); return; }
-
-      // stages based on role
-      // const roleStages = {
-      //   backend: "barcoding,content,backend,website",
-      //   content: "barcoding,content,backend,website",
-      //   photography: "photography,videography,videoedit,images",
-      //   videography: "photography,videography,videoedit,images"
-      // };
-
       if (selectedStages.length === 0) { setAddErr("Select at least one stage for this member."); return; }
+
       const stages = selectedStages.join(",");
-      // const stages = roleStages[newRole] || "barcoding,content,backend,website";
+      const nameVal = newName.trim(), emailVal = newEmail.trim(), passVal = newPass.trim();
 
       const m = {
         id,
-        name: newName.trim(),
-        email: newEmail.trim(),
-        password: newPass.trim(),
+        name: nameVal,
+        email: emailVal,
+        password: passVal,
         role: "member",
         stages,
         division,
@@ -2464,20 +2510,22 @@
       const updatedTeam = [...teamMembers, m];
       onSaveTeam(updatedTeam);
 
-      // Save to Users sheet
+      // Reset the form right away — don't wait on the network round-trip below
+      setNewName(""); setNewEmail(""); setNewPass(""); setAddErr(""); setSelectedStages([]);
+      setAddMsg(`✓ ${nameVal} added to the team.`);
+
+      // Save to Users sheet in the background; form is already reset by this point
       const existingUsers = await gsGetUsers();
-      const alreadyExists = existingUsers.find(u => u.email.toLowerCase() === newEmail.trim().toLowerCase());
+      const alreadyExists = existingUsers.find(u => u.email.toLowerCase() === emailVal.toLowerCase());
       if (!alreadyExists) {
         await gsPost("saveUsers", [...existingUsers, {
-          email: newEmail.trim(),
-          password: newPass.trim(),
-          name: newName.trim(),
+          email: emailVal,
+          password: passVal,
+          name: nameVal,
           role: "member",
           stages
         }]);
       }
-
-      setNewName(""); setNewEmail(""); setNewPass(""); setAddErr(""); setSelectedStages([]);
     };
 
     const removeMember = async (id) => {
@@ -2534,6 +2582,7 @@
 
     const [selectedStages, setSelectedStages] = useState([]);
     const allStages = STAGES.filter(s => s.k !== "qc" && s.k !== "scan");
+    const allPermissions = [...allStages, { k: "bulk", n: "Bulk Upload" }];
 
     return (
       <div>
@@ -2548,17 +2597,17 @@
             <div className="card pad" style={{ marginBottom: 16 }}>
               <h3 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 600 }}>Add team member — {division}</h3>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-                <label className="fld">Full name<input className="txt" placeholder="e.g. Priya Sharma" value={newName} onChange={e => { setNewName(e.target.value); setAddErr(""); }} /></label>
-                <label className="fld">Email (login)<input className="txt" type="email" placeholder="priya@koc.com" value={newEmail} onChange={e => { setNewEmail(e.target.value); setAddErr(""); }} /></label>
-                <label className="fld">Password<input className="txt" type="password" placeholder="••••••••" value={newPass} onChange={e => { setNewPass(e.target.value); setAddErr(""); }} /></label>
+                <label className="fld">Full name<input className="txt" placeholder="e.g. Priya Sharma" value={newName} onChange={e => { setNewName(e.target.value); setAddErr(""); setAddMsg(""); }} /></label>
+                <label className="fld">Email (login)<input className="txt" type="email" placeholder="priya@koc.com" value={newEmail} onChange={e => { setNewEmail(e.target.value); setAddErr(""); setAddMsg(""); }} /></label>
+                <label className="fld">Password<input className="txt" type="password" placeholder="••••••••" value={newPass} onChange={e => { setNewPass(e.target.value); setAddErr(""); setAddMsg(""); }} /></label>
                 <label className="fld" style={{ gridColumn: "1/-1" }}>
                   Stages this member can access
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
-                    {allStages.map(s => (
-                      <label key={s.k} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500, color: "var(--ink)", background: selectedStages.includes(s.k) ? "var(--sage-bg)" : "var(--card)", border: `1px solid ${selectedStages.includes(s.k) ? "var(--sage)" : "var(--line2)"}`, borderRadius: 8, padding: "5px 10px", cursor: "pointer", textTransform: "none", letterSpacing: 0 }}>
-                        <input type="checkbox" checked={selectedStages.includes(s.k)} style={{ width: 13, height: 13, accentColor: "var(--sage-deep)" }}
+                    {allPermissions.map(s => (
+                      <label key={s.k} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500, color: "var(--ink)", background: selectedStages.includes(s.k) ? (s.k === "bulk" ? "var(--peach-bg)" : "var(--sage-bg)") : "var(--card)", border: `1px solid ${selectedStages.includes(s.k) ? (s.k === "bulk" ? "var(--peach)" : "var(--sage)") : "var(--line2)"}`, borderRadius: 8, padding: "5px 10px", cursor: "pointer", textTransform: "none", letterSpacing: 0 }}>
+                        <input type="checkbox" checked={selectedStages.includes(s.k)} style={{ width: 13, height: 13, accentColor: s.k === "bulk" ? "var(--peach-ink)" : "var(--sage-deep)" }}
                           onChange={e => setSelectedStages(prev => e.target.checked ? [...prev, s.k] : prev.filter(k => k !== s.k))} />
-                        {s.n}
+                        {s.n}{s.k === "bulk" ? " ⚡" : ""}
                       </label>
                     ))}
                   </div>
@@ -2566,6 +2615,7 @@
                 </label>
               </div>
               {addErr && <div style={{ color: "var(--rose-ink)", fontSize: 12, marginBottom: 10 }}>{addErr}</div>}
+              {addMsg && <div style={{ color: "var(--sage-ink)", fontSize: 12, marginBottom: 10, fontWeight: 600 }}>{addMsg}</div>}
               <button className="primary" onClick={addMember}>Add member</button>
             </div>
 
@@ -2578,7 +2628,7 @@
                       <th>Name</th>
                       <th>Email</th>
                       <th>Division</th>
-                      <th>Stages Handling</th>
+                      <th>Stages & Access</th>
                       <th>Joined</th>
                       <th className="num">Assigned SKUs</th>
                       <th></th>
