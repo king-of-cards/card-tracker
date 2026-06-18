@@ -1189,6 +1189,144 @@
       grid-template-columns: 1fr
     }
   }
+
+  /* ---------- login ---------- */
+  .loginwrap {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    background: var(--bg);
+    padding: 20px
+  }
+
+  .loginbox {
+    width: 100%;
+    max-width: 360px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    box-shadow: var(--shadow-lg);
+    padding: 32px 28px 28px;
+    text-align: center
+  }
+
+  .loginbox .logo {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: linear-gradient(150deg, var(--sage), var(--sage-deep));
+    display: grid;
+    place-items: center;
+    color: #fff;
+    margin: 0 auto 14px;
+    box-shadow: 0 4px 10px rgba(124, 166, 125, .35)
+  }
+
+  .loginbox h1 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: 22px;
+    margin: 0 0 4px
+  }
+
+  .loginbox p.sub {
+    color: var(--muted);
+    font-size: 12.5px;
+    margin: 0 0 24px
+  }
+
+  .loginbox form {
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 14px
+  }
+
+  .loginbox label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: .3px;
+    text-transform: uppercase
+  }
+
+  .loginbox input {
+    border: 1px solid var(--line2);
+    border-radius: var(--r-sm);
+    padding: 10px 12px;
+    font-size: 14px;
+    background: var(--side);
+    outline: none;
+    width: 100%
+  }
+
+  .loginbox input:focus {
+    border-color: var(--sage-deep)
+  }
+
+  .pwwrap {
+    position: relative;
+    display: flex
+  }
+
+  .pwwrap input {
+    flex: 1;
+    padding-right: 56px
+  }
+
+  .pwwrap button {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--sage-ink);
+    padding: 5px 8px;
+    text-transform: none;
+    letter-spacing: 0
+  }
+
+  .loginerr {
+    background: var(--rose-bg);
+    color: var(--rose-ink);
+    border: 1px solid var(--rose);
+    border-radius: var(--r-sm);
+    padding: 9px 11px;
+    font-size: 12.5px;
+    font-weight: 600
+  }
+
+  .loginbox .primary {
+    margin-top: 4px;
+    background: var(--sage-deep);
+    color: #fff;
+    border-radius: var(--r-sm);
+    padding: 11px;
+    font-weight: 700;
+    font-size: 13.5px;
+    box-shadow: 0 6px 16px rgba(124, 166, 125, .3)
+  }
+
+  .logoutbtn {
+    width: 100%;
+    text-align: center;
+    font-size: 11.5px;
+    font-weight: 700;
+    color: var(--rose-ink);
+    padding: 8px;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--line2);
+    margin-top: 6px
+  }
+
+  .logoutbtn:hover {
+    background: var(--rose-bg);
+    border-color: var(--rose)
+  }
 </style>
 <div id="root"></div>
 <script type="text/babel">
@@ -1216,9 +1354,85 @@
     "Bombay Cards": []
   };
 
+  /* ---------- users (hardcoded login) ---------- */
+  // const USERS = ["chitra", "vandana", "komadhi", "anisha", "arun", "rahul", "gungun", "dharani", "sunny"].map(id => ({
+  //   name: id[0].toUpperCase() + id.slice(1),
+  //   email: id + "koc@gmail.com",
+  //   password: id + "@123"
+  // }));
+
+  /* ---------- role-based access control ---------- */
+  // tabs each role can see (null = all tabs)
+  // chitra, vandana, komadhi → overview + products (limited stages only)
+  // dharani, sunny           → overview + products (limited stages only — no other tabs)
+  // anisha, arun, rahul, gungun → full access (null = all tabs)
+  const ROLE_TABS = {
+    chitra: ["overview", "products", "assign"],
+    vandana: ["overview", "products"],
+    komadhi: ["overview", "products"],
+    dharani: ["overview", "products"],
+    sunny: ["overview", "products"],
+    anisha: null,
+    arun: null,
+    rahul: null,
+    gungun: null,
+  };
+
+  const CAN_ASSIGN = ["chitra", "anisha", "arun", "rahul", "gungun"];
+  function canAssign(auth) {
+    if (!auth) return false;
+    return auth.role === "master" || auth.role === "admin";
+  }
+
+  // stages each role can see inside Products & Pipeline (null = all stages)
+  // chitra, vandana, komadhi → Bar Coding, Content, Backend Listing (App)
+  // dharani, sunny           → Photography, Videography, Images Uploaded
+  // anisha, arun, rahul, gungun → all stages (null)
+  const ROLE_STAGES = {
+    chitra: ["barcoding", "content", "backend"],
+    vandana: ["barcoding", "content", "backend"],
+    komadhi: ["barcoding", "content", "backend"],
+    dharani: ["photography", "videography", "images"],
+    sunny: ["photography", "videography", "images"],
+    anisha: null,
+    arun: null,
+    rahul: null,
+    gungun: null,
+  };
+
+  function getUserRole(auth) {
+    if (!auth) return null;
+    const id = auth.name.toLowerCase();
+    return id;
+  }
+
+  function canSeeTab(auth, tabKey) {
+    if (!auth) return false;
+    const role = auth.role || "";
+    // master and admin see everything
+    if (role === "master" || role === "admin") return true;
+    // assign tab only for master/admin
+    if (tabKey === "assign") return false;
+    // members only see overview and products
+    return ["overview", "products"].includes(tabKey);
+  }
+
+  function getAllowedStages(auth) {
+    if (!auth) return null;
+    if (!auth.stages || auth.stages === "all") return null;
+    return auth.stages.split(",").map(s => s.trim());
+  }
+
   /* ---------- storage (shared across team) ---------- */
   const GS_URL = "https://script.google.com/macros/s/AKfycbwhvIeomL6wiBH_3LgbskV__BNy0j_w1BlOBVz53oLZa2LRTD1aH79zeXPbsNCqYAE/exec";
+  const GS_USERS_URL = "https://script.google.com/macros/s/AKfycbx6jn_Alaw714TOnD9DH6TxbiNlHrJb0crDV5l2lRxz1fWcIgRHs40UUQwZNiQ2CTCX/exec";
 
+  async function gsGetUsers() {
+    try {
+      const r = await fetch(GS_URL + "?action=getUsers", { redirect: "follow" });
+      return JSON.parse(await r.text());
+    } catch (e) { console.error("gsGetUsers", e); return []; }
+  }
   async function gsGet() {
     try {
       const r = await fetch(GS_URL + "?action=getAll", { redirect: "follow" });
@@ -1234,10 +1448,19 @@
         body: JSON.stringify({ action, payload })
       });
       const text = await r.text();
-      return JSON.parse(text);
-    } catch (e) { console.error("gsPost", action, e); return null; }
+      try {
+        const parsed = JSON.parse(text);
+        console.log(`gsPost[${action}] ->`, parsed);
+        return parsed;
+      } catch {
+        console.error(`gsPost[${action}] returned non-JSON (likely a backend error page):`, text);
+        return { ok: false, raw: text };
+      }
+    } catch (e) {
+      console.error(`gsPost[${action}] network error`, e);
+      return { ok: false, error: e.message };
+    }
   }
-
   /* ---------- utils ---------- */
   const now = () => new Date().toISOString();
   const uid = () => Math.random().toString(36).slice(2, 9);
@@ -1305,6 +1528,57 @@
   }
 
   /* ============================================================= */
+  function Login({ onLogin }) {
+    const [email, setEmail] = useState("");
+    const [password, setPassword] = useState("");
+    const [show, setShow] = useState(false);
+    const [err, setErr] = useState("");
+    const [busy, setBusy] = useState(false);
+
+    const submit = async (e) => {
+      e.preventDefault();
+      setErr(""); setBusy(true);
+      const em = email.trim().toLowerCase();
+      // First check Google Sheet users
+      const sheetUsers = await gsGetUsers();
+      console.log("Sheet users:", sheetUsers);
+      const user = sheetUsers.find(u => u.email.toLowerCase() === em && u.password === password);
+      if (user) { setBusy(false); onLogin(user); return; }
+      // Fallback: check team members added via Assign tab
+      const allLocal = window.__teamMembers || [];
+      const local = allLocal.find(u => u.email.toLowerCase() === em && u.password === password);
+      if (local) { setBusy(false); onLogin(local); return; }
+      setErr("Incorrect email or password.");
+      setBusy(false);
+    };
+
+    return (
+      <div className="loginwrap">
+        <div className="loginbox">
+          <div className="logo">{I.box({ stroke: "#fff" })}</div>
+          <h1 className="serif">Card Flow</h1>
+          <p className="sub">Production Suite — sign in to continue</p>
+          <form onSubmit={submit}>
+            <label>Email
+              <input type="email" autoFocus value={email} placeholder="you@koc.com" onChange={e => { setEmail(e.target.value); setErr(""); }} />
+            </label>
+            <label>Password
+              <div className="pwwrap">
+                <input type={show ? "text" : "password"} value={password} placeholder="••••••••" onChange={e => { setPassword(e.target.value); setErr(""); }} />
+                <button type="button" onClick={() => setShow(s => !s)}>{show ? "Hide" : "Show"}</button>
+              </div>
+            </label>
+            {err && <div className="loginerr">{err}</div>}
+            <button className="primary" type="submit" disabled={busy}>
+              {busy ? "Signing in…" : "Sign in"}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  /* ============================================================= */
   function App() {
     const [loading, setLoading] = useState(true);
     const [division, setDivision] = useState("KOC Cards");
@@ -1313,14 +1587,64 @@
     const [products, setProducts] = useState([]);
     const [audit, setAudit] = useState([]);
     const [vendors, setVendors] = useState(DEFAULT_VENDORS);
+    const [teamMembers, setTeamMembers] = useState([]);
+    const [assignments, setAssignments] = useState([]);
     const [navOpen, setNavOpen] = useState(false);
+    const [auth, setAuth] = useState(() => {
+      try {
+        const raw = sessionStorage.getItem("ct:auth") || localStorage.getItem("ct:auth");
+        return raw ? JSON.parse(raw) : null;
+      } catch { return null; }
+    });
+
+    const handleLogin = (user) => {
+      const a = { name: user.name, email: user.email, role: user.role, stages: user.stages };
+      setAuth(a);
+      localStorage.setItem("ct:auth", JSON.stringify(a));
+      sessionStorage.setItem("ct:auth", JSON.stringify(a));
+      if (!operator) { setOperator(user.name); localStorage.setItem("ct:operator", user.name); }
+    };
+    const handleLogout = () => {
+      setAuth(null);
+      localStorage.removeItem("ct:auth");
+      sessionStorage.removeItem("ct:auth");
+      localStorage.removeItem("ct:operator");
+    };
 
     const load = useCallback(async () => {
-      const data = await gsGet();
+      const [data, sheetUsers] = await Promise.all([gsGet(), gsGetUsers()]);
       if (data) {
         setProducts((data.products || []).map(ensureStages));
         setAudit(data.audit || []);
         setVendors(data.vendors || DEFAULT_VENDORS);
+        setAssignments(data.assignments || []);
+
+        const savedMembers = data.teamMembers || [];
+
+        // const fromSheet = sheetUsers
+
+        // Use Users sheet as source of truth for team members
+        // const sheetUsers = await gsGetUsers();
+        // const savedMembers = data.teamMembers || [];
+
+        const fromSheet = sheetUsers
+          .filter(u => u.email && u.role !== "master" && u.role !== "admin")
+          .map(u => {
+            const saved = savedMembers.find(m => m.email && m.email.toLowerCase() === u.email.toLowerCase());
+            return {
+              id: saved?.id || (u.name ? u.name.toLowerCase().replace(/\s+/g, "_") : uid()),
+              name: u.name || u.email,
+              email: u.email,
+              password: u.password || "",
+              role: u.role || "member",
+              stages: u.stages || saved?.stages || "",
+              division: saved?.division || u.division || "KOC Cards",
+              joinedAt: saved?.joinedAt || u.joinedAt || ""
+            };
+          });
+
+        window.__teamMembers = fromSheet;
+        setTeamMembers(fromSheet);
       }
       const op = localStorage.getItem("ct:operator");
       if (op) setOperator(op);
@@ -1378,6 +1702,25 @@
       if (!name) return; const list = vendors[div] || []; if (list.includes(name)) return; const next = { ...vendors, [div]: [...list, name].sort() }; setVendors(next); await gsPost("setVendors", next);
     }, [vendors]);
 
+    const saveTeamMembers = useCallback(async (next) => {
+      setTeamMembers(next);
+      window.__teamMembers = next;
+      const res = await gsPost("setTeamMembers", next);
+      if (!res || res.ok === false) {
+        alert("Could not save team members to the server — re-syncing.");
+        await load();
+      }
+    }, [load]);
+
+    const saveAssignments = useCallback(async (next) => {
+      setAssignments(next);
+      const res = await gsPost("setAssignments", next);
+      if (!res || res.ok === false) {
+        alert("Could not save this assignment to the server — re-syncing.");
+        await load();
+      }
+    }, [load]);
+
     const saveOperator = (v) => { setOperator(v); localStorage.setItem("ct:operator", v); };
 
     const bulkProducts = useCallback(async (rows) => {
@@ -1428,15 +1771,40 @@
       return { updated, errs };
     }, [products, division, operator, saveProducts, logAudit]);
 
-    const divProducts = useMemo(() => products.filter(p => p.division === division), [products, division]);
+    const divProducts = useMemo(() => {
+      const base = products.filter(p => p.division === division);
+      if (!auth) return base;
+      const isMasterOrAdmin = auth.role === "master" || auth.role === "admin";
+      if (isMasterOrAdmin) return base;
+      // member — find their record by email for reliable ID matching
+      const myMember = window.__teamMembers?.find(m => m.email && auth.email && m.email.toLowerCase() === auth.email.toLowerCase());
+      const myId = myMember?.id || auth.name.toLowerCase().replace(/\s+/g, "_");
+      const myAssigned = assignments.filter(a => a.memberId === myId).map(a => a.sku.toLowerCase());
+      if (myAssigned.length === 0) return [];
+      return base.filter(p => myAssigned.includes(p.sku.toLowerCase()));
+    }, [products, division, auth, assignments]);
     const counts = useMemo(() => { const o = {}; DIVISIONS.forEach(d => o[d] = products.filter(p => p.division === d).length); return o; }, [products]);
     const openIssues = useMemo(() => { const l = []; divProducts.forEach(p => STORES.forEach(st => { const s = p.stores[st]; if (s && (s.missing > 0 || s.damaged > 0)) l.push({ p, store: st, s }); })); return l; }, [divProducts]);
 
-    const META = { overview: ["Overview", "Production, listing & dispatch at a glance"], products: ["Products & Pipeline", "Every design and its full production lifecycle"], dispatch: ["Dispatch & Stores", "Scan, dispatch & store receipts across 11 stores"], bulk: ["Bulk Upload", "Import & update thousands of records via Excel"], audit: ["Audit Log", "A complete timestamped trail of every action"] };
+    const META = { overview: ["Overview", "Production, listing & dispatch at a glance"], products: ["Products & Pipeline", "Every design and its full production lifecycle"], dispatch: ["Dispatch & Stores", "Scan, dispatch & store receipts across 11 stores"], bulk: ["Bulk Upload", "Import & update thousands of records via Excel"], audit: ["Audit Log", "A complete timestamped trail of every action"], assign: ["Assign Work", "Manage team members and assign SKUs to individuals"] };
 
-    if (loading) return <div className="empty serif" style={{ paddingTop: 140, fontSize: 19 }}>Loading workspace…</div>;
+    if (!auth) return <Login onLogin={handleLogin} />;
 
-    const NAV = [["overview", "Overview", I.grid], ["products", "Products & Pipeline", I.layers], ["dispatch", "Dispatch & Stores", I.truck], ["bulk", "Bulk Upload", I.upload], ["audit", "Audit Log", I.audit]];
+    if (loading) return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)", flexDirection: "column", gap: 14 }}>
+        <div className="logo" style={{ width: 44, height: 44, borderRadius: 12, background: "linear-gradient(150deg, var(--sage), var(--sage-deep))", display: "grid", placeItems: "center", color: "#fff", boxShadow: "0 4px 10px rgba(124,166,125,.35)" }}>{I.box({ stroke: "#fff" })}</div>
+        <div style={{ fontFamily: "var(--serif)", fontSize: 18, color: "var(--ink)" }}>Loading workspace…</div>
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>Connecting to Google Sheets</div>
+      </div>
+    );
+
+    const allowedStages = getAllowedStages(auth);
+
+    const ALL_NAV = [["overview", "Overview", I.grid], ["products", "Products & Pipeline", I.layers], ["dispatch", "Dispatch & Stores", I.truck], ["bulk", "Bulk Upload", I.upload], ["audit", "Audit Log", I.audit], ["assign", "Assign Work", I.gear]];
+    const NAV = ALL_NAV.filter(([k]) => canSeeTab(auth, k));
+
+    // If current tab is no longer accessible, switch to first allowed tab
+    if (!canSeeTab(auth, tab) && NAV.length > 0) { setTab(NAV[0][0]); }
 
     return (
       <div className="app">
@@ -1458,9 +1826,18 @@
               {ic({})}{n}{k === "dispatch" && openIssues.length > 0 && <span className="pip">{openIssues.length}</span>}
             </button>
           ))}
-          <div className="sidefoot">
+          <div className="sidefoot" style={{ flexShrink: 0 }}>
+            <div style={{ background: "var(--rose-bg)", border: "1px solid var(--rose)", borderRadius: 11, padding: "10px 12px", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".6px", textTransform: "uppercase", color: "var(--rose-ink)", marginBottom: 2 }}>Signed in as</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>{auth.name}</div>
+              </div>
+              <button onClick={handleLogout} style={{ background: "var(--rose)", color: "#fff", border: 0, borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>
+                ↩ Log out
+              </button>
+            </div>
             <div className="opwrap">
-              <label>Signed in as</label>
+              <label>Operator name</label>
               <input value={operator} placeholder="your name" onChange={e => saveOperator(e.target.value)} />
             </div>
             <button className="syncbtn" onClick={load}>{I.sync({})} Sync workspace</button>
@@ -1478,14 +1855,18 @@
             </div>
             <div className="right">
               {tab === "products" && <button className="primary" onClick={() => window.__openAdd && window.__openAdd()}>{I.plus({})} Add product</button>}
+              <button onClick={handleLogout} style={{ border: "1px solid var(--line2)", borderRadius: 10, padding: "8px 14px", fontSize: 12, fontWeight: 600, color: "var(--rose-ink)", background: "var(--card)", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                ↩ Log out
+              </button>
             </div>
           </header>
           <div className="content">
             {tab === "overview" && <Overview division={division} products={divProducts} issues={openIssues} audit={audit.filter(a => a.division === division)} go={setTab} />}
-            {tab === "products" && <Products division={division} products={divProducts} vendors={vendors[division] || []} onUpsert={upsertProduct} onStage={patchStage} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} />}
+            {tab === "products" && <Products division={division} products={divProducts} vendors={vendors[division] || []} onUpsert={upsertProduct} onStage={patchStage} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} allowedStages={allowedStages} />}
             {tab === "dispatch" && <Dispatch products={divProducts} onStore={patchStore} onStage={patchStage} operator={operator} />}
             {tab === "bulk" && <Bulk division={division} products={products} divProducts={divProducts} bulkProducts={bulkProducts} bulkStores={bulkStores} />}
             {tab === "audit" && <AuditLog audit={audit.filter(a => a.division === division)} products={products} onStage={patchStage} />}
+            {tab === "assign" && canAssign(auth) && <AssignWork division={division} products={divProducts} allProducts={products} teamMembers={teamMembers} assignments={assignments} onSaveTeam={saveTeamMembers} onSaveAssignments={saveAssignments} auth={auth} />}
           </div>
         </main>
       </div>
@@ -1614,10 +1995,11 @@
   }
 
   /* ---------------- PRODUCTS ---------------- */
-  function Products({ division, products, vendors, onUpsert, onStage, onQC, onRemove, addVendor }) {
+  function Products({ division, products, vendors, onUpsert, onStage, onQC, onRemove, addVendor, allowedStages }) {
     const [q, setQ] = useState(""); const [open, setOpen] = useState({}); const [modal, setModal] = useState(false);
     const [fVendor, setFVendor] = useState("All"); const [fState, setFState] = useState("All");
-    useEffect(() => { window.__openAdd = () => setModal(true); return () => { delete window.__openAdd; }; }, []);
+    const isFullAccess = allowedStages === null;
+    useEffect(() => { window.__openAdd = () => { if (isFullAccess) setModal(true); }; return () => { delete window.__openAdd; }; }, [isFullAccess]);
     const stateLabel = { All: "All", done: "Listing complete", prog: "In production", none: "Not started", issue: "With issues" };
     const filtered = products.filter(p => {
       const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase(); if (!t.includes(q.toLowerCase())) return false;
@@ -1629,16 +2011,22 @@
           <div className="search">{I.search({})}<input placeholder="Search SKU, product or vendor…" value={q} onChange={e => setQ(e.target.value)} /></div>
           <select className="filt" value={fVendor} onChange={e => setFVendor(e.target.value)}><option>All</option>{vendors.map(v => <option key={v}>{v}</option>)}</select>
           <select className="filt" value={fState} onChange={e => setFState(e.target.value)}>{Object.keys(stateLabel).map(k => <option key={k} value={k}>{stateLabel[k]}</option>)}</select>
-          <button className="primary" onClick={() => setModal(true)}>{I.plus({})} Add product</button>
+          {isFullAccess && <button className="primary" onClick={() => setModal(true)}>{I.plus({})} Add product</button>}
         </div>
         {filtered.length === 0 ? <div className="card empty">No products match. Add your first SKU to start tracking its full pipeline.</div> :
-          <div className="plist">{filtered.map(p => <ProductRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))} onStage={onStage} onQC={onQC} onRemove={onRemove} />)}</div>}
-        {modal && <AddModal division={division} vendors={vendors} addVendor={addVendor} onClose={() => setModal(false)} onSave={p => { onUpsert(p, true); setModal(false); }} />}
+          <div className="plist">{filtered.slice(0, 40).map(p => <ProductRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))} onStage={onStage} onQC={onQC} onRemove={onRemove} allowedStages={allowedStages} />)}
+            {filtered.length > 40 && <div className="note" style={{ marginTop: 8 }}>Showing first 40 of {filtered.length} — use search/filter to narrow down.</div>}
+          </div>
+        }
+        {modal && isFullAccess && <AddModal division={division} vendors={vendors} addVendor={addVendor} onClose={() => setModal(false)} onSave={p => { onUpsert(p, true); setModal(false); }} />}
       </div>
     );
   }
-  function ProductRow({ p, open, toggle, onStage, onQC, onRemove }) {
+  function ProductRow({ p, open, toggle, onStage, onQC, onRemove, allowedStages }) {
     const pct = productPct(p); const hasIssue = STAGES.some(s => p.stages[s.k].status === "Issue");
+    const isFullAccess = allowedStages === null;
+    // Filter stages visible to this user
+    const visibleStages = allowedStages ? STAGES.filter(s => allowedStages.includes(s.k)) : STAGES;
     return (
       <div className="prow">
         <div className="phead" onClick={toggle}>
@@ -1656,15 +2044,15 @@
           <div className="pbody">
             {/* Active stage cards grid */}
             <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "14px 16px" }}>
-              {STAGES.filter(s => s.k !== "qc" && p.stages[s.k].status !== "Completed").map((s, i) => (
+              {visibleStages.filter(s => s.k !== "qc" && p.stages[s.k].status !== "Completed").map((s, i) => (
                 <StageEditor key={s.k} p={p} stage={s} idx={STAGES.findIndex(st => st.k === s.k) + 1} onStage={onStage} />
               ))}
             </div>
             {/* Completed stages — pill popup style */}
-            {STAGES.filter(s => s.k !== "qc" && p.stages[s.k].status === "Completed").length > 0 && (
+            {visibleStages.filter(s => s.k !== "qc" && p.stages[s.k].status === "Completed").length > 0 && (
               <div style={{ borderTop: "1px solid var(--line)", padding: "10px 16px", background: "var(--sage-bg)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color: "var(--sage-ink)", letterSpacing: ".6px", textTransform: "uppercase", whiteSpace: "nowrap" }}>Done</span>
-                {STAGES.filter(s => s.k !== "qc" && p.stages[s.k].status === "Completed").map(s => {
+                {visibleStages.filter(s => s.k !== "qc" && p.stages[s.k].status === "Completed").map(s => {
                   const st = p.stages[s.k];
                   return (
                     <div key={s.k} style={{ position: "relative", display: "inline-block" }} className="done-pill-wrap">
@@ -1683,11 +2071,11 @@
                 })}
               </div>
             )}
-            {/* QC always at the bottom */}
-            <QCStage p={p} idx={STAGES.length} onQC={onQC} />
+            {/* QC — only for full access users */}
+            {isFullAccess && <QCStage p={p} idx={STAGES.length} onQC={onQC} />}
             <div style={{ padding: "13px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span className="tag">Inward {p.inward || "—"} · created {fmt(p.createdAt)} · updated {fmt(p.updatedAt)}</span>
-              <button className="danger" onClick={() => { if (confirm("Delete this product?")) onRemove(p.id); }}>Delete product</button>
+              {isFullAccess && <button className="danger" onClick={() => { if (confirm("Delete this product?")) onRemove(p.id); }}>Delete product</button>}
             </div>
           </div>
         )}
@@ -2019,6 +2407,337 @@
             </table>
           </div>
         }
+      </div>
+    );
+  }
+
+  function AssignWork({ division, products, allProducts, teamMembers, assignments, onSaveTeam, onSaveAssignments, auth }) {
+    const [subTab, setSubTab] = useState("members");
+    const [newName, setNewName] = useState(""), [newEmail, setNewEmail] = useState(""), [newPass, setNewPass] = useState(""), [newRole, setNewRole] = useState("backend"), [addErr, setAddErr] = useState("");
+    const [selMember, setSelMember] = useState("");
+    const [selVendor, setSelVendor] = useState("");
+    const [selSkus, setSelSkus] = useState([]);
+    const [expandedMember, setExpandedMember] = useState(null);
+    const [assErr, setAssErr] = useState("");
+    const [assMsg, setAssMsg] = useState("");
+
+    const isMasterOrAdmin = auth.role === "master" || auth.role === "admin";
+    const divMembers = isMasterOrAdmin
+      ? teamMembers
+      : teamMembers.filter(m => m.division === division);
+    const divAssignments = assignments.filter(a => a.division === division);
+    const filteredProducts = useMemo(() => products.filter(p => !selVendor || p.vendor === selVendor), [products, selVendor]);
+
+    const availableSkus = useMemo(() => {
+      return filteredProducts
+        .filter(p => !(selMember && divAssignments.some(a => a.memberId === selMember && a.sku === p.sku)))
+        .map(p => p.sku);
+    }, [filteredProducts, selMember, divAssignments]);
+
+    const addMember = async () => {
+      if (!newName.trim() || !newEmail.trim() || !newPass.trim()) { setAddErr("Name, email and password are required."); return; }
+      const id = newName.trim().toLowerCase().replace(/\s+/g, "_");
+      if (teamMembers.find(m => m.id === id && m.division === division)) { setAddErr("A member with this name already exists."); return; }
+
+      // stages based on role
+      // const roleStages = {
+      //   backend: "barcoding,content,backend,website",
+      //   content: "barcoding,content,backend,website",
+      //   photography: "photography,videography,videoedit,images",
+      //   videography: "photography,videography,videoedit,images"
+      // };
+
+      if (selectedStages.length === 0) { setAddErr("Select at least one stage for this member."); return; }
+      const stages = selectedStages.join(",");
+      // const stages = roleStages[newRole] || "barcoding,content,backend,website";
+
+      const m = {
+        id,
+        name: newName.trim(),
+        email: newEmail.trim(),
+        password: newPass.trim(),
+        role: "member",
+        stages,
+        division,
+        joinedAt: now()
+      };
+      const updatedTeam = [...teamMembers, m];
+      onSaveTeam(updatedTeam);
+
+      // Save to Users sheet
+      const existingUsers = await gsGetUsers();
+      const alreadyExists = existingUsers.find(u => u.email.toLowerCase() === newEmail.trim().toLowerCase());
+      if (!alreadyExists) {
+        await gsPost("saveUsers", [...existingUsers, {
+          email: newEmail.trim(),
+          password: newPass.trim(),
+          name: newName.trim(),
+          role: "member",
+          stages
+        }]);
+      }
+
+      setNewName(""); setNewEmail(""); setNewPass(""); setAddErr(""); setSelectedStages([]);
+    };
+
+    const removeMember = async (id) => {
+      const member = teamMembers.find(m => m.id === id && m.division === division);
+      onSaveTeam(teamMembers.filter(m => !(m.id === id && m.division === division)));
+      onSaveAssignments(assignments.filter(a => !(a.memberId === id && a.division === division)));
+
+      // Remove from Users sheet too
+      if (member) {
+        const existingUsers = await gsGetUsers();
+        const updated = existingUsers.filter(u => u.email.toLowerCase() !== member.email.toLowerCase());
+        await gsPost("saveUsers", updated);
+      }
+    };
+
+    const assignSku = () => {
+      if (!selMember || selSkus.length === 0) { setAssErr("Select a member and at least one SKU."); return; }
+      const already = selSkus.filter(sku => divAssignments.find(a => a.memberId === selMember && a.sku === sku));
+      const toAdd = selSkus.filter(sku => !already.includes(sku));
+      if (toAdd.length === 0) { setAssErr("All selected SKUs are already assigned to this member."); return; }
+      const newRows = toAdd.map(sku => ({ id: uid(), memberId: selMember, sku, division, assignedAt: now() }));
+      onSaveAssignments([...assignments, ...newRows]);
+      setSelSkus([]); setAssErr(already.length ? `${already.length} already assigned, skipped.` : "");
+    };
+
+    const unassign = (id, sku, memberName) => {
+      onSaveAssignments(assignments.filter(a => a.id !== id));
+      setAssErr("");
+      setAssMsg(`✓ Removed ${sku} from ${memberName}.`);
+    };
+
+    const selectTop = (n) => {
+      setAssMsg(""); setAssErr("");
+      if (!selMember) { setAssErr("Select a team member first."); return; }
+      const remaining = availableSkus.filter(sku => !selSkus.includes(sku));
+      if (remaining.length === 0) { setAssErr("No more unassigned SKUs left to select."); return; }
+      setSelSkus(prev => [...prev, ...remaining.slice(0, n)]);
+    };
+
+    const deselectTop = (n) => {
+      setAssMsg(""); setAssErr("");
+      if (selSkus.length === 0) { setAssErr("Nothing is selected yet."); return; }
+      const orderedSelected = filteredProducts.map(p => p.sku).filter(sku => selSkus.includes(sku));
+      const toRemove = orderedSelected.slice(0, n);
+      setSelSkus(prev => prev.filter(sku => !toRemove.includes(sku)));
+    };
+
+    const selectAllAvailable = () => {
+      setAssMsg(""); setAssErr("");
+      if (!selMember) { setAssErr("Select a team member first."); return; }
+      if (availableSkus.length === 0) { setAssErr("No unassigned SKUs available."); return; }
+      setSelSkus(availableSkus);
+    };
+
+    const [selectedStages, setSelectedStages] = useState([]);
+    const allStages = STAGES.filter(s => s.k !== "qc" && s.k !== "scan");
+
+    return (
+      <div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+          {[["members", "Team Members"], ["assignments", "SKU Assignments"]].map(([k, n]) => (
+            <button key={k} onClick={() => setSubTab(k)} style={{ padding: "8px 18px", borderRadius: 10, border: "1px solid var(--line2)", background: subTab === k ? "var(--ink)" : "var(--card)", color: subTab === k ? "#fff" : "var(--ink)", fontWeight: 600, fontSize: 13 }}>{n}</button>
+          ))}
+        </div>
+
+        {subTab === "members" && (
+          <div>
+            <div className="card pad" style={{ marginBottom: 16 }}>
+              <h3 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 600 }}>Add team member — {division}</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+                <label className="fld">Full name<input className="txt" placeholder="e.g. Priya Sharma" value={newName} onChange={e => { setNewName(e.target.value); setAddErr(""); }} /></label>
+                <label className="fld">Email (login)<input className="txt" type="email" placeholder="priya@koc.com" value={newEmail} onChange={e => { setNewEmail(e.target.value); setAddErr(""); }} /></label>
+                <label className="fld">Password<input className="txt" type="password" placeholder="••••••••" value={newPass} onChange={e => { setNewPass(e.target.value); setAddErr(""); }} /></label>
+                <label className="fld" style={{ gridColumn: "1/-1" }}>
+                  Stages this member can access
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+                    {allStages.map(s => (
+                      <label key={s.k} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500, color: "var(--ink)", background: selectedStages.includes(s.k) ? "var(--sage-bg)" : "var(--card)", border: `1px solid ${selectedStages.includes(s.k) ? "var(--sage)" : "var(--line2)"}`, borderRadius: 8, padding: "5px 10px", cursor: "pointer", textTransform: "none", letterSpacing: 0 }}>
+                        <input type="checkbox" checked={selectedStages.includes(s.k)} style={{ width: 13, height: 13, accentColor: "var(--sage-deep)" }}
+                          onChange={e => setSelectedStages(prev => e.target.checked ? [...prev, s.k] : prev.filter(k => k !== s.k))} />
+                        {s.n}
+                      </label>
+                    ))}
+                  </div>
+                  {selectedStages.length === 0 && <div style={{ fontSize: 11, color: "var(--rose-ink)", marginTop: 4 }}>Select at least one stage</div>}
+                </label>
+              </div>
+              {addErr && <div style={{ color: "var(--rose-ink)", fontSize: 12, marginBottom: 10 }}>{addErr}</div>}
+              <button className="primary" onClick={addMember}>Add member</button>
+            </div>
+
+            {divMembers.length === 0
+              ? <div className="card empty">No team members added yet for {division}.</div>
+              : <div className="tbl-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Email</th>
+                      <th>Division</th>
+                      <th>Stages Handling</th>
+                      <th>Joined</th>
+                      <th className="num">Assigned SKUs</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {divMembers.map(m => {
+                      const count = assignments.filter(a => a.memberId === m.id).length;
+                      return (
+                        <tr key={m.id}>
+                          <td><b>{m.name}</b></td>
+
+                          <td className="tag">
+                            {m.email}
+                          </td>
+
+                          <td>
+                            <span className="chip c-done" style={{ fontSize: 10.5 }}>
+                              <span className="dot" />{m.division || "—"}
+                            </span>
+                          </td>
+
+                          <td>
+                            {(m.stages || "")
+                              .split(",")
+                              .filter(Boolean)
+                              .map(stage => {
+                                const s = STAGES.find(x => x.k === stage);
+                                return (
+                                  <span
+                                    key={stage}
+                                    className="chip c-prog"
+                                    style={{ marginRight: 4 }}
+                                  >
+                                    <span className="dot" />
+                                    {s?.n || stage}
+                                  </span>
+                                );
+                              })}
+                          </td>
+
+                          <td className="tag">
+                            {m.joinedAt ? fmt(m.joinedAt) : "—"}
+                          </td>
+
+                          <td className="num">{count}</td>
+
+                          <td>
+                            <button
+                              className="danger"
+                              onClick={() => {
+                                if (confirm(`Remove ${m.name}? Their assignments will also be cleared.`))
+                                  removeMember(m.id);
+                              }}
+                            >
+                              Remove
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            }
+          </div>
+        )}
+
+        {subTab === "assignments" && (
+          <div>
+            <div className="card pad" style={{ marginBottom: 16 }}>
+              <h3 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 600 }}>Assign SKU to member</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <label className="fld">Team member
+                  <select value={selMember} onChange={e => { setSelMember(e.target.value); setSelSkus([]); setAssErr(""); }}>
+                    <option value="">— select member —</option>
+                    {divMembers.map(m => <option key={m.id} value={m.id}>{m.name} ({m.role})</option>)}
+                  </select>
+                </label>
+                <label className="fld">Vendor (filter)
+                  <select value={selVendor} onChange={e => { setSelVendor(e.target.value); setSelSkus([]); setAssErr(""); }}>
+                    <option value="">— all vendors —</option>
+                    {[...new Set(products.map(p => p.vendor).filter(Boolean))].sort().map(v => <option key={v}>{v}</option>)}
+                  </select>
+                </label>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
+                <button className="ghost" onClick={() => selectTop(10)} disabled={!selMember || availableSkus.filter(sku => !selSkus.includes(sku)).length === 0}>+ 10</button>
+                <button className="ghost" onClick={() => deselectTop(10)} disabled={selSkus.length === 0}>− 10</button>
+                <span style={{ width: 1, height: 22, background: "var(--line2)" }} />
+                <button className="ghost" onClick={selectAllAvailable} disabled={!selMember || availableSkus.length === 0}>Select all ({availableSkus.length})</button>
+                <div style={{ marginLeft: "auto", background: "var(--sage-bg)", border: "1px solid var(--sage)", borderRadius: 9, padding: "6px 14px", fontSize: 13, fontWeight: 700, color: "var(--sage-ink)" }}>
+                  {selSkus.length} selected
+                </div>
+              </div>
+              <label className="fld" style={{ marginTop: 10 }}>
+                SKUs to assign
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6, maxHeight: 190, overflowY: "auto", padding: 8, border: "1px solid var(--line2)", borderRadius: 9, background: "var(--card)" }}>
+                  {filteredProducts.map(p => {
+                    const isAlready = !!selMember && divAssignments.some(a => a.memberId === selMember && a.sku === p.sku);
+                    return (
+                      <label key={p.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500, color: isAlready ? "var(--faint)" : "var(--ink)", background: selSkus.includes(p.sku) ? "var(--sage-bg)" : "var(--card)", border: `1px solid ${selSkus.includes(p.sku) ? "var(--sage)" : "var(--line2)"}`, borderRadius: 8, padding: "5px 10px", cursor: isAlready ? "default" : "pointer" }}>
+                        <input type="checkbox" disabled={isAlready} checked={selSkus.includes(p.sku)} style={{ width: 13, height: 13, accentColor: "var(--sage-deep)" }}
+                          onChange={e => setSelSkus(prev => e.target.checked ? [...prev, p.sku] : prev.filter(s => s !== p.sku))} />
+                        {p.sku}{p.name ? " · " + p.name : ""}{isAlready ? " (assigned)" : ""}
+                      </label>
+                    );
+                  })}
+                </div>
+              </label>
+              <button className="primary" style={{ marginTop: 12 }} onClick={assignSku}>Assign{selSkus.length > 0 ? ` (${selSkus.length})` : ""}</button>
+              {assErr && <div style={{ color: "var(--rose-ink)", fontSize: 12, marginTop: 8 }}>{assErr}</div>}
+              {assMsg && <div style={{ color: "var(--sage-ink)", fontSize: 12, marginTop: 8, fontWeight: 600 }}>{assMsg}</div>}
+            </div>
+
+            {divMembers.length === 0
+              ? <div className="card empty">Add team members first before assigning SKUs.</div>
+              : divMembers.map(m => {
+                const myAss = divAssignments.filter(a => a.memberId === m.id);
+                const isOpen = expandedMember === m.id;
+                return (
+                  <div key={m.id} className="card" style={{ marginBottom: 10, overflow: "hidden" }}>
+                    <div onClick={() => setExpandedMember(isOpen ? null : m.id)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 18px", cursor: "pointer" }}>
+                      <span className={"chev " + (isOpen ? "open" : "")}>▶</span>
+                      <b>{m.name}</b>
+                      <span className="tag">· {m.role}</span>
+                      <div className="spacer" />
+                      <span className="hint">{myAss.length} SKU{myAss.length !== 1 ? "s" : ""} assigned</span>
+                    </div>
+                    {isOpen && (
+                      myAss.length === 0
+                        ? <div style={{ padding: "14px 18px", color: "var(--faint)", fontSize: 13, borderTop: "1px solid var(--line)" }}>No SKUs assigned yet.</div>
+                        : <div className="tbl-wrap" style={{ border: 0, borderRadius: 0, boxShadow: "none", borderTop: "1px solid var(--line)" }}>
+                          <table>
+                            <thead><tr><th>SKU</th><th>Product name</th><th>Vendor</th><th>Pipeline</th><th>Assigned</th><th></th></tr></thead>
+                            <tbody>
+                              {myAss.map(a => {
+                                const prod = products.find(p => p.sku === a.sku);
+                                return (
+                                  <tr key={a.id}>
+                                    <td><span className="psku">{a.sku}</span></td>
+                                    <td>{prod?.name || "—"}</td>
+                                    <td className="tag">{prod?.vendor || "—"}</td>
+                                    <td>{prod ? <Pipe p={prod} /> : "—"}</td>
+                                    <td className="tag">{fmt(a.assignedAt)}</td>
+                                    <td><button className="danger" onClick={() => unassign(a.id, a.sku, m.name)}>Remove</button></td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                    )}
+                  </div>
+                );
+              })
+            }
+          </div>
+        )}
       </div>
     );
   }
