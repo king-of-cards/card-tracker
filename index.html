@@ -1351,7 +1351,7 @@
   const STAGE_COLS = STAGES.filter(s => s.k !== "qc");
   const DEFAULT_VENDORS = {
     "KOC Cards": ["KOC", "Patrika", "Mayur", "Rasiklal", "Venis", "Ferry Card", "Mack Mark", "Shubham", "Mani Creation", "Jimit", "Reel Card", "Swamy Cards", "Remco", "Sanskurti", "Aakarshak"],
-    "Bombay Cards": []
+    "Bombay Cards": ["Rasiklal & Bros", "Patrika Palace", "Real Cards", "JIMIT CARDS", "Aakarshak Cards", "Devarajan & sons", "Sanskruti Cards", "Rama Cards", "Mack Mark", "Phoenix Cards", "Remco Cards", "Venis Cards", "Mani Creation", "Rickabchand", "Shankheshwar Cards", "Shubham Cards", "Creative Crafts", "Ferry Cards", "Swamy Cards"]
   };
 
   /* ---------- users (hardcoded login) ---------- */
@@ -1419,7 +1419,7 @@
       return stages.includes("bulk");
     }
     // members only see overview and products
-    return ["overview", "products"].includes(tabKey);
+    return ["overview", "products", "process"].includes(tabKey);
   }
 
   function getAllowedStages(auth) {
@@ -1473,6 +1473,21 @@
     if (!iso) return "—"; const d = new Date(iso);
     return d.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
   }
+
+  function normalizeAuditRow(raw) {
+    const vals = Object.values(raw);
+    return {
+      id: vals[0] ?? "",
+      at: vals[1] ?? "",
+      actor: vals[2] ?? "",
+      action: vals[3] ?? "",
+      entity: vals[4] ?? "",
+      detail: vals[5] ?? "",
+      division: vals[6] ?? "",
+    };
+  }
+
+
   function statusClass(s) { return s === "Completed" ? "c-done" : s === "In Progress" ? "c-prog" : s === "Issue" ? "c-issue" : "c-none"; }
   function pipeClass(s) { return s === "Completed" ? "s-done" : s === "In Progress" ? "s-prog" : s === "Issue" ? "s-issue" : "s-none"; }
   function normStatus(v) { const m = { "not started": "Not Started", "notstarted": "Not Started", "in progress": "In Progress", "inprogress": "In Progress", "progress": "In Progress", "wip": "In Progress", "pending": "In Progress", "completed": "Completed", "complete": "Completed", "done": "Completed", "approved": "Completed", "issue": "Issue", "issues": "Issue", "error": "Issue" }; return m[String(v).trim().toLowerCase()] || null; }
@@ -1620,7 +1635,7 @@
       const [data, sheetUsers] = await Promise.all([gsGet(), gsGetUsers()]);
       if (data) {
         setProducts((data.products || []).map(ensureStages));
-        setAudit(data.audit || []);
+        setAudit((data.audit || []).map(normalizeAuditRow));
         setVendors(data.vendors || DEFAULT_VENDORS);
         setAssignments(data.assignments || []);
 
@@ -1792,7 +1807,7 @@
     const counts = useMemo(() => { const o = {}; DIVISIONS.forEach(d => o[d] = products.filter(p => p.division === d).length); return o; }, [products]);
     const openIssues = useMemo(() => { const l = []; divProducts.forEach(p => STORES.forEach(st => { const s = p.stores[st]; if (s && (s.missing > 0 || s.damaged > 0)) l.push({ p, store: st, s }); })); return l; }, [divProducts]);
 
-    const META = { overview: ["Overview", "Production, listing & dispatch at a glance"], products: ["Products & Pipeline", "Every design and its full production lifecycle"], dispatch: ["Dispatch & Stores", "Scan, dispatch & store receipts across 11 stores"], bulk: ["Bulk Upload", "Import & update thousands of records via Excel"], audit: ["Audit Log", "A complete timestamped trail of every action"], assign: ["Assign Work", "Manage team members and assign SKUs to individuals"] };
+    const META = { overview: ["Overview", "Production, listing & dispatch at a glance"], products: ["Products & Pipeline", "Every design and its full production lifecycle"], dispatch: ["Dispatch & Stores", "Scan, dispatch & store receipts across 11 stores"], bulk: ["Bulk Upload", "Import & update thousands of records via Excel"], audit: ["Audit Log", "A complete timestamped trail of every action"], assign: ["Assign Work", "Manage team members and assign SKUs to individuals"], process: ["Process", "Member performance reports and completed work"] };
 
     if (!auth) return <Login onLogin={handleLogin} />;
 
@@ -1806,7 +1821,7 @@
 
     const allowedStages = getAllowedStages(auth);
 
-    const ALL_NAV = [["overview", "Overview", I.grid], ["products", "Products & Pipeline", I.layers], ["dispatch", "Dispatch & Stores", I.truck], ["bulk", "Bulk Upload", I.upload], ["audit", "Audit Log", I.audit], ["assign", "Assign Work", I.gear]];
+    const ALL_NAV = [["overview", "Overview", I.grid], ["products", "Products & Pipeline", I.layers], ["dispatch", "Dispatch & Stores", I.truck], ["bulk", "Bulk Upload", I.upload], ["audit", "Audit Log", I.audit], ["assign", "Assign Work", I.gear], ["process", "Process", I.check]];
     const NAV = ALL_NAV.filter(([k]) => canSeeTab(auth, k));
 
     // If current tab is no longer accessible, switch to first allowed tab
@@ -1867,12 +1882,13 @@
             </div>
           </header>
           <div className="content">
-            {tab === "overview" && <Overview division={division} products={divProducts} issues={openIssues} audit={audit.filter(a => a.division === division)} go={setTab} />}
+            {tab === "overview" && <Overview division={division} products={divProducts} issues={openIssues} audit={audit.filter(a => a.division === division)} go={setTab} vendors={vendors[division] || []} />}
             {tab === "products" && <Products division={division} products={divProducts} vendors={vendors[division] || []} onUpsert={upsertProduct} onStage={patchStage} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} allowedStages={allowedStages} />}
             {tab === "dispatch" && <Dispatch products={divProducts} onStore={patchStore} onStage={patchStage} operator={operator} />}
             {tab === "bulk" && <Bulk division={division} products={products} divProducts={divProducts} bulkProducts={bulkProducts} bulkStores={bulkStores} />}
             {tab === "audit" && <AuditLog audit={audit.filter(a => a.division === division)} products={products} onStage={patchStage} />}
-            {tab === "assign" && canAssign(auth) && <AssignWork division={division} products={divProducts} allProducts={products} teamMembers={teamMembers} assignments={assignments} onSaveTeam={saveTeamMembers} onSaveAssignments={saveAssignments} auth={auth} />}
+            {tab === "assign" && canAssign(auth) && <AssignWork division={division} products={divProducts} allProducts={products} teamMembers={teamMembers} assignments={assignments} onSaveTeam={saveTeamMembers} onSaveAssignments={saveAssignments} auth={auth} vendors={vendors[division] || []} />}
+            {tab === "process" && <Process division={division} products={products} teamMembers={teamMembers} assignments={assignments} audit={audit} />}
           </div>
         </main>
       </div>
@@ -1880,16 +1896,26 @@
   }
 
   /* ---------------- OVERVIEW ---------------- */
-  function Overview({ division, products, issues, audit, go }) {
-    const total = products.length;
-    const done = products.filter(p => productState(p) === "done").length;
-    const prog = products.filter(p => productState(p) === "prog").length;
-    const none = products.filter(p => productState(p) === "none").length;
-    const withIssue = products.filter(p => productState(p) === "issue").length;
+  function Overview({ division, products, issues, audit, go, vendors = [] }) {
+    const [fVendor, setFVendor] = useState("");
+    const [fSetNo, setFSetNo] = useState("");
+    const vendorOptions = (vendors || []).map(v => v.trim()).filter(Boolean);
+    const setNoOptions = useMemo(() => [...new Set(products.map(p => p.set_no).filter(Boolean))].sort(), [products]);
+    const filteredProducts = useMemo(() => products.filter(p =>
+      (!fVendor || (p.vendor || "").trim().toLowerCase() === fVendor.trim().toLowerCase()) &&
+      (!fSetNo || (p.set_no || "").trim().toLowerCase() === fSetNo.trim().toLowerCase())
+    ), [products, fVendor, fSetNo]);
+    const hasFilters = fVendor || fSetNo;
+
+    const total = filteredProducts.length;
+    const done = filteredProducts.filter(p => productState(p) === "done").length;
+    const prog = filteredProducts.filter(p => productState(p) === "prog").length;
+    const none = filteredProducts.filter(p => productState(p) === "none").length;
+    const withIssue = filteredProducts.filter(p => productState(p) === "issue").length;
     let dispatched = 0, received = 0, missing = 0, damaged = 0;
-    products.forEach(p => STORES.forEach(st => { const s = p.stores[st]; dispatched += s.dispatched || 0; if (s.received) received++; missing += s.missing || 0; damaged += s.damaged || 0; }));
-    const stageStats = STAGES.map(s => ({ ...s, done: products.filter(p => p.stages[s.k].status === "Completed").length, issue: products.filter(p => p.stages[s.k].status === "Issue").length }));
-    const storeStats = STORES.map(st => { let d = 0, r = 0, m = 0, dm = 0, pending = 0; products.forEach(p => { const s = p.stores[st]; d += s.dispatched || 0; if (s.received) r++; else if (s.dispatched > 0) pending++; m += s.missing || 0; dm += s.damaged || 0; }); return { st, d, r, m, dm, pending }; });
+    filteredProducts.forEach(p => STORES.forEach(st => { const s = p.stores[st]; dispatched += s.dispatched || 0; if (s.received) received++; missing += s.missing || 0; damaged += s.damaged || 0; }));
+    const stageStats = STAGES.map(s => ({ ...s, done: filteredProducts.filter(p => p.stages[s.k].status === "Completed").length, issue: filteredProducts.filter(p => p.stages[s.k].status === "Issue").length }));
+    const storeStats = STORES.map(st => { let d = 0, r = 0, m = 0, dm = 0, pending = 0; filteredProducts.forEach(p => { const s = p.stores[st]; d += s.dispatched || 0; if (s.received) r++; else if (s.dispatched > 0) pending++; m += s.missing || 0; dm += s.damaged || 0; }); return { st, d, r, m, dm, pending }; });
     const segs = [{ label: "Listing complete", value: done, color: "var(--sage)" }, { label: "In production", value: prog, color: "var(--sky)" }, { label: "Not started", value: none, color: "var(--line2)" }, { label: "With issues", value: withIssue, color: "var(--rose)" }];
 
     const kpis = [
@@ -1921,7 +1947,22 @@
 
         <div className="sec ov-grid">
           <div className="card pad">
-            <div className="sec-h" style={{ marginBottom: 6 }}><h3>Pipeline progress</h3><span className="hint">manufacturing → listing → dispatch</span></div>
+            <div className="sec-h" style={{ marginBottom: 6, alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <h3>Pipeline progress</h3>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto", flexWrap: "wrap" }}>
+                <select value={fVendor} onChange={e => setFVendor(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 11.5, color: fVendor ? "var(--ink)" : "var(--muted)" }}>
+                  <option value="">— all vendors —</option>
+                  {vendorOptions.map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+                <select value={fSetNo} onChange={e => setFSetNo(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 11.5, color: fSetNo ? "var(--ink)" : "var(--muted)" }}>
+                  <option value="">— all set no. —</option>
+                  {setNoOptions.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                {hasFilters && <button className="ghost" style={{ padding: "6px 10px", fontSize: 11.5 }} onClick={() => { setFVendor(""); setFSetNo(""); }}>Clear</button>}
+                <span className="hint" style={{ whiteSpace: "nowrap" }}>manufacturing → listing → dispatch</span>
+              </div>
+            </div>
+            {hasFilters && <div className="tag" style={{ marginBottom: 10 }}>Showing {filteredProducts.length} of {products.length} {division} products{fVendor ? ` · vendor: ${fVendor}` : ""}{fSetNo ? ` · set no: ${fSetNo}` : ""}</div>}
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
@@ -1935,10 +1976,10 @@
                 </thead>
                 <tbody>
                   {stageStats.map(s => {
-                    const notStarted = products.filter(p => p.stages[s.k].status === "Not Started").length;
-                    const inProgress = products.filter(p => p.stages[s.k].status === "In Progress").length;
-                    const completed = products.filter(p => p.stages[s.k].status === "Completed").length;
-                    const issue = products.filter(p => p.stages[s.k].status === "Issue").length;
+                    const notStarted = filteredProducts.filter(p => p.stages[s.k].status === "Not Started").length;
+                    const inProgress = filteredProducts.filter(p => p.stages[s.k].status === "In Progress").length;
+                    const completed = filteredProducts.filter(p => p.stages[s.k].status === "Completed").length;
+                    const issue = filteredProducts.filter(p => p.stages[s.k].status === "Issue").length;
                     return (
                       <tr key={s.k} style={{ borderBottom: "1px solid var(--line)" }}>
                         <td style={{ padding: "10px 10px", fontWeight: 600, fontSize: 13 }}>{s.n}</td>
@@ -2388,32 +2429,162 @@
   }
 
   /* ---------------- AUDIT ---------------- */
+  // function AuditLog({ audit, products, onStage }) {
+  //   const [q, setQ] = useState("");
+
+  //   // Build completed stage rows directly from products data
+  //   const completedRows = [];
+  //   products.forEach(p => {
+  //     STAGES.forEach(s => {
+  //       const st = p.stages[s.k];
+  //       if (st.status === "Completed") {
+  //         completedRows.push({
+  //           id: p.id + "_" + s.k,
+  //           productId: p.id,
+  //           sku: p.sku,
+  //           stageName: s.n,
+  //           stageKey: s.k,
+  //           person: st.person || "—",
+  //           comments: st.comments || "",
+  //           at: st.at || "",
+  //           division: p.division
+  //         });
+  //       }
+  //     });
+  //   });
+
+  //   // Sort newest first
+  //   completedRows.sort((a, b) => new Date(b.at) - new Date(a.at));
+
+  //   const filtered = completedRows.filter(r =>
+  //     (r.sku + " " + r.stageName + " " + r.person + " " + r.comments)
+  //       .toLowerCase().includes(q.toLowerCase())
+  //   );
+
+  //   const moveBack = (row) => {
+  //     const prod = products.find(p => p.id === row.productId);
+  //     if (!prod) return;
+  //     onStage(prod.id, row.stageKey, { status: "In Progress", person: prod.stages[row.stageKey].person, comments: prod.stages[row.stageKey].comments });
+  //   };
+
+  //   return (
+  //     <div>
+  //       <div className="note">Showing all completed stages across all products — directly from live data. Use <b>↩ In Progress</b> to move a stage back if needed.</div>
+  //       <div className="toolbar" style={{ marginTop: 14 }}>
+  //         <div className="search">{I.search({})}<input placeholder="Filter by SKU, stage, person…" value={q} onChange={e => setQ(e.target.value)} /></div>
+  //         <span className="tag">{filtered.length} completed stages</span>
+  //       </div>
+  //       {filtered.length === 0
+  //         ? <div className="card empty">No completed stages yet.</div>
+  //         : <div className="tbl-wrap">
+  //           <table>
+  //             <thead>
+  //               <tr>
+  //                 <th style={{ width: 140 }}>When</th>
+  //                 <th style={{ width: 110 }}>SKU</th>
+  //                 <th style={{ width: 160 }}>Stage</th>
+  //                 <th style={{ width: 120 }}>By</th>
+  //                 <th>Comments</th>
+  //                 <th style={{ width: 120 }}></th>
+  //               </tr>
+  //             </thead>
+  //             <tbody>
+  //               {filtered.map(r => (
+  //                 <tr key={r.id} style={{ background: "var(--sage-bg)" }}>
+  //                   <td className="tag" style={{ whiteSpace: "nowrap" }}>{fmt(r.at)}</td>
+  //                   <td><span className="psku">{r.sku}</span></td>
+  //                   <td>
+  //                     <span className="audit-act" style={{ background: "var(--sage)", color: "#fff" }}>
+  //                       ✓ {r.stageName}
+  //                     </span>
+  //                   </td>
+  //                   <td style={{ fontWeight: 600 }}>{r.person}</td>
+  //                   <td className="tag">{r.comments || "—"}</td>
+  //                   <td>
+  //                     <button
+  //                       onClick={() => { if (confirm("Move back to In Progress?")) moveBack(r); }}
+  //                       style={{ fontSize: 11, padding: "4px 10px", border: "1px solid var(--sky)", borderRadius: 7, background: "var(--sky-bg)", color: "var(--sky-ink)", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
+  //                       ↩ In Progress
+  //                     </button>
+  //                   </td>
+  //                 </tr>
+  //               ))}
+  //             </tbody>
+  //           </table>
+  //         </div>
+  //       }
+  //     </div>
+  //   );
+  // }
   function AuditLog({ audit, products, onStage }) {
     const [q, setQ] = useState("");
 
-    // Build completed stage rows directly from products data
-    const completedRows = [];
-    products.forEach(p => {
-      STAGES.forEach(s => {
-        const st = p.stages[s.k];
-        if (st.status === "Completed") {
-          completedRows.push({
-            id: p.id + "_" + s.k,
-            productId: p.id,
-            sku: p.sku,
-            stageName: s.n,
-            stageKey: s.k,
-            person: st.person || "—",
-            comments: st.comments || "",
-            at: st.at || "",
-            division: p.division
-          });
+    const skuToProduct = useMemo(() => {
+      const m = {};
+      products.forEach(p => { m[p.sku] = p; if (p.name) m[p.name.toLowerCase()] = p; });
+      return m;
+    }, [products]);
+
+    const stageNameToKey = useMemo(() => {
+      const m = {};
+      STAGES.forEach(s => { m[s.n] = s.k; });
+      return m;
+    }, []);
+
+    // Build completed-stage rows straight from the audit log (not from the
+    // product's current "person" field, which is frequently left blank on
+    // bulk imports / admin edits). Person resolution mirrors the Process tab:
+    // prefer the name typed into the stage's person field, fall back to the
+    // actor (logged-in operator) who actually performed the action.
+    const completedRows = useMemo(() => {
+      // Find only the MOST RECENT "Stage update" record per product+stage —
+      // not the full history. This way, moving a stage back to In Progress
+      // logs a newer entry that immediately replaces the old "Completed" one
+      // here, so the row disappears right away instead of lingering forever.
+      const latestByKey = new Map();
+      audit.forEach(a => {
+        if (a.action !== "Stage update") return;
+        const detail = String(a.detail || "");
+        const m = detail.match(/^(.+?)\s*→\s*([^·]+?)(?:\s*·\s*(.+))?$/);
+        if (!m) return;
+        const stageName = m[1].trim();
+        const status = m[2].trim();
+        const personFromDetail = (m[3] || "").trim();
+
+        const prod = skuToProduct[a.entity] || skuToProduct[String(a.entity || "").toLowerCase()];
+        const stageKey = stageNameToKey[stageName] || "";
+        if (!prod || !stageKey) return;
+
+        const key = prod.id + "|" + stageKey;
+        const existing = latestByKey.get(key);
+        if (!existing || new Date(a.at) > new Date(existing.a.at)) {
+          latestByKey.set(key, { a, prod, stageKey, stageName, status, personFromDetail });
         }
       });
-    });
 
-    // Sort newest first
-    completedRows.sort((a, b) => new Date(b.at) - new Date(a.at));
+      const rows = [];
+      latestByKey.forEach(({ a, prod, stageKey, stageName, status, personFromDetail }) => {
+        if (status !== "Completed") return;
+
+        if (!prod || prod.stages[stageKey]?.status !== "Completed") return;
+        const person = personFromDetail || (a.actor || "").trim() || "—";
+        if (person === "—") return;
+        const comments = prod.stages[stageKey].comments || "";
+        rows.push({
+          id: a.id,
+          productId: prod.id,
+          sku: prod.sku,
+          stageName,
+          stageKey,
+          person,
+          comments,
+          at: a.at,
+          division: a.division
+        });
+      });
+      rows.sort((x, y) => new Date(y.at) - new Date(x.at));
+      return rows;
+    }, [audit, skuToProduct, stageNameToKey]);
 
     const filtered = completedRows.filter(r =>
       (r.sku + " " + r.stageName + " " + r.person + " " + r.comments)
@@ -2421,6 +2592,7 @@
     );
 
     const moveBack = (row) => {
+      if (!row.productId || !row.stageKey) return;
       const prod = products.find(p => p.id === row.productId);
       if (!prod) return;
       onStage(prod.id, row.stageKey, { status: "In Progress", person: prod.stages[row.stageKey].person, comments: prod.stages[row.stageKey].comments });
@@ -2428,7 +2600,7 @@
 
     return (
       <div>
-        <div className="note">Showing all completed stages across all products — directly from live data. Use <b>↩ In Progress</b> to move a stage back if needed.</div>
+        <div className="note">Showing every stage marked Completed, drawn from the full activity log — including bulk imports and admin updates, regardless of whether a "person" name was typed in. Use <b>↩ In Progress</b> to move a stage back if needed.</div>
         <div className="toolbar" style={{ marginTop: 14 }}>
           <div className="search">{I.search({})}<input placeholder="Filter by SKU, stage, person…" value={q} onChange={e => setQ(e.target.value)} /></div>
           <span className="tag">{filtered.length} completed stages</span>
@@ -2476,7 +2648,9 @@
     );
   }
 
-  function AssignWork({ division, products, allProducts, teamMembers, assignments, onSaveTeam, onSaveAssignments, auth }) {
+
+
+  function AssignWork({ division, products, allProducts, teamMembers, assignments, onSaveTeam, onSaveAssignments, auth, vendors }) {
     const [subTab, setSubTab] = useState("members");
     //const [newName, setNewName] = useState(""), [newEmail, setNewEmail] = useState(""), [newPass, setNewPass] = useState(""), [newRole, setNewRole] = useState("backend"), [addErr, setAddErr] = useState("");
     const [newName, setNewName] = useState(""), [newEmail, setNewEmail] = useState(""), [newPass, setNewPass] = useState(""), [newRole, setNewRole] = useState("backend"), [addErr, setAddErr] = useState("");
@@ -2771,7 +2945,7 @@
                 <label className="fld">Vendor (filter)
                   <select value={selVendor} onChange={e => { setSelVendor(e.target.value); setSelSkus([]); setAssErr(""); }}>
                     <option value="">— all vendors —</option>
-                    {[...new Set(products.map(p => p.vendor).filter(Boolean))].sort().map(v => <option key={v}>{v}</option>)}
+                    {vendors.map(v => <option key={v}>{v}</option>)}
                   </select>
                 </label>
               </div>
@@ -2787,7 +2961,13 @@
               <label className="fld" style={{ marginTop: 10 }}>
                 SKUs to assign
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6, maxHeight: 190, overflowY: "auto", padding: 8, border: "1px solid var(--line2)", borderRadius: 9, background: "var(--card)" }}>
-                  {filteredProducts.map(p => {
+                  {filteredProducts.length === 0 ? (
+                    <div style={{ fontSize: 12.5, color: "var(--faint)", padding: "8px 4px" }}>
+                      {selVendor
+                        ? `No products found with vendor "${selVendor}" yet. Add or import products under this vendor first, or clear the vendor filter.`
+                        : "No products available in this division yet."}
+                    </div>
+                  ) : filteredProducts.map(p => {
                     const isAlready = !!selMember && divAssignments.some(a => a.memberId === selMember && a.sku === p.sku);
                     return (
                       <label key={p.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500, color: isAlready ? "var(--faint)" : "var(--ink)", background: selSkus.includes(p.sku) ? "var(--sage-bg)" : "var(--card)", border: `1px solid ${selSkus.includes(p.sku) ? "var(--sage)" : "var(--line2)"}`, borderRadius: 8, padding: "5px 10px", cursor: isAlready ? "default" : "pointer" }}>
@@ -2852,6 +3032,247 @@
     );
   }
 
+
+  function Process({ division, products, teamMembers, assignments, audit }) {
+    const [selMonth, setSelMonth] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; });
+    const [expandedMember, setExpandedMember] = useState(null);
+    const [showDebug, setShowDebug] = useState(false);
+
+    const skuToProduct = useMemo(() => {
+      const m = {};
+      products.forEach(p => { m[p.sku] = p; if (p.name) m[p.name.toLowerCase()] = p; });
+      return m;
+    }, [products]);
+
+    const resolveDivision = (a, skuMap) => {
+      if (a.division === division) return true;
+      const prod = skuMap[a.entity] || skuMap[String(a.entity || "").toLowerCase()];
+      if (prod) return prod.division === division;
+      return !a.division;
+    };
+
+    const monthKeyOf = (at) => {
+      if (!at) return null;
+      const d = new Date(at);
+      if (isNaN(d.getTime())) return null;
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    };
+
+    const allActions = useMemo(() => {
+      const rows = [];
+      audit.forEach(a => {
+        if (a.action !== "Stage update" && a.action !== "Final audit") return;
+        const mk = monthKeyOf(a.at);
+        if (!mk || mk !== selMonth) return;
+        if (!resolveDivision(a, skuToProduct)) return;
+
+        const detail = String(a.detail || "");
+        let stageName = "", status = "", personFromDetail = "";
+
+        if (a.action === "Stage update") {
+          // Format: "<Stage Name> → <Status>[ · <person>]"
+          const m = detail.match(/^(.+?)\s*→\s*([^·]+?)(?:\s*·\s*(.+))?$/);
+          if (!m) return;
+          stageName = m[1].trim();
+          status = m[2].trim();
+          personFromDetail = (m[3] || "").trim();
+        } else {
+          stageName = "Final QC / Audit";
+          const m = detail.match(/Verdict:\s*(.+)/);
+          status = m ? m[1].trim() : "—";
+          if (status === "—" || !status) return;
+        }
+
+        // Prefer the person actually typed into the stage's "person" field —
+        // that's who really did the work. Fall back to the actor (logged-in
+        // operator) only when no person was specified, e.g. bulk imports or
+        // QC verdicts that don't carry a separate person field.
+        const person = personFromDetail || (a.actor || "").trim();
+        if (!person || person.toLowerCase() === "unattributed") return;
+
+        const prod = skuToProduct[a.entity] || skuToProduct[String(a.entity || "").toLowerCase()];
+        rows.push({
+          id: a.id,
+          sku: prod ? prod.sku : a.entity,
+          productName: prod ? (prod.name || prod.sku) : a.entity,
+          stage: stageName,
+          status: status || "—",
+          person,
+          at: a.at,
+          actor: a.actor
+        });
+      });
+      return rows.sort((x, y) => new Date(y.at) - new Date(x.at));
+    }, [audit, division, selMonth, skuToProduct]);
+
+    const months = useMemo(() => {
+      const s = new Set();
+      audit.forEach(a => { const mk = monthKeyOf(a.at); if (mk) s.add(mk); });
+      if (s.size === 0) { const d = new Date(); s.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); }
+      return [...s].sort().reverse();
+    }, [audit]);
+
+    const getMemberActions = (member) => {
+      const name = (member.name || "").trim().toLowerCase();
+      const email = (member.email || "").trim().toLowerCase();
+      return allActions.filter(r => {
+        const p = r.person.trim().toLowerCase();
+        return p === name || (email && p === email);
+      });
+    };
+
+    const getAssignedCount = (member) => {
+      return assignments.filter(a => a.memberId === member.id && a.division === division).length;
+    };
+
+    const downloadReport = (member, rows) => {
+      const headers = ["Member Name", "SKU", "Product Name", "Stage", "Status", "When"];
+      const data = rows.map(r => [member.name, r.sku || "—", r.productName || "—", r.stage, r.status, fmt(r.at)]);
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
+      ws["!cols"] = headers.map(h => ({ wch: Math.max(14, h.length + 4) }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Activity Log");
+      const monthLabel = selMonth.replace("-", "_");
+      XLSX.writeFile(wb, `${member.name}_${monthLabel}_activity.xlsx`);
+    };
+
+    const statusChipColor = (status) => {
+      if (status === "Completed") return { bg: "var(--sage-bg)", border: "var(--sage)", ink: "var(--sage-ink)" };
+      if (status === "In Progress") return { bg: "var(--sky-bg)", border: "var(--sky)", ink: "var(--sky-ink)" };
+      if (status === "Issue") return { bg: "var(--rose-bg)", border: "var(--rose)", ink: "var(--rose-ink)" };
+      return { bg: "#F0EEE8", border: "var(--line2)", ink: "var(--muted)" };
+    };
+
+    let divMembers = teamMembers.filter(m => m.division === division);
+    if (divMembers.length === 0) {
+      const knownDivisions = new Set(["KOC Cards", "Bombay Cards"]);
+      const orphaned = teamMembers.filter(m => !knownDivisions.has(m.division));
+      if (orphaned.length > 0) divMembers = orphaned;
+    }
+
+    // ---- DEBUG PANEL ---------------------------------------------------
+    // Shows exactly what raw audit data the app received, so you can see
+    // immediately whether the problem is (a) audit array is empty — backend
+    // key mismatch, (b) action names don't match "Stage update"/"Final audit",
+    // or (c) the "at" date field isn't parseable. Remove once it's working.
+    const actionCounts = useMemo(() => {
+      const c = {};
+      audit.forEach(a => { const k = a.action || "(blank)"; c[k] = (c[k] || 0) + 1; });
+      return c;
+    }, [audit]);
+    const sampleRaw = audit.slice(0, 3);
+    // ----------------------------------------------------------------------
+
+    return (
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>Month</label>
+          <select value={selMonth} onChange={e => setSelMonth(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "8px 12px", background: "var(--card)", fontSize: 13 }}>
+            {months.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+          <span style={{ fontSize: 12, color: "var(--muted)" }}>Every action recorded for {selMonth} · {allActions.length} total actions in {division}</span>
+          <button onClick={() => setShowDebug(s => !s)} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: "var(--rose-ink)", border: "1px solid var(--rose)", background: "var(--rose-bg)", borderRadius: 8, padding: "5px 10px" }}>
+            {showDebug ? "Hide" : "Show"} debug info
+          </button>
+        </div>
+
+        {showDebug && (
+          <div className="card pad" style={{ marginBottom: 20, fontSize: 12, lineHeight: 1.7, background: "#FFFBF0", border: "1px solid var(--peach)" }}>
+            <b>Raw audit rows received from backend:</b> {audit.length}<br />
+            <b>Action types found:</b> {Object.keys(actionCounts).length === 0 ? "(none — audit array is empty)" : Object.entries(actionCounts).map(([k, v]) => `${k} (${v})`).join(", ")}<br />
+            <b>Total team members loaded:</b> {teamMembers.length} · <b>for {division}:</b> {divMembers.length}<br />
+            <b>Total assignments loaded:</b> {assignments.length}<br /><br />
+            <b>First 3 raw audit rows (exact shape from backend):</b>
+            <pre style={{ background: "#fff", border: "1px solid var(--line2)", borderRadius: 8, padding: 10, overflowX: "auto", fontSize: 11 }}>{JSON.stringify(sampleRaw, null, 2)}</pre>
+            {audit.length === 0 && <div style={{ color: "var(--rose-ink)", fontWeight: 700 }}>→ The audit array is completely empty. This is a backend/loading issue, not a filtering issue — open the browser console (F12 → Console tab) and look for a line starting "[CardFlow] gsGet() raw keys" to see what key your Apps Script actually returns audit data under (likely not literally "audit").</div>}
+            {audit.length > 0 && allActions.length === 0 && <div style={{ color: "var(--rose-ink)", fontWeight: 700 }}>→ Audit rows exist but none matched this month/division. Check "Action types found" above includes "Stage update" or "Final audit" exactly (case/spacing matters), and that the sample row's "at" field above looks like a real date.</div>}
+          </div>
+        )}
+
+        {divMembers.length === 0
+          ? <div className="card empty">No team members found for {division}. Add members in Assign Work first.</div>
+          : <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))" }}>
+            {divMembers.map(m => {
+              const rows = getMemberActions(m);
+              const assignedCount = getAssignedCount(m);
+              const isOpen = expandedMember === m.id;
+              const statusBreakdown = ["Not Started", "In Progress", "Completed", "Issue"].map(s => ({ name: s, count: rows.filter(r => r.status === s).length })).filter(s => s.count > 0);
+              return (
+                <div key={m.id} className="card pad" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ width: 38, height: 38, borderRadius: 10, background: "linear-gradient(150deg, var(--sage), var(--sage-deep))", display: "grid", placeItems: "center", color: "#fff", fontFamily: "var(--serif)", fontWeight: 600, fontSize: 16, flexShrink: 0 }}>
+                      {m.name[0].toUpperCase()}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>{m.name}</div>
+                      <div style={{ fontSize: 11, color: "var(--muted)" }}>{assignedCount} SKU{assignedCount !== 1 ? "s" : ""} assigned</div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontFamily: "var(--serif)", fontSize: 26, fontWeight: 600, lineHeight: 1, color: rows.length > 0 ? "var(--sage-ink)" : "var(--faint)" }}>{rows.length}</div>
+                      <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".5px" }}>actions</div>
+                    </div>
+                  </div>
+
+                  {statusBreakdown.length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {statusBreakdown.map(s => {
+                        const c = statusChipColor(s.name);
+                        return (
+                          <span key={s.name} style={{ background: c.bg, color: c.ink, border: `1px solid ${c.border}`, borderRadius: 999, padding: "2px 10px", fontSize: 11, fontWeight: 600 }}>
+                            {s.name} · {s.count}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {rows.length > 0 && (
+                    <div style={{ maxHeight: isOpen ? 420 : 170, overflowY: "auto", borderTop: "1px solid var(--line)", paddingTop: 8, transition: "max-height .2s" }}>
+                      {(isOpen ? rows : rows.slice(0, 6)).map((r, i) => {
+                        const c = statusChipColor(r.status);
+                        return (
+                          <div key={r.id + i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
+                            <span className="psku" style={{ flexShrink: 0, fontSize: 10.5 }}>{r.sku || "—"}</span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 11.5, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.stage}</div>
+                              <div style={{ fontSize: 10, color: "var(--faint)" }}>{fmt(r.at)}</div>
+                            </div>
+                            <span style={{ background: c.bg, color: c.ink, border: `1px solid ${c.border}`, borderRadius: 999, padding: "2px 9px", fontSize: 10.5, fontWeight: 600, flexShrink: 0, whiteSpace: "nowrap" }}>{r.status}</span>
+                          </div>
+                        );
+                      })}
+                      {!isOpen && rows.length > 6 && (
+                        <button onClick={() => setExpandedMember(m.id)} style={{ fontSize: 11, color: "var(--sage-ink)", fontWeight: 600, paddingTop: 6 }}>
+                          +{rows.length - 6} more — view all
+                        </button>
+                      )}
+                      {isOpen && rows.length > 6 && (
+                        <button onClick={() => setExpandedMember(null)} style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600, paddingTop: 6 }}>
+                          Show less
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {rows.length === 0 && (
+                    <div style={{ fontSize: 12, color: "var(--faint)", textAlign: "center", padding: "10px 0" }}>No recorded actions this month</div>
+                  )}
+
+                  <button
+                    onClick={() => downloadReport(m, rows)}
+                    disabled={rows.length === 0}
+                    className="ghost"
+                    style={{ width: "100%", justifyContent: "center", fontSize: 12, opacity: rows.length === 0 ? 0.4 : 1 }}>
+                    {I.upload({ width: 14, height: 14 })} Download full activity · {selMonth}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        }
+      </div>
+    );
+  }
 
   ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 </script>
