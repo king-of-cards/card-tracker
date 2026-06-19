@@ -1478,8 +1478,8 @@
   function normStatus(v) { const m = { "not started": "Not Started", "notstarted": "Not Started", "in progress": "In Progress", "inprogress": "In Progress", "progress": "In Progress", "wip": "In Progress", "pending": "In Progress", "completed": "Completed", "complete": "Completed", "done": "Completed", "approved": "Completed", "issue": "Issue", "issues": "Issue", "error": "Issue" }; return m[String(v).trim().toLowerCase()] || null; }
   function normBool(v) { return /^(y|yes|true|1|received|recd|done|✓|x)$/i.test(String(v).trim()); }
   function normDate(v) { if (v instanceof Date && !isNaN(v)) return v.toISOString().slice(0, 10); if (typeof v === "number") { const d = new Date(Date.UTC(1899, 11, 30) + v * 86400000); return d.toISOString().slice(0, 10); } return String(v).trim(); }
-  function fieldFromProduct(p, h) { if (["division", "sku", "name", "vendor", "inward", "qty", "note"].includes(h)) return p[h] ?? ""; if (h === "qc_verdict") return p.verdict || ""; if (h === "qc_issues") return p.issues || ""; const mm = h.match(/^(.+)_(status|person|comments)$/); if (mm && p.stages[mm[1]]) return p.stages[mm[1]][mm[2]] || ""; return ""; }
-  const PROD_HEADERS = (() => { const h = ["division", "sku", "name", "vendor", "inward", "qty", "note"]; STAGE_COLS.forEach(s => h.push(s.k + "_status", s.k + "_person", s.k + "_comments")); h.push("qc_verdict", "qc_issues"); return h; })();
+  function fieldFromProduct(p, h) { if (["division", "sku", "name", "vendor", "inward", "qty", "note", "set_no"].includes(h)) return p[h] ?? ""; if (h === "qc_verdict") return p.verdict || ""; if (h === "qc_issues") return p.issues || ""; const mm = h.match(/^(.+)_(status|person|comments)$/); if (mm && p.stages[mm[1]]) return p.stages[mm[1]][mm[2]] || ""; return ""; }
+  const PROD_HEADERS = (() => { const h = ["division", "sku", "name", "vendor", "inward", "qty", "note", "set_no"]; STAGE_COLS.forEach(s => h.push(s.k + "_status", s.k + "_person", s.k + "_comments")); h.push("qc_verdict", "qc_issues"); return h; })();
   const STORE_HEADERS = ["division", "sku", "store", "dispatched", "received", "missing", "damaged", "notes"];
   function ensureStages(p) {
     if (!p.stages) p.stages = {};
@@ -1741,6 +1741,7 @@
         if (g("inward")) prod.inward = normDate(row.inward);
         if (g("qty") && !isNaN(+row.qty)) prod.qty = +row.qty;
         if (g("note")) prod.note = String(row.note).trim();
+        if (g("set_no")) prod.set_no = String(row.set_no).trim();
         STAGE_COLS.forEach(s => {
           const k = s.k; let t = false; const cur = { ...prod.stages[k] }; const st = row[k + "_status"], pe = row[k + "_person"], co = row[k + "_comments"];
           if (st !== "" && st != null) { const ns = normStatus(st); if (ns) { cur.status = ns; t = true; } else errs.push(`Row ${i + 2}: invalid status "${st}" in ${k}_status`); }
@@ -2001,44 +2002,103 @@
 
   /* ---------------- PRODUCTS ---------------- */
   function Products({ division, products, vendors, onUpsert, onStage, onQC, onRemove, addVendor, allowedStages }) {
-    const [q, setQ] = useState(""); const [open, setOpen] = useState({}); const [modal, setModal] = useState(false);
-    const [fVendor, setFVendor] = useState("All"); const [fState, setFState] = useState("All");
+    const [q, setQ] = useState(""); const [open, setOpen] = useState({}); const [modal, setModal] = useState(false); const [showSug, setShowSug] = useState(false); const [page, setPage] = useState(1);
+
+    const [selected, setSelected] = useState({}); const [bulkStage, setBulkStage] = useState(""); const [bulkStatus, setBulkStatus] = useState("Completed");
     const isFullAccess = allowedStages === null;
+    const selectedIds = Object.keys(selected).filter(id => selected[id]);
+    const toggleSelect = (id) => setSelected(s => ({ ...s, [id]: !s[id] }));
+    const clearSelect = () => setSelected({});
+    const applyBulk = async () => {
+      if (!bulkStage || selectedIds.length === 0) return;
+      for (const id of selectedIds) { await onStage(id, bulkStage, { status: bulkStatus }); }
+      clearSelect();
+    };
     useEffect(() => { window.__openAdd = () => { if (isFullAccess) setModal(true); }; return () => { delete window.__openAdd; }; }, [isFullAccess]);
-    const stateLabel = { All: "All", done: "Listing complete", prog: "In production", none: "Not started", issue: "With issues" };
+    //const stateLabel = { All: "All", done: "Listing complete", prog: "In production", none: "Not started", issue: "With issues" };
     const filtered = products.filter(p => {
       const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase(); if (!t.includes(q.toLowerCase())) return false;
-      if (fVendor !== "All" && p.vendor !== fVendor) return false; if (fState !== "All" && productState(p) !== fState) return false; return true;
+      return true;
     });
+    const totalPages = Math.max(1, Math.ceil(filtered.length / 20));
     return (
       <div>
         <div className="toolbar">
-          <div className="search">{I.search({})}<input placeholder="Search SKU, product or vendor…" value={q} onChange={e => setQ(e.target.value)} /></div>
-          <select className="filt" value={fVendor} onChange={e => setFVendor(e.target.value)}><option>All</option>{vendors.map(v => <option key={v}>{v}</option>)}</select>
-          <select className="filt" value={fState} onChange={e => setFState(e.target.value)}>{Object.keys(stateLabel).map(k => <option key={k} value={k}>{stateLabel[k]}</option>)}</select>
-          {isFullAccess && <button className="primary" onClick={() => setModal(true)}>{I.plus({})} Add product</button>}
-        </div>
-        {filtered.length === 0 ? <div className="card empty">No products match. Add your first SKU to start tracking its full pipeline.</div> :
-          <div className="plist">{filtered.slice(0, 40).map(p => <ProductRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))} onStage={onStage} onQC={onQC} onRemove={onRemove} allowedStages={allowedStages} />)}
-            {filtered.length > 40 && <div className="note" style={{ marginTop: 8 }}>Showing first 40 of {filtered.length} — use search/filter to narrow down.</div>}
+          <div className="search" style={{ position: "relative" }}>
+            {I.search({})}
+            <input placeholder="Search SKU, product or vendor…" value={q}
+              onChange={e => { setQ(e.target.value); setShowSug(true); setPage(1); }}
+              onBlur={() => setTimeout(() => setShowSug(false), 150)}
+              onFocus={() => { if (q) setShowSug(true); }} />
+            {showSug && q.length > 0 && (() => {
+              const sugs = products.filter(p => (p.sku + " " + p.name + " " + p.vendor).toLowerCase().includes(q.toLowerCase())).slice(0, 8);
+              return sugs.length > 0 ? (
+                <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 12, boxShadow: "var(--shadow-lg)", zIndex: 50, overflow: "hidden" }}>
+                  {sugs.map(p => (
+                    <div key={p.id} onMouseDown={() => { setQ(p.sku); setShowSug(false); }}
+                      style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", cursor: "pointer", borderBottom: "1px solid var(--line)" }}
+                      onMouseEnter={e => e.currentTarget.style.background = "var(--card-2)"}
+                      onMouseLeave={e => e.currentTarget.style.background = "var(--card)"}>
+                      <span className="psku" style={{ flexShrink: 0 }}>{p.sku}</span>
+                      {p.name && <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>{p.name}</span>}
+                      {p.vendor && <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: "auto" }}>{p.vendor}</span>}
+                      {p.set_no && <span className="psku" style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)", flexShrink: 0 }}>{p.set_no}</span>}
+                    </div>
+                  ))}
+                </div>
+              ) : null;
+            })()}
           </div>
-        }
+        </div>
+        {selectedIds.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, background: "var(--sky-bg)", border: "1px solid var(--sky)", borderRadius: 12, padding: "10px 14px", marginBottom: 12, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--sky-ink)" }}>{selectedIds.length} selected</span>
+            <button className="ghost" style={{ padding: "7px 12px", fontSize: 12 }} onClick={() => { const allIds = {}; filtered.slice((page - 1) * 20, page * 20).forEach(p => allIds[p.id] = true); setSelected(allIds); }}>Select page</button>
+            <button className="ghost" style={{ padding: "7px 12px", fontSize: 12 }} onClick={() => { const allIds = {}; filtered.forEach(p => allIds[p.id] = true); setSelected(allIds); }}>Select all ({filtered.length})</button>
+            <select value={bulkStage} onChange={e => setBulkStage(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 12 }}>
+              <option value="">— pick stage —</option>
+              {(allowedStages ? STAGES.filter(s => allowedStages.includes(s.k)) : STAGES).filter(s => s.k !== "qc").map(s => <option key={s.k} value={s.k}>{s.n}</option>)}
+            </select>
+            <select value={bulkStatus} onChange={e => setBulkStatus(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 12 }}>
+              {STATUSES.map(s => <option key={s}>{s}</option>)}
+            </select>
+            <button className="primary" onClick={applyBulk} disabled={!bulkStage} style={{ padding: "7px 14px", fontSize: 12 }}>Apply to all</button>
+            <button className="ghost" onClick={clearSelect} style={{ padding: "7px 12px", fontSize: 12 }}>Clear</button>
+          </div>
+        )}
+        {filtered.length === 0 ? <div className="card empty">No products match. Add your first SKU to start tracking its full pipeline.</div> : (
+          <div>
+            <div className="plist">{filtered.slice((page - 1) * 20, page * 20).map(p => <ProductRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))} onStage={onStage} onQC={onQC} onRemove={onRemove} allowedStages={allowedStages} selected={!!selected[p.id]} onSelect={() => toggleSelect(p.id)} />)}</div>
+            {totalPages > 1 && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 16, flexWrap: "wrap" }}>
+                <button className="ghost" style={{ padding: "7px 12px", fontSize: 12 }} disabled={page === 1} onClick={() => setPage(1)}>«</button>
+                <button className="ghost" style={{ padding: "7px 12px", fontSize: 12 }} disabled={page === 1} onClick={() => setPage(p => p - 1)}>‹ Prev</button>
+                {Array.from({ length: totalPages }, (_, i) => i + 1).filter(n => n === 1 || n === totalPages || Math.abs(n - page) <= 2).reduce((acc, n, i, arr) => { if (i > 0 && n - arr[i - 1] > 1) acc.push("..."); acc.push(n); return acc; }, []).map((n, i) => n === "..." ? (<span key={"e" + i} style={{ padding: "0 4px", color: "var(--faint)" }}>…</span>) : (<button key={n} onClick={() => setPage(n)} style={{ padding: "7px 12px", fontSize: 12, borderRadius: 10, border: "1px solid var(--line2)", background: page === n ? "var(--ink)" : "var(--card)", color: page === n ? "#fff" : "var(--ink)", fontWeight: 600, cursor: "pointer" }}>{n}</button>))}
+                <button className="ghost" style={{ padding: "7px 12px", fontSize: 12 }} disabled={page === totalPages} onClick={() => setPage(p => p + 1)}>Next ›</button>
+                <button className="ghost" style={{ padding: "7px 12px", fontSize: 12 }} disabled={page === totalPages} onClick={() => setPage(totalPages)}>»</button>
+                <span style={{ fontSize: 12, color: "var(--muted)", marginLeft: 4 }}>{(page - 1) * 20 + 1}–{Math.min(page * 20, filtered.length)} of {filtered.length}</span>
+              </div>
+            )}
+          </div>
+        )}
         {modal && isFullAccess && <AddModal division={division} vendors={vendors} addVendor={addVendor} onClose={() => setModal(false)} onSave={p => { onUpsert(p, true); setModal(false); }} />}
       </div>
     );
   }
-  function ProductRow({ p, open, toggle, onStage, onQC, onRemove, allowedStages }) {
+  function ProductRow({ p, open, toggle, onStage, onQC, onRemove, allowedStages, selected, onSelect }) {
     const pct = productPct(p); const hasIssue = STAGES.some(s => p.stages[s.k].status === "Issue");
     const isFullAccess = allowedStages === null;
     // Filter stages visible to this user
     const visibleStages = allowedStages ? STAGES.filter(s => allowedStages.includes(s.k)) : STAGES;
     return (
       <div className="prow">
-        <div className="phead" onClick={toggle}>
-          <span className={"chev " + (open ? "open" : "")}>▶</span>
-          <span className="psku">{p.sku || "no-sku"}</span>
-          <span className="pname">{p.name || "(unnamed)"}</span>
+        <div className="phead" style={{ background: selected ? "var(--sky-bg)" : "" }}>
+          <input type="checkbox" checked={selected} onChange={e => { e.stopPropagation(); onSelect(); }} onClick={e => e.stopPropagation()} style={{ width: 15, height: 15, accentColor: "var(--sky-ink)", cursor: "pointer", flexShrink: 0 }} />
+          <span className={"chev " + (open ? "open" : "")} onClick={toggle}>▶</span>
+          <span className="psku" onClick={toggle} style={{ cursor: "pointer" }}>{p.sku || "no-sku"}</span>
+          {p.name && <span className="pname">{p.name}</span>}
           <span className="pvend">· {p.vendor || "—"} · {p.qty || 0} cards</span>
+          {p.set_no && <span className="psku" style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)" }}>{p.set_no}</span>}
           <div className="spacer" />
           {hasIssue && <Chip status="Issue" />}
           {p.verdict === "Approved" && <span className="chip c-done"><span className="dot" />QC Approved</span>}
@@ -2180,7 +2240,7 @@
       <div className="prow">
         <div className="phead" onClick={toggle}>
           <span className={"chev " + (open ? "open" : "")}>▶</span>
-          <span className="psku">{p.sku || "no-sku"}</span><span className="pname">{p.name || "(unnamed)"}</span><span className="pvend">· {p.vendor || "—"}</span>
+          <span className="psku">{p.sku || "no-sku"}</span>{p.name && <span className="pname">{p.name}</span>}<span className="pvend">· {p.vendor || "—"}</span>
           <div className="spacer" />
           {scan.status === "Completed" ? <span className="chip c-done"><span className="dot" />Scanned</span> : <span className="chip c-app"><span className="dot" />Not scanned</span>}
           {issueCount > 0 && <span className="chip c-issue"><span className="dot" />{issueCount} store issue</span>}
