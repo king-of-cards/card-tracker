@@ -1411,15 +1411,18 @@
     const role = auth.role || "";
     // master and admin see everything
     if (role === "master" || role === "admin") return true;
-    // assign tab only for master/admin
-    if (tabKey === "assign") return false;
+    // assign tab — master/admin always, or member with "assign" in their stages
+    if (tabKey === "assign") {
+      const stages = (auth.stages || "").split(",").map(s => s.trim());
+      return stages.includes("assign");
+    }
     // bulk tab — only if member has "bulk" in their stages
     if (tabKey === "bulk") {
       const stages = (auth.stages || "").split(",").map(s => s.trim());
       return stages.includes("bulk");
     }
     // members only see overview and products
-    return ["overview", "products", "process"].includes(tabKey);
+    return ["overview", "products"].includes(tabKey);
   }
 
   function getAllowedStages(auth) {
@@ -1659,6 +1662,7 @@
               role: u.role || "member",
               stages: u.stages || saved?.stages || "",
               division: saved?.division || u.division || "KOC Cards",
+              managerId: saved?.managerId || u.managerId || null,
               joinedAt: saved?.joinedAt || u.joinedAt || ""
             };
           });
@@ -1882,12 +1886,12 @@
             </div>
           </header>
           <div className="content">
-            {tab === "overview" && <Overview division={division} products={divProducts} issues={openIssues} audit={audit.filter(a => a.division === division)} go={setTab} vendors={vendors[division] || []} />}
+            {tab === "overview" && <Overview division={division} products={divProducts} issues={openIssues} audit={audit.filter(a => a.division === division)} go={setTab} vendors={vendors[division] || []} allowedStages={allowedStages} />}
             {tab === "products" && <Products division={division} products={divProducts} vendors={vendors[division] || []} onUpsert={upsertProduct} onStage={patchStage} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} allowedStages={allowedStages} />}
             {tab === "dispatch" && <Dispatch products={divProducts} onStore={patchStore} onStage={patchStage} operator={operator} />}
             {tab === "bulk" && <Bulk division={division} products={products} divProducts={divProducts} bulkProducts={bulkProducts} bulkStores={bulkStores} />}
             {tab === "audit" && <AuditLog audit={audit.filter(a => a.division === division)} products={products} onStage={patchStage} />}
-            {tab === "assign" && canAssign(auth) && <AssignWork division={division} products={divProducts} allProducts={products} teamMembers={teamMembers} assignments={assignments} onSaveTeam={saveTeamMembers} onSaveAssignments={saveAssignments} auth={auth} vendors={vendors[division] || []} />}
+            {tab === "assign" && (canAssign(auth) || (auth.stages || "").split(",").map(s => s.trim()).includes("assign")) && <AssignWork division={division} products={divProducts} allProducts={products} teamMembers={teamMembers} assignments={assignments} onSaveTeam={saveTeamMembers} onSaveAssignments={saveAssignments} auth={auth} vendors={vendors[division] || []} />}
             {tab === "process" && <Process division={division} products={products} teamMembers={teamMembers} assignments={assignments} audit={audit} />}
           </div>
         </main>
@@ -1896,7 +1900,7 @@
   }
 
   /* ---------------- OVERVIEW ---------------- */
-  function Overview({ division, products, issues, audit, go, vendors = [] }) {
+  function Overview({ division, products, issues, audit, go, vendors = [], allowedStages = null }) {
     const [fVendor, setFVendor] = useState("");
     const [fSetNo, setFSetNo] = useState("");
     const vendorOptions = (vendors || []).map(v => v.trim()).filter(Boolean);
@@ -1914,7 +1918,8 @@
     const withIssue = filteredProducts.filter(p => productState(p) === "issue").length;
     let dispatched = 0, received = 0, missing = 0, damaged = 0;
     filteredProducts.forEach(p => STORES.forEach(st => { const s = p.stores[st]; dispatched += s.dispatched || 0; if (s.received) received++; missing += s.missing || 0; damaged += s.damaged || 0; }));
-    const stageStats = STAGES.map(s => ({ ...s, done: filteredProducts.filter(p => p.stages[s.k].status === "Completed").length, issue: filteredProducts.filter(p => p.stages[s.k].status === "Issue").length }));
+    const visibleStages = allowedStages ? STAGES.filter(s => allowedStages.includes(s.k)) : STAGES;
+    const stageStats = visibleStages.map(s => ({ ...s, done: filteredProducts.filter(p => p.stages[s.k].status === "Completed").length, issue: filteredProducts.filter(p => p.stages[s.k].status === "Issue").length }));
     const storeStats = STORES.map(st => { let d = 0, r = 0, m = 0, dm = 0, pending = 0; filteredProducts.forEach(p => { const s = p.stores[st]; d += s.dispatched || 0; if (s.received) r++; else if (s.dispatched > 0) pending++; m += s.missing || 0; dm += s.damaged || 0; }); return { st, d, r, m, dm, pending }; });
     const segs = [{ label: "Listing complete", value: done, color: "var(--sage)" }, { label: "In production", value: prog, color: "var(--sky)" }, { label: "Not started", value: none, color: "var(--line2)" }, { label: "With issues", value: withIssue, color: "var(--rose)" }];
 
@@ -2663,11 +2668,17 @@
     const [assMsg, setAssMsg] = useState("");
 
     const isMasterOrAdmin = auth.role === "master" || auth.role === "admin";
+    const myMemberId = useMemo(() => {
+      const me = teamMembers.find(m => m.email && auth.email && m.email.toLowerCase() === auth.email.toLowerCase());
+      return me?.id || null;
+    }, [teamMembers, auth.email]);
+    const canManageMembers = isMasterOrAdmin || (auth.stages || "").split(",").map(s => s.trim()).includes("assign");
     const divMembers = isMasterOrAdmin
       ? teamMembers
-      : teamMembers.filter(m => m.division === division);
+      : teamMembers.filter(m => m.division === division && m.managerId === myMemberId);
     const divAssignments = assignments.filter(a => a.division === division);
-    const filteredProducts = useMemo(() => products.filter(p => !selVendor || p.vendor === selVendor), [products, selVendor]);
+    const divAllProducts = useMemo(() => allProducts.filter(p => p.division === division), [allProducts, division]);
+    const filteredProducts = useMemo(() => divAllProducts.filter(p => !selVendor || p.vendor === selVendor), [divAllProducts, selVendor]);
 
     const availableSkus = useMemo(() => {
       return filteredProducts
@@ -2739,6 +2750,7 @@
         role: "member",
         stages,
         division,
+        managerId: isMasterOrAdmin ? null : myMemberId,
         joinedAt: now()
       };
       const updatedTeam = [...teamMembers, m];
@@ -2816,17 +2828,17 @@
 
     const [selectedStages, setSelectedStages] = useState([]);
     const allStages = STAGES.filter(s => s.k !== "qc" && s.k !== "scan");
-    const allPermissions = [...allStages, { k: "bulk", n: "Bulk Upload" }];
+    const allPermissions = [...allStages, { k: "bulk", n: "Bulk Upload ⚡" }, { k: "assign", n: "Assign Work 🔑" }];
 
     return (
       <div>
         <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-          {[["members", "Team Members"], ["assignments", "SKU Assignments"]].map(([k, n]) => (
+          {(canManageMembers ? [["members", "Team Members"], ["assignments", "SKU Assignments"]] : [["assignments", "SKU Assignments"]]).map(([k, n]) => (
             <button key={k} onClick={() => setSubTab(k)} style={{ padding: "8px 18px", borderRadius: 10, border: "1px solid var(--line2)", background: subTab === k ? "var(--ink)" : "var(--card)", color: subTab === k ? "#fff" : "var(--ink)", fontWeight: 600, fontSize: 13 }}>{n}</button>
           ))}
         </div>
 
-        {subTab === "members" && (
+        {subTab === "members" && canManageMembers && (
           <div>
             <div className="card pad" style={{ marginBottom: 16 }}>
               <h3 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 600 }}>Add team member — {division}</h3>
@@ -2838,10 +2850,10 @@
                   Stages this member can access
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
                     {allPermissions.map(s => (
-                      <label key={s.k} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500, color: "var(--ink)", background: selectedStages.includes(s.k) ? (s.k === "bulk" ? "var(--peach-bg)" : "var(--sage-bg)") : "var(--card)", border: `1px solid ${selectedStages.includes(s.k) ? (s.k === "bulk" ? "var(--peach)" : "var(--sage)") : "var(--line2)"}`, borderRadius: 8, padding: "5px 10px", cursor: "pointer", textTransform: "none", letterSpacing: 0 }}>
+                      <label key={s.k} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500, color: "var(--ink)", background: selectedStages.includes(s.k) ? (s.k === "bulk" ? "var(--peach-bg)" : s.k === "assign" ? "var(--lav-bg)" : "var(--sage-bg)") : "var(--card)", border: `1px solid ${selectedStages.includes(s.k) ? (s.k === "bulk" ? "var(--peach)" : s.k === "assign" ? "var(--lav)" : "var(--sage)") : "var(--line2)"}`, borderRadius: 8, padding: "5px 10px", cursor: "pointer", textTransform: "none", letterSpacing: 0 }}>
                         <input type="checkbox" checked={selectedStages.includes(s.k)} style={{ width: 13, height: 13, accentColor: s.k === "bulk" ? "var(--peach-ink)" : "var(--sage-deep)" }}
                           onChange={e => setSelectedStages(prev => e.target.checked ? [...prev, s.k] : prev.filter(k => k !== s.k))} />
-                        {s.n}{s.k === "bulk" ? " ⚡" : ""}
+                        {s.n}
                       </label>
                     ))}
                   </div>
@@ -3006,7 +3018,7 @@
                             <thead><tr><th>SKU</th><th>Product name</th><th>Vendor</th><th>Pipeline</th><th>Assigned</th><th></th></tr></thead>
                             <tbody>
                               {myAss.map(a => {
-                                const prod = products.find(p => p.sku === a.sku);
+                                const prod = divAllProducts.find(p => p.sku === a.sku);
                                 return (
                                   <tr key={a.id}>
                                     <td><span className="psku">{a.sku}</span></td>
