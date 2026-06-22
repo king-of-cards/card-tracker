@@ -1608,6 +1608,8 @@
     const [tab, setTab] = useState("overview");
     const [operator, setOperator] = useState("");
     const [products, setProducts] = useState([]);
+    const productsRef = useRef([]);
+    useEffect(() => { productsRef.current = products; }, [products]);
     const [audit, setAudit] = useState([]);
     const [vendors, setVendors] = useState(DEFAULT_VENDORS);
     const [teamMembers, setTeamMembers] = useState([]);
@@ -1625,7 +1627,9 @@
       setAuth(a);
       localStorage.setItem("ct:auth", JSON.stringify(a));
       sessionStorage.setItem("ct:auth", JSON.stringify(a));
-      if (!operator) { setOperator(user.name); localStorage.setItem("ct:operator", user.name); }
+      // Always stamp the operator name to whoever just logged in — never leave it
+      // pointing at a stale name from a previous session on this browser/device.
+      setOperator(user.name);
     };
     const handleLogout = () => {
       setAuth(null);
@@ -1635,9 +1639,27 @@
     };
 
     const load = useCallback(async () => {
+      // Operator always mirrors the signed-in user — never a stale typed name
+      // from a previous session or a different person on this device.
+      if (auth && auth.name) setOperator(auth.name);
       const [data, sheetUsers] = await Promise.all([gsGet(), gsGetUsers()]);
       if (data) {
-        setProducts((data.products || []).map(ensureStages));
+        const PROTECT_MS = 15000; // ignore a synced stage value for 15s after our own write
+        const incoming = (data.products || []).map(ensureStages);
+        const reconciled = incoming.map(incomingP => {
+          const localP = productsRef.current.find(p => p.id === incomingP.id);
+          if (!localP) return incomingP;
+          const mergedStages = { ...incomingP.stages };
+          Object.keys(mergedStages).forEach(stageKey => {
+            const stamp = recentStagePatchRef.current[incomingP.id + "|" + stageKey];
+            if (stamp && Date.now() - stamp < PROTECT_MS) {
+              // Trust our own very-recent local write over this sync's value.
+              mergedStages[stageKey] = localP.stages[stageKey];
+            }
+          });
+          return { ...incomingP, stages: mergedStages };
+        });
+        setProducts(reconciled);
         setAudit((data.audit || []).map(normalizeAuditRow));
         setVendors(data.vendors || DEFAULT_VENDORS);
         setAssignments(data.assignments || []);
@@ -1670,10 +1692,8 @@
         window.__teamMembers = fromSheet;
         setTeamMembers(fromSheet);
       }
-      const op = localStorage.getItem("ct:operator");
-      if (op) setOperator(op);
       setLoading(false);
-    }, []);
+    }, [auth]);
     useEffect(() => { load(); }, [load]);
 
     const logAudit = useCallback(async (action, entity, detail) => {
@@ -1681,7 +1701,16 @@
       setAudit(prev => { const next = [e, ...prev].slice(0, 800); return next; });
       await gsPost("appendAudit", e);
     }, [operator, division]);
+
+    const bulkLockRef = useRef(false);
+    const recentStagePatchRef = useRef({}); // pid+stageKey -> timestamp(ms) of our own last write
+
     const saveProducts = useCallback(async (next) => {
+      if (bulkLockRef.current) {
+        console.warn("Skipped saveProducts — bulk stage update in progress");
+        return;
+      }
+      productsRef.current = next;
       setProducts(next);
       await gsPost("batchUpsertProducts", next);
     }, []);
@@ -1691,17 +1720,74 @@
       const next = isNew ? [prod, ...products] : products.map(x => x.id === prod.id ? prod : x); await saveProducts(next);
       logAudit(isNew ? "Added product" : "Edited product", prod.sku || prod.name || "product", `${prod.name || "(unnamed)"} · ${prod.vendor || "no vendor"} · qty ${prod.qty}`);
     }, [products, saveProducts, logAudit]);
+
     const patchStage = useCallback(async (pid, stageKey, patch) => {
-      const next = products.map(p => p.id !== pid ? p : { ...p, stages: { ...p.stages, [stageKey]: { ...p.stages[stageKey], ...patch, at: now() } }, updatedAt: now() });
-      await saveProducts(next); const p = next.find(x => x.id === pid), sn = STAGES.find(s => s.k === stageKey).n;
+      if (bulkLockRef.current) {
+        console.warn("Skipped single-stage patch — bulk update in progress");
+        return;
+      }
+      const nowIso = now();
+      const base = productsRef.current;
+      const next = base.map(p => p.id !== pid ? p : { ...p, stages: { ...p.stages, [stageKey]: { ...p.stages[stageKey], ...patch, at: nowIso } }, updatedAt: nowIso });
+      productsRef.current = next;
+      setProducts(next);
+
+      // Targeted single-row patch — touches only this product's stage cells on the
+      // backend, so a stale client elsewhere can never overwrite this fresh save.
+      const res = await gsPost("batchPatchStage", { ids: [pid], stageKey, patch });
+      if (!res || res.ok === false) {
+        throw new Error("batchPatchStage failed: " + JSON.stringify(res));
+      }
+
+      // Remember that WE just wrote this stage, so a sync that lands shortly after
+      // (and might still carry a stale read from before our write committed) doesn't
+      // overwrite it back. See load()'s merge logic below.
+      recentStagePatchRef.current[pid + "|" + stageKey] = Date.now();
+
+      const p = next.find(x => x.id === pid), sn = STAGES.find(s => s.k === stageKey).n;
       logAudit("Stage update", `${p.name || p.sku || "product"}`, `${sn} → ${patch.status || p.stages[stageKey].status}${patch.person ? (" · " + patch.person) : ""}`);
-    }, [products, saveProducts, logAudit]);
+    }, [logAudit]);
+    const patchStageBulk = useCallback(async (ids, stageKey, patch) => {
+      bulkLockRef.current = true;
+      try {
+        const nowIso = now();
+        const idSet = new Set(ids);
+        const base = productsRef.current;
+        const next = base.map(p => !idSet.has(p.id) ? p : { ...p, stages: { ...p.stages, [stageKey]: { ...p.stages[stageKey], ...patch, at: nowIso } }, updatedAt: nowIso });
+        productsRef.current = next;
+        setProducts(next);
+
+        // Send only the ids + the single stage patch — not the whole product list —
+        // so the backend does one targeted read+write instead of re-serializing everything.
+        const res = await gsPost("batchPatchStage", { ids, stageKey, patch });
+        if (!res || res.ok === false) {
+          throw new Error("batchPatchStage failed: " + JSON.stringify(res));
+        }
+
+        const stamp = Date.now();
+        ids.forEach(id => { recentStagePatchRef.current[id + "|" + stageKey] = stamp; });
+
+        const sn = STAGES.find(s => s.k === stageKey).n;
+        logAudit("Bulk stage update", `${ids.length} products`, `${sn} → ${patch.status} (multi-select)`);
+      } finally {
+        bulkLockRef.current = false;
+      }
+    }, [logAudit]);
     const patchQC = useCallback(async (pid, patch) => {
-      const next = products.map(p => p.id === pid ? { ...p, ...patch, updatedAt: now() } : p); await saveProducts(next);
+      const base = productsRef.current;
+      const next = base.map(p => p.id === pid ? { ...p, ...patch, updatedAt: now() } : p);
+      productsRef.current = next;
+      await saveProducts(next);
       const p = next.find(x => x.id === pid); logAudit("Final audit", `${p.name || p.sku || "product"}`, `Verdict: ${patch.verdict || p.verdict || "—"}`);
-    }, [products, saveProducts, logAudit]);
+    }, [saveProducts, logAudit]);
     const patchStore = useCallback(async (pid, store, patch) => {
-      const next = products.map(p => p.id !== pid ? p : { ...p, stores: { ...p.stores, [store]: { ...p.stores[store], ...patch, at: now() } }, updatedAt: now() });
+      if (bulkLockRef.current) {
+        console.warn("Skipped patchStore — bulk stage update in progress");
+        return;
+      }
+      const base = productsRef.current;
+      const next = base.map(p => p.id !== pid ? p : { ...p, stores: { ...p.stores, [store]: { ...p.stores[store], ...patch, at: now() } }, updatedAt: now() });
+      productsRef.current = next;
       await saveProducts(next);
       const updated = next.find(x => x.id === pid);
       await gsPost("upsertStore", {
@@ -1714,7 +1800,7 @@
       const p = updated, s = p.stores[store];
       let d = `${store}: disp ${s.dispatched}, recv ${s.received ? "yes" : "no"}`; if (s.missing > 0 || s.damaged > 0) d += ` · ⚠ missing ${s.missing}, damaged ${s.damaged}`;
       logAudit((s.missing > 0 || s.damaged > 0) ? "Issue reported" : "Store update", `${p.name || p.sku || "product"}`, d);
-    }, [products, saveProducts, logAudit]);
+    }, [saveProducts, logAudit]);
     const removeProduct = useCallback(async (pid) => {
       const p = products.find(x => x.id === pid);
       const filtered = products.filter(x => x.id !== pid);
@@ -1863,7 +1949,9 @@
             </div>
             <div className="opwrap">
               <label>Operator name</label>
-              <input value={operator} placeholder="your name" onChange={e => saveOperator(e.target.value)} />
+              <div style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "8px 10px", background: "var(--card-2)", color: "var(--ink)", fontWeight: 600 }}>
+                {operator || auth.name}
+              </div>
             </div>
             <button className="syncbtn" onClick={load}>{I.sync({})} Sync workspace</button>
             <div className="shared">Shared workspace · everyone sees<br />the same live data</div>
@@ -1887,7 +1975,7 @@
           </header>
           <div className="content">
             {tab === "overview" && <Overview division={division} products={divProducts} issues={openIssues} audit={audit.filter(a => a.division === division)} go={setTab} vendors={vendors[division] || []} allowedStages={allowedStages} />}
-            {tab === "products" && <Products division={division} products={divProducts} vendors={vendors[division] || []} onUpsert={upsertProduct} onStage={patchStage} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} allowedStages={allowedStages} />}
+            {tab === "products" && <Products division={division} products={divProducts} vendors={vendors[division] || []} onUpsert={upsertProduct} onStage={patchStage} onStageBulk={patchStageBulk} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} allowedStages={allowedStages} operator={operator} />}
             {tab === "dispatch" && <Dispatch products={divProducts} onStore={patchStore} onStage={patchStage} operator={operator} />}
             {tab === "bulk" && <Bulk division={division} products={products} divProducts={divProducts} bulkProducts={bulkProducts} bulkStores={bulkStores} />}
             {tab === "audit" && <AuditLog audit={audit.filter(a => a.division === division)} products={products} onStage={patchStage} />}
@@ -1928,7 +2016,7 @@
       { lab: "Listing complete", val: done, sub: "all stages done", ic: I.check, color: "var(--sage-ink)" },
       { lab: "In production", val: prog, sub: `${none} not started`, ic: I.gear, color: "var(--sky-ink)" },
       { lab: "Cards dispatched", val: dispatched, sub: `${received} receipts confirmed`, ic: I.truck },
-      { lab: "Open missing / damaged", val: `${missing} / ${damaged}`, sub: `${issues.length} flagged rows`, ic: I.alert, color: (missing + damaged) ? "var(--rose-ink)" : "var(--ink)" },
+      { lab: "Issues", val: `${missing} / ${damaged}`, sub: `${issues.length} flagged rows`, ic: I.alert, color: (missing + damaged) ? "var(--rose-ink)" : "var(--ink)" },
     ];
 
     return (
@@ -2047,21 +2135,140 @@
   }
 
   /* ---------------- PRODUCTS ---------------- */
-  function Products({ division, products, vendors, onUpsert, onStage, onQC, onRemove, addVendor, allowedStages }) {
+  // function Products({ division, products, vendors, onUpsert, onStage, onStageBulk, onQC, onRemove, addVendor, allowedStages }) {
+  //   const [q, setQ] = useState(""); const [open, setOpen] = useState({}); const [modal, setModal] = useState(false); const [showSug, setShowSug] = useState(false); const [page, setPage] = useState(1);
+
+  //   const [selected, setSelected] = useState({}); const [bulkStage, setBulkStage] = useState(""); const [bulkStatus, setBulkStatus] = useState("Completed");
+  //   const isFullAccess = allowedStages === null;
+  //   const selectedIds = Object.keys(selected).filter(id => selected[id]);
+  //   const toggleSelect = (id) => setSelected(s => ({ ...s, [id]: !s[id] }));
+  //   const clearSelect = () => setSelected({});
+  //   const [bulkErr, setBulkErr] = useState("");
+  //   const applyBulk = async () => {
+  //     if (!bulkStage || selectedIds.length === 0) return;
+  //     setBulkBusy(true);
+  //     setBulkErr("");
+  //     try {
+  //       if (onStageBulk) {
+  //         await onStageBulk(selectedIds, bulkStage, { status: bulkStatus });
+  //       } else {
+  //         // fallback: do it sequentially so we don't hammer the backend with parallel requests
+  //         for (const id of selectedIds) { await onStage(id, bulkStage, { status: bulkStatus }); }
+  //       }
+  //       clearSelect();
+  //     } catch (e) {
+  //       console.error("Bulk apply failed", e);
+  //       setBulkErr("Could not apply to all selected — please try again or check your connection.");
+  //     } finally {
+  //       setBulkBusy(false);
+  //     }
+  //   };
+  //   useEffect(() => { window.__openAdd = () => { if (isFullAccess) setModal(true); }; return () => { delete window.__openAdd; }; }, [isFullAccess]);
+  //   //const stateLabel = { All: "All", done: "Listing complete", prog: "In production", none: "Not started", issue: "With issues" };
+  //   const filtered = products.filter(p => {
+  //     const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase(); if (!t.includes(q.toLowerCase())) return false;
+  //     return true;
+  //   });
+  //   const totalPages = Math.max(1, Math.ceil(filtered.length / 20));
+  //   return (
+  //     <div>
+  //       <div className="toolbar">
+  //         <div className="search" style={{ position: "relative" }}>
+  //           {I.search({})}
+  //           <input placeholder="Search SKU, product or vendor…" value={q}
+  //             onChange={e => { setQ(e.target.value); setShowSug(true); setPage(1); }}
+  //             onBlur={() => setTimeout(() => setShowSug(false), 150)}
+  //             onFocus={() => { if (q) setShowSug(true); }} />
+  //           {showSug && q.length > 0 && (() => {
+  //             const sugs = products.filter(p => (p.sku + " " + p.name + " " + p.vendor).toLowerCase().includes(q.toLowerCase())).slice(0, 8);
+  //             return sugs.length > 0 ? (
+  //               <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 12, boxShadow: "var(--shadow-lg)", zIndex: 50, overflow: "hidden" }}>
+  //                 {sugs.map(p => (
+  //                   <div key={p.id} onMouseDown={() => { setQ(p.sku); setShowSug(false); }}
+  //                     style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", cursor: "pointer", borderBottom: "1px solid var(--line)" }}
+  //                     onMouseEnter={e => e.currentTarget.style.background = "var(--card-2)"}
+  //                     onMouseLeave={e => e.currentTarget.style.background = "var(--card)"}>
+  //                     <span className="psku" style={{ flexShrink: 0 }}>{p.sku}</span>
+  //                     {p.name && <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>{p.name}</span>}
+  //                     {p.vendor && <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: "auto" }}>{p.vendor}</span>}
+  //                     {p.set_no && <span className="psku" style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)", flexShrink: 0 }}>{p.set_no}</span>}
+  //                   </div>
+  //                 ))}
+  //               </div>
+  //             ) : null;
+  //           })()}
+  //         </div>
+  //       </div>
+  //       {selectedIds.length > 0 && (
+  //         <div style={{ display: "flex", alignItems: "center", gap: 10, background: "var(--sky-bg)", border: "1px solid var(--sky)", borderRadius: 12, padding: "10px 14px", marginBottom: 12, flexWrap: "wrap" }}>
+  //           <span style={{ fontSize: 13, fontWeight: 600, color: "var(--sky-ink)" }}>{selectedIds.length} selected</span>
+  //           <button className="ghost" style={{ padding: "7px 12px", fontSize: 12 }} onClick={() => { const allIds = {}; filtered.slice((page - 1) * 20, page * 20).forEach(p => allIds[p.id] = true); setSelected(allIds); }}>Select page</button>
+  //           <button className="ghost" style={{ padding: "7px 12px", fontSize: 12 }} onClick={() => { const allIds = {}; filtered.forEach(p => allIds[p.id] = true); setSelected(allIds); }}>Select all ({filtered.length})</button>
+  //           <select value={bulkStage} onChange={e => setBulkStage(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 12 }}>
+  //             <option value="">— pick stage —</option>
+  //             {(allowedStages ? STAGES.filter(s => allowedStages.includes(s.k)) : STAGES).filter(s => s.k !== "qc").map(s => <option key={s.k} value={s.k}>{s.n}</option>)}
+  //           </select>
+  //           <select value={bulkStatus} onChange={e => setBulkStatus(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 12 }}>
+  //             {STATUSES.map(s => <option key={s}>{s}</option>)}
+  //           </select>
+  //           <button className="primary" onClick={applyBulk} disabled={!bulkStage} style={{ padding: "7px 14px", fontSize: 12 }}>Apply to all</button>
+  //           <button className="ghost" onClick={clearSelect} style={{ padding: "7px 12px", fontSize: 12 }}>Clear</button>
+  //         </div>
+  //       )}
+  //       {filtered.length === 0 ? <div className="card empty">No products match. Add your first SKU to start tracking its full pipeline.</div> : (
+  //         <div>
+  //           <div className="plist">{filtered.slice((page - 1) * 20, page * 20).map(p => <ProductRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))} onStage={onStage} onQC={onQC} onRemove={onRemove} allowedStages={allowedStages} selected={!!selected[p.id]} onSelect={() => toggleSelect(p.id)} />)}</div>
+  //           {totalPages > 1 && (
+  //             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 16, flexWrap: "wrap" }}>
+  //               <button className="ghost" style={{ padding: "7px 12px", fontSize: 12 }} disabled={page === 1} onClick={() => setPage(1)}>«</button>
+  //               <button className="ghost" style={{ padding: "7px 12px", fontSize: 12 }} disabled={page === 1} onClick={() => setPage(p => p - 1)}>‹ Prev</button>
+  //               {Array.from({ length: totalPages }, (_, i) => i + 1).filter(n => n === 1 || n === totalPages || Math.abs(n - page) <= 2).reduce((acc, n, i, arr) => { if (i > 0 && n - arr[i - 1] > 1) acc.push("..."); acc.push(n); return acc; }, []).map((n, i) => n === "..." ? (<span key={"e" + i} style={{ padding: "0 4px", color: "var(--faint)" }}>…</span>) : (<button key={n} onClick={() => setPage(n)} style={{ padding: "7px 12px", fontSize: 12, borderRadius: 10, border: "1px solid var(--line2)", background: page === n ? "var(--ink)" : "var(--card)", color: page === n ? "#fff" : "var(--ink)", fontWeight: 600, cursor: "pointer" }}>{n}</button>))}
+  //               <button className="ghost" style={{ padding: "7px 12px", fontSize: 12 }} disabled={page === totalPages} onClick={() => setPage(p => p + 1)}>Next ›</button>
+  //               <button className="ghost" style={{ padding: "7px 12px", fontSize: 12 }} disabled={page === totalPages} onClick={() => setPage(totalPages)}>»</button>
+  //               <span style={{ fontSize: 12, color: "var(--muted)", marginLeft: 4 }}>{(page - 1) * 20 + 1}–{Math.min(page * 20, filtered.length)} of {filtered.length}</span>
+  //             </div>
+  //           )}
+  //         </div>
+  //       )}
+  //       {modal && isFullAccess && <AddModal division={division} vendors={vendors} addVendor={addVendor} onClose={() => setModal(false)} onSave={p => { onUpsert(p, true); setModal(false); }} />}
+  //     </div>
+  //   );
+  // }
+
+
+  function Products({ division, products, vendors, onUpsert, onStage, onStageBulk, onQC, onRemove, addVendor, allowedStages, operator }) {
     const [q, setQ] = useState(""); const [open, setOpen] = useState({}); const [modal, setModal] = useState(false); const [showSug, setShowSug] = useState(false); const [page, setPage] = useState(1);
 
     const [selected, setSelected] = useState({}); const [bulkStage, setBulkStage] = useState(""); const [bulkStatus, setBulkStatus] = useState("Completed");
+    const [bulkBusy, setBulkBusy] = useState(false);
+    const [bulkErr, setBulkErr] = useState("");
     const isFullAccess = allowedStages === null;
     const selectedIds = Object.keys(selected).filter(id => selected[id]);
     const toggleSelect = (id) => setSelected(s => ({ ...s, [id]: !s[id] }));
     const clearSelect = () => setSelected({});
+
     const applyBulk = async () => {
       if (!bulkStage || selectedIds.length === 0) return;
-      for (const id of selectedIds) { await onStage(id, bulkStage, { status: bulkStatus }); }
-      clearSelect();
+      setBulkBusy(true);
+      setBulkErr("");
+      const personName = (operator && operator.trim()) || "";
+      try {
+        if (onStageBulk) {
+          await onStageBulk(selectedIds, bulkStage, { status: bulkStatus, person: personName });
+        } else {
+          for (const id of selectedIds) { await onStage(id, bulkStage, { status: bulkStatus, person: personName }); }
+        }
+        clearSelect();
+      } catch (e) {
+        console.error("Bulk apply failed", e);
+        setBulkErr("Could not apply to all selected — please try again or check your connection.");
+      } finally {
+        setBulkBusy(false);
+      }
     };
+
     useEffect(() => { window.__openAdd = () => { if (isFullAccess) setModal(true); }; return () => { delete window.__openAdd; }; }, [isFullAccess]);
-    //const stateLabel = { All: "All", done: "Listing complete", prog: "In production", none: "Not started", issue: "With issues" };
+
     const filtered = products.filter(p => {
       const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase(); if (!t.includes(q.toLowerCase())) return false;
       return true;
@@ -2108,13 +2315,14 @@
             <select value={bulkStatus} onChange={e => setBulkStatus(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 12 }}>
               {STATUSES.map(s => <option key={s}>{s}</option>)}
             </select>
-            <button className="primary" onClick={applyBulk} disabled={!bulkStage} style={{ padding: "7px 14px", fontSize: 12 }}>Apply to all</button>
+            <button className="primary" onClick={applyBulk} disabled={!bulkStage || bulkBusy} style={{ padding: "7px 14px", fontSize: 12 }}>{bulkBusy ? "Applying…" : "Apply to all"}</button>
             <button className="ghost" onClick={clearSelect} style={{ padding: "7px 12px", fontSize: 12 }}>Clear</button>
+            {bulkErr && <div style={{ color: "var(--rose-ink)", fontSize: 12, fontWeight: 600, width: "100%" }}>{bulkErr}</div>}
           </div>
         )}
         {filtered.length === 0 ? <div className="card empty">No products match. Add your first SKU to start tracking its full pipeline.</div> : (
           <div>
-            <div className="plist">{filtered.slice((page - 1) * 20, page * 20).map(p => <ProductRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))} onStage={onStage} onQC={onQC} onRemove={onRemove} allowedStages={allowedStages} selected={!!selected[p.id]} onSelect={() => toggleSelect(p.id)} />)}</div>
+            <div className="plist">{filtered.slice((page - 1) * 20, page * 20).map(p => <ProductRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))} onStage={onStage} onQC={onQC} onRemove={onRemove} allowedStages={allowedStages} selected={!!selected[p.id]} onSelect={() => toggleSelect(p.id)} operator={operator} />)}</div>
             {totalPages > 1 && (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 16, flexWrap: "wrap" }}>
                 <button className="ghost" style={{ padding: "7px 12px", fontSize: 12 }} disabled={page === 1} onClick={() => setPage(1)}>«</button>
@@ -2131,7 +2339,8 @@
       </div>
     );
   }
-  function ProductRow({ p, open, toggle, onStage, onQC, onRemove, allowedStages, selected, onSelect }) {
+
+  function ProductRow({ p, open, toggle, onStage, onQC, onRemove, allowedStages, selected, onSelect, operator }) {
     const pct = productPct(p); const hasIssue = STAGES.some(s => p.stages[s.k].status === "Issue");
     const isFullAccess = allowedStages === null;
     // Filter stages visible to this user
@@ -2156,7 +2365,7 @@
             {/* Active stage cards grid */}
             <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "14px 16px" }}>
               {visibleStages.filter(s => s.k !== "qc" && p.stages[s.k].status !== "Completed").map((s, i) => (
-                <StageEditor key={s.k} p={p} stage={s} idx={STAGES.findIndex(st => st.k === s.k) + 1} onStage={onStage} />
+                <StageEditor key={s.k} p={p} stage={s} idx={STAGES.findIndex(st => st.k === s.k) + 1} onStage={onStage} operator={operator} />
               ))}
             </div>
             {/* Completed stages — pill popup style */}
@@ -2194,17 +2403,21 @@
     );
   }
 
-  function StageEditor({ p, stage, idx, onStage }) {
+  function StageEditor({ p, stage, idx, onStage, operator }) {
     const cur = p.stages[stage.k];
-    const [status, setStatus] = useState(cur.status), [person, setPerson] = useState(cur.person), [comments, setComments] = useState(cur.comments), [saved, setSaved] = useState(false);
-    useEffect(() => { setStatus(cur.status); setPerson(cur.person); setComments(cur.comments); }, [cur.status, cur.person, cur.comments]);
-    const dirty = status !== cur.status || person !== cur.person || comments !== cur.comments;
+    const [status, setStatus] = useState(cur.status), [comments, setComments] = useState(cur.comments), [saved, setSaved] = useState(false);
+    useEffect(() => { setStatus(cur.status); setComments(cur.comments); }, [cur.status, cur.comments]);
+    const effectivePerson = (operator && operator.trim()) || cur.person || "";
+    const dirty = status !== cur.status || comments !== cur.comments;
     const save = () => {
-      onStage(p.id, stage.k, { status, person, comments });
-      setSaved(true);
-      if (status === "Completed") {
-        setTimeout(() => setHidden(true), 600);
+      // Guard: if the product's authoritative status already moved away from what
+      // this row was editing (e.g. a bulk update landed), refuse to write stale state.
+      if (status !== cur.status && cur.status === "Completed") {
+        setStatus(cur.status); setComments(cur.comments);
+        return;
       }
+      onStage(p.id, stage.k, { status, person: effectivePerson, comments });
+      setSaved(true);
       setTimeout(() => setSaved(false), 1400);
     };
     if (cur.status === "Completed") return null;
@@ -2215,7 +2428,9 @@
         <select value={status} onChange={e => setStatus(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 9px", background: "var(--bg)", fontSize: 12, width: 130, flexShrink: 0 }}>
           {STATUSES.map(s => <option key={s}>{s}</option>)}
         </select>
-        <input className="txt" placeholder="person" value={person} onChange={e => setPerson(e.target.value)} style={{ fontSize: 12, padding: "6px 9px", width: 110, flexShrink: 0 }} />
+        <span className="tag" style={{ width: 110, flexShrink: 0, fontSize: 12, fontWeight: 600, color: "var(--sage-ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={effectivePerson || "no name set"}>
+          {effectivePerson || "—"}
+        </span>
         <input className="txt" placeholder="comments…" value={comments} onChange={e => setComments(e.target.value)} style={{ fontSize: 12, padding: "6px 9px", flex: 1, minWidth: 0 }} />
         <span style={{ fontSize: 10.5, color: "var(--faint)", whiteSpace: "nowrap", flexShrink: 0 }}>{cur.at ? fmt(cur.at) : "—"}</span>
         <button className={"mini " + (saved ? "saved" : "")} disabled={!dirty && !saved} onClick={save} style={{ flexShrink: 0 }}>{saved ? "✓" : "Save"}</button>
@@ -2828,7 +3043,7 @@
 
     const [selectedStages, setSelectedStages] = useState([]);
     const allStages = STAGES.filter(s => s.k !== "qc" && s.k !== "scan");
-    const allPermissions = [...allStages, { k: "bulk", n: "Bulk Upload ⚡" }, { k: "assign", n: "Assign Work 🔑" }];
+    const allPermissions = [...allStages, { k: "bulk", n: "Bulk Upload" }, { k: "assign", n: "Assign Work" }];
 
     return (
       <div>
