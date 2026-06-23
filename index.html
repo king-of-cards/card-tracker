@@ -3216,100 +3216,38 @@
       }
     };
 
+    const [selStages, setSelStages] = useState([]);
+
     const assignSku = () => {
-      if (!selMember || selSkus.length === 0) {
-        setAssErr("Select a member and at least one SKU.");
+      if (!selMember || selSkus.length === 0 || selStages.length === 0) {
+        setAssErr("Select a member, at least one SKU, and at least one stage.");
         return;
       }
+      const member = assignableMembers.find(m => m.id === selMember);
+      if (!member) { setAssErr("Member not found."); return; }
 
-      // Global cap: total assignment rows in this division can never exceed the
-      // total number of products in this division — one card, one assignment slot.
-      // Master is exempt (fully unrestricted); managers are checked against the
-      // division-wide total, not just their own pool, since the cap is global.
-      // Cap only applies to master-level assignments (master→anyone).
-      // Manager re-assignments don't consume new slots — same card, just redistributed.
-      // if (isMasterOrAdmin) {
-      //   const masterAssignedSkus = new Set(
-      //     divAssignments
-      //       .filter(a => a.managerId === "master")
-      //       .map(a => a.sku.trim().toLowerCase())
-      //   );
-      //   if (masterAssignedSkus.size >= divAllProducts.length) {
-      //     setAssErr("No assignment slots left — every card is already distributed.");
-      //     return;
-      //   }
-      // }
-
-      // Always deduplicate — no one (not even master) can assign a SKU
-      // that is already assigned to this specific member.
-      // const alreadyThisMember = new Set(
-      //   divAssignments
-      //     .filter(a => a.memberId === selMember)
-      //     .map(a => a.sku.trim().toLowerCase())
-      // );
-
-      const alreadyThisMember = new Set(
-        divAssignments
-          .filter(a => a.memberId === selMember)
-          .map(a => a.sku.trim().toLowerCase())
-      );
-
-      // For managers: also block SKUs already pushed to anyone else
-      const alreadyPushedByMe = !isMasterOrAdmin
-        ? new Set(
-          divAssignments
-            .filter(a => a.managerId === myMemberId)
-            .map(a => a.sku.trim().toLowerCase())
-        )
-        : new Set();
-
-      const blocked = selSkus.filter(sku =>
-        alreadyThisMember.has(sku.trim().toLowerCase()) ||
-        alreadyPushedByMe.has(sku.trim().toLowerCase())
-      );
-      let toAdd = selSkus.filter(sku => !blocked.includes(sku));
-      if (!isMasterOrAdmin) {
-        // Room = how many of my received SKUs I haven't pushed yet
-        const myReceivedSkus = new Set(
-          divAssignments
-            .filter(a => a.memberId === myMemberId)
-            .map(a => a.sku.trim().toLowerCase())
-        );
-        const myPushedSkus = new Set(
-          divAssignments
-            .filter(a => a.managerId === myMemberId)
-            .map(a => a.sku.trim().toLowerCase())
-        );
-        const roomLeft = [...myReceivedSkus].filter(s => !myPushedSkus.has(s)).length;
-        if (toAdd.length > roomLeft) {
-          toAdd = toAdd.slice(0, roomLeft);
-        }
-      }
-
-      if (toAdd.length === 0) {
-        setAssErr(blocked.length
-          ? "All selected SKUs are already assigned to your team."
-          : "No room left to assign — division-wide card limit reached.");
-        return;
-      }
-
-      // Task is implicit — whatever stage(s) this manager/member is responsible
-      // for, taken straight from their own profile. Master has no fixed stage
-      // scope, so master's rows are tagged "all".
-      const myStageLabel = isMasterOrAdmin ? "all" : (auth.stages || "");
-
-      const newRows = toAdd.map(sku => ({
-        id: uid(),
-        memberId: selMember,
-        managerId: isMasterOrAdmin ? "master" : myMemberId,
-        sku,
-        stage: myStageLabel,
-        division,
-        assignedAt: now()
-      }));
-      onSaveAssignments([...assignments, ...newRows]);
+      let updatedAssignments = [...assignments];
+      selSkus.forEach(sku => {
+        selStages.forEach(stageKey => {
+          updatedAssignments = updatedAssignments.filter(a =>
+            !(a.division === division && a.sku.trim().toLowerCase() === sku.trim().toLowerCase() && a.stage === stageKey)
+          );
+          updatedAssignments.push({
+            id: uid(),
+            memberId: selMember,
+            managerId: isMasterOrAdmin ? "master" : myMemberId,
+            sku,
+            stage: stageKey,
+            division,
+            assignedAt: now()
+          });
+        });
+      });
+      onSaveAssignments(updatedAssignments);
       setSelSkus([]);
-      setAssErr(blocked.length ? `${blocked.length} already assigned to your team, skipped.` : "");
+      setSelStages([]);
+      setAssErr("");
+      setAssMsg(`✓ Assigned ${selSkus.length} SKU(s) × ${selStages.length} stage(s) to ${member.name}.`);
     };
 
     const unassign = (id, sku, memberName) => {
@@ -3493,7 +3431,7 @@
               )}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <label className="fld">Team member
-                  <select value={selMember} onChange={e => { setSelMember(e.target.value); setSelSkus([]); setAssErr(""); }}>
+                  <select value={selMember} onChange={e => { setSelMember(e.target.value); setSelSkus([]); setSelStages([]); setAssErr(""); }}>
                     <option value="">— select member —</option>
                     {assignableMembers.map(m => <option key={m.id} value={m.id}>{m.name}{m.id === myMemberId ? " (myself)" : ""}</option>)}
                   </select>
@@ -3506,6 +3444,33 @@
                 </label>
 
               </div>
+              {selMember && (() => {
+                const member = assignableMembers.find(m => m.id === selMember);
+                const memberStageKeys = (member?.stages || "").split(",").map(s => s.trim()).filter(Boolean);
+                const pickableStages = STAGES.filter(s => s.k !== "qc" && s.k !== "scan" && memberStageKeys.includes(s.k));
+                return pickableStages.length > 0 ? (
+                  <label className="fld" style={{ marginTop: 10 }}>
+                    Stages to assign for this member
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+                      {pickableStages.map(s => (
+                        <label key={s.k} style={{
+                          display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500,
+                          background: selStages.includes(s.k) ? "var(--sky-bg)" : "var(--card)",
+                          border: `1px solid ${selStages.includes(s.k) ? "var(--sky)" : "var(--line2)"}`,
+                          color: selStages.includes(s.k) ? "var(--sky-ink)" : "var(--ink)",
+                          borderRadius: 8, padding: "5px 10px", cursor: "pointer"
+                        }}>
+                          <input type="checkbox" checked={selStages.includes(s.k)}
+                            style={{ width: 13, height: 13, accentColor: "var(--sky-ink)" }}
+                            onChange={e => setSelStages(prev => e.target.checked ? [...prev, s.k] : prev.filter(k => k !== s.k))} />
+                          {s.n}
+                        </label>
+                      ))}
+                    </div>
+                    {selStages.length === 0 && <div style={{ fontSize: 11, color: "var(--rose-ink)", marginTop: 4 }}>Select at least one stage to assign</div>}
+                  </label>
+                ) : null;
+              })()}
               <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
                 <button className="ghost" onClick={() => selectTop(10)} disabled={!selMember || availableSkus.filter(sku => !selSkus.includes(sku)).length === 0}>+ 10</button>
                 <button className="ghost" onClick={() => deselectTop(10)} disabled={selSkus.length === 0}>− 10</button>
