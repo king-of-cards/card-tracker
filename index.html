@@ -1890,9 +1890,11 @@
       // member — find their record by email for reliable ID matching
       const myMember = window.__teamMembers?.find(m => m.email && auth.email && m.email.toLowerCase() === auth.email.toLowerCase());
       const myId = myMember?.id || auth.name.toLowerCase().replace(/\s+/g, "_");
-      const myAssigned = assignments.filter(a => a.memberId === myId).map(a => a.sku.toLowerCase());
-      if (myAssigned.length === 0) return [];
-      return base.filter(p => myAssigned.includes(p.sku.toLowerCase()));
+      // Get this member's assignments with their specific stages
+      const myAssignments = assignments.filter(a => a.memberId === myId);
+      if (myAssignments.length === 0) return [];
+      const myAssignedSkus = myAssignments.map(a => a.sku.toLowerCase());
+      return base.filter(p => myAssignedSkus.includes(p.sku.toLowerCase()));
     }, [products, division, auth, assignments]);
     const counts = useMemo(() => { const o = {}; DIVISIONS.forEach(d => o[d] = products.filter(p => p.division === d).length); return o; }, [products]);
     const openIssues = useMemo(() => { const l = []; divProducts.forEach(p => STORES.forEach(st => { const s = p.stores[st]; if (s && (s.missing > 0 || s.damaged > 0)) l.push({ p, store: st, s }); })); return l; }, [divProducts]);
@@ -1975,7 +1977,7 @@
           </header>
           <div className="content">
             {tab === "overview" && <Overview division={division} products={divProducts} issues={openIssues} audit={audit.filter(a => a.division === division)} go={setTab} vendors={vendors[division] || []} allowedStages={allowedStages} auth={auth} teamMembers={teamMembers} assignments={assignments} />}
-            {tab === "products" && <Products division={division} products={divProducts} vendors={vendors[division] || []} onUpsert={upsertProduct} onStage={patchStage} onStageBulk={patchStageBulk} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} allowedStages={allowedStages} operator={operator} />}
+            {tab === "products" && <Products division={division} products={divProducts} vendors={vendors[division] || []} onUpsert={upsertProduct} onStage={patchStage} onStageBulk={patchStageBulk} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} allowedStages={allowedStages} operator={operator} auth={auth} assignments={assignments} teamMembers={teamMembers} />}
             {tab === "dispatch" && <Dispatch products={divProducts} onStore={patchStore} onStage={patchStage} operator={operator} />}
             {tab === "bulk" && <Bulk division={division} products={products} divProducts={divProducts} bulkProducts={bulkProducts} bulkStores={bulkStores} />}
             {tab === "audit" && <AuditLog audit={audit.filter(a => a.division === division)} products={products} onStage={patchStage} />}
@@ -2398,7 +2400,22 @@
   // }
 
 
-  function Products({ division, products, vendors, onUpsert, onStage, onStageBulk, onQC, onRemove, addVendor, allowedStages, operator }) {
+  function Products({ division, products, vendors, onUpsert, onStage, onStageBulk, onQC, onRemove, addVendor, allowedStages, operator, auth, assignments, teamMembers }) {
+    // Build a map: sku → [stageKeys] that THIS member was specifically assigned
+    const myAssignedStagesPerSku = useMemo(() => {
+      if (!auth || auth.role === "master" || auth.role === "admin") return null;
+      const me = teamMembers?.find(m => m.email && auth.email && m.email.toLowerCase() === auth.email.toLowerCase());
+      const myId = me?.id || auth.name.toLowerCase().replace(/\s+/g, "_");
+      const map = {};
+      assignments.filter(a => a.memberId === myId && a.division === division).forEach(a => {
+        const key = a.sku.toLowerCase();
+        if (!map[key]) map[key] = new Set();
+        if (a.stage && a.stage !== "all") {
+          a.stage.split(",").map(s => s.trim()).filter(Boolean).forEach(s => map[key].add(s));
+        }
+      });
+      return map;
+    }, [auth, assignments, teamMembers, division]);
     const [q, setQ] = useState(""); const [open, setOpen] = useState({}); const [modal, setModal] = useState(false); const [showSug, setShowSug] = useState(false); const [page, setPage] = useState(1);
 
     const [selected, setSelected] = useState({}); const [bulkStage, setBulkStage] = useState(""); const [bulkStatus, setBulkStatus] = useState("Completed");
@@ -2484,7 +2501,14 @@
         )}
         {filtered.length === 0 ? <div className="card empty">No products match. Add your first SKU to start tracking its full pipeline.</div> : (
           <div>
-            <div className="plist">{filtered.slice((page - 1) * 20, page * 20).map(p => <ProductRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))} onStage={onStage} onQC={onQC} onRemove={onRemove} allowedStages={allowedStages} selected={!!selected[p.id]} onSelect={() => toggleSelect(p.id)} operator={operator} />)}</div>
+            <div className="plist">{filtered.slice((page - 1) * 20, page * 20).map(p => {
+              // If this member has specific stage assignments for this card, restrict to those
+              const cardStages = myAssignedStagesPerSku?.[p.sku.toLowerCase()];
+              const effectiveAllowedStages = cardStages && cardStages.size > 0
+                ? (allowedStages ? allowedStages.filter(s => cardStages.has(s)) : [...cardStages])
+                : allowedStages;
+              return <ProductRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))} onStage={onStage} onQC={onQC} onRemove={onRemove} allowedStages={effectiveAllowedStages} selected={!!selected[p.id]} onSelect={() => toggleSelect(p.id)} operator={operator} />;
+            })}</div>
             {totalPages > 1 && (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 16, flexWrap: "wrap" }}>
                 <button className="ghost" style={{ padding: "7px 12px", fontSize: 12 }} disabled={page === 1} onClick={() => setPage(1)}>«</button>
@@ -3041,9 +3065,12 @@
     // const [selStage, setSelStage] = useState("");
     const [selVendor, setSelVendor] = useState("");
     const [selSkus, setSelSkus] = useState([]);
+    const [selStages, setSelStages] = useState([]);
     const [expandedMember, setExpandedMember] = useState(null);
     const [assErr, setAssErr] = useState("");
     const [assMsg, setAssMsg] = useState("");
+    const [skuSearch, setSkuSearch] = useState("");
+    const [showSkuSug, setShowSkuSug] = useState(false);
 
     const isMasterOrAdmin = auth.role === "master" || auth.role === "admin";
     const myMemberId = useMemo(() => {
@@ -3083,38 +3110,60 @@
     // Manager's remaining pool = cards NOT assigned to anyone yet
     const managerPool = useMemo(() => {
       if (isMasterOrAdmin) {
-        // Master sees ALL products always — no SKU is ever hidden from master
         return divAllProducts;
       } else {
-        // What master assigned TO me (memberId = myMemberId)
         const myReceivedSkus = new Set(
           divAssignments
             .filter(a => a.memberId === myMemberId)
             .map(a => a.sku.trim().toLowerCase())
         );
-        // What I have already pushed to my team members (managerId = myMemberId)
-        const myPushedSkus = new Set(
-          divAssignments
-            .filter(a => a.managerId === myMemberId)
-            .map(a => a.sku.trim().toLowerCase())
-        );
-        // Pool = what I received minus what I already pushed
-        return divAllProducts.filter(p =>
-          myReceivedSkus.has(p.sku.trim().toLowerCase()) &&
-          !myPushedSkus.has(p.sku.trim().toLowerCase())
-        );
+        return divAllProducts.filter(p => myReceivedSkus.has(p.sku.trim().toLowerCase()));
       }
     }, [divAllProducts, divAssignments, isMasterOrAdmin, myMemberId]);
 
     // For the assignment picker, show ONLY manager's unassigned pool (filtered by vendor)
-    const filteredProducts = useMemo(() =>
-      managerPool.filter(p => !selVendor || p.vendor === selVendor),
-      [managerPool, selVendor]);
+    // A SKU is "available" for a given stage if no assignment row exists yet
+    // for that exact SKU+stage combo in this division.
+    const assignedSkuStageSet = useMemo(() => {
+      const s = new Set();
+      divAssignments.forEach(a => {
+        if (a.stage && a.stage !== "all") {
+          s.add(a.sku.trim().toLowerCase() + "|" + a.stage.trim());
+        }
+      });
+      return s;
+    }, [divAssignments]);
+
+    const filteredProducts = useMemo(() => {
+      return managerPool.filter(p => {
+        if (selVendor && p.vendor !== selVendor) return false;
+        if (skuSearch.length >= 2) {
+          const q = skuSearch.toLowerCase();
+          if (!(p.sku.toLowerCase().includes(q) || (p.name || "").toLowerCase().includes(q))) return false;
+        }
+        // If stages are selected, show card if at least one selected stage is unassigned for it
+        if (selStages.length > 0) {
+          const hasAvailableStage = selStages.some(stageKey =>
+            !assignedSkuStageSet.has(p.sku.trim().toLowerCase() + "|" + stageKey)
+          );
+          return hasAvailableStage;
+        }
+        return true;
+      });
+    }, [managerPool, selVendor, skuSearch, selStages, assignedSkuStageSet]);
 
     const availableSkus = useMemo(() =>
       filteredProducts.map(p => p.sku),
       [filteredProducts]);
 
+    // Suggestions for search — first 2 chars triggers, show all matches from full pool
+    const skuSuggestions = useMemo(() => {
+      if (skuSearch.length < 2) return [];
+      const q = skuSearch.toLowerCase();
+      return managerPool.filter(p =>
+        p.sku.toLowerCase().includes(q) || (p.name || "").toLowerCase().includes(q)
+      ).slice(0, 8);
+    }, [managerPool, skuSearch]);
     // const addMember = async () => {
     //   if (!newName.trim() || !newEmail.trim() || !newPass.trim()) { setAddErr("Name, email and password are required."); return; }
     //   const id = newName.trim().toLowerCase().replace(/\s+/g, "_");
@@ -3216,7 +3265,7 @@
       }
     };
 
-    const [selStages, setSelStages] = useState([]);
+    // const [selStages, setSelStages] = useState([]);
 
     const assignSku = () => {
       if (!selMember || selSkus.length === 0 || selStages.length === 0) {
@@ -3431,13 +3480,13 @@
               )}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <label className="fld">Team member
-                  <select value={selMember} onChange={e => { setSelMember(e.target.value); setSelSkus([]); setSelStages([]); setAssErr(""); }}>
+                  <select value={selMember} onChange={e => { setSelMember(e.target.value); setSelSkus([]); setSelStages([]); setSkuSearch(""); setAssErr(""); }}>
                     <option value="">— select member —</option>
                     {assignableMembers.map(m => <option key={m.id} value={m.id}>{m.name}{m.id === myMemberId ? " (myself)" : ""}</option>)}
                   </select>
                 </label>
                 <label className="fld">Vendor (filter)
-                  <select value={selVendor} onChange={e => { setSelVendor(e.target.value); setSelSkus([]); setAssErr(""); }}>
+                  <select value={selVendor} onChange={e => { setSelVendor(e.target.value); setSelSkus([]); setSkuSearch(""); setAssErr(""); }}>
                     <option value="">— all vendors —</option>
                     {vendors.map(v => <option key={v}>{v}</option>)}
                   </select>
@@ -3471,11 +3520,82 @@
                   </label>
                 ) : null;
               })()}
-              <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
+              {/* SKU search box */}
+              <div style={{ position: "relative", marginTop: 12 }}>
+                <div style={{ position: "relative" }}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--faint)" }}><circle cx="11" cy="11" r="7" /><path d="m20 20-3-3" /></svg>
+                  <input
+                    className="txt"
+                    placeholder="Search SKU or name (type 2+ letters)…"
+                    value={skuSearch}
+                    onChange={e => { setSkuSearch(e.target.value); setShowSkuSug(true); }}
+                    onFocus={() => { if (skuSearch.length >= 2) setShowSkuSug(true); }}
+                    onBlur={() => setTimeout(() => setShowSkuSug(false), 180)}
+                    style={{ paddingLeft: 32, fontSize: 12 }}
+                  />
+                  {skuSearch && (
+                    <button onClick={() => { setSkuSearch(""); setShowSkuSug(false); }}
+                      style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 12, color: "var(--faint)", fontWeight: 700 }}>✕</button>
+                  )}
+                </div>
+                {/* Dropdown suggestions */}
+                {showSkuSug && skuSuggestions.length > 0 && (
+                  <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 12, boxShadow: "var(--shadow-lg)", zIndex: 50, overflow: "hidden" }}>
+                    {skuSuggestions.map(p => {
+                      const alreadySelected = selSkus.includes(p.sku);
+                      // Show which stages are assigned vs free for this card
+                      const stageInfo = selStages.length > 0 ? selStages.map(stageKey => {
+                        const existing = divAssignments.find(a =>
+                          a.sku.toLowerCase() === p.sku.toLowerCase() && a.stage === stageKey
+                        );
+                        const assignedMember = existing ? assignableMembers.find(x => x.id === existing.memberId) : null;
+                        const stageName = STAGES.find(s => s.k === stageKey)?.n || stageKey;
+                        return { stageName, assignedMember, stageKey, isFree: !existing };
+                      }) : [];
+                      return (
+                        <div key={p.id}
+                          onMouseDown={() => {
+                            if (!alreadySelected) setSelSkus(prev => [...prev, p.sku]);
+                            setSkuSearch("");
+                            setShowSkuSug(false);
+                          }}
+                          style={{ display: "flex", flexDirection: "column", gap: 4, padding: "10px 14px", cursor: "pointer", borderBottom: "1px solid var(--line)", background: alreadySelected ? "var(--sage-bg)" : "var(--card)" }}
+                          onMouseEnter={e => { if (!alreadySelected) e.currentTarget.style.background = "var(--card-2)"; }}
+                          onMouseLeave={e => { if (!alreadySelected) e.currentTarget.style.background = "var(--card)"; }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            <span className="psku" style={{ flexShrink: 0 }}>{p.sku}</span>
+                            {p.name && <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>{p.name}</span>}
+                            {p.vendor && <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: "auto" }}>{p.vendor}</span>}
+                            {alreadySelected && <span style={{ fontSize: 10, fontWeight: 700, color: "var(--sage-ink)", background: "var(--sage-bg)", border: "1px solid var(--sage)", borderRadius: 6, padding: "1px 7px" }}>✓ Selected</span>}
+                          </div>
+                          {/* Stage assignment status */}
+                          {stageInfo.length > 0 && (
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, paddingLeft: 2 }}>
+                              {stageInfo.map((si, i) => (
+                                <span key={i} style={{
+                                  fontSize: 10, fontWeight: 600, borderRadius: 6, padding: "1px 8px",
+                                  background: si.isFree ? "var(--sky-bg)" : "var(--peach-bg)",
+                                  color: si.isFree ? "var(--sky-ink)" : "var(--peach-ink)",
+                                  border: `1px solid ${si.isFree ? "var(--sky)" : "var(--peach)"}`
+                                }}>
+                                  {si.stageName}: {si.isFree ? "free" : `with ${si.assignedMember?.name || "someone"}`}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
                 <button className="ghost" onClick={() => selectTop(10)} disabled={!selMember || availableSkus.filter(sku => !selSkus.includes(sku)).length === 0}>+ 10</button>
                 <button className="ghost" onClick={() => deselectTop(10)} disabled={selSkus.length === 0}>− 10</button>
                 <span style={{ width: 1, height: 22, background: "var(--line2)" }} />
                 <button className="ghost" onClick={selectAllAvailable} disabled={!selMember || availableSkus.length === 0}>Select all ({availableSkus.length})</button>
+                {skuSearch.length >= 2 && <span style={{ fontSize: 11.5, color: "var(--muted)" }}>Filtered: {filteredProducts.length} cards</span>}
                 <div style={{ marginLeft: "auto", background: "var(--sage-bg)", border: "1px solid var(--sage)", borderRadius: 9, padding: "6px 14px", fontSize: 13, fontWeight: 700, color: "var(--sage-ink)" }}>
                   {selSkus.length} selected
                 </div>
@@ -3496,8 +3616,21 @@
                     </div>
                   ) : filteredProducts.map(p => {
                     // Already assigned to the currently selected member
-                    const isAlreadyThisMember = !!selMember &&
-                      divAssignments.some(a => a.memberId === selMember && a.sku === p.sku);
+                    // Stage-aware: only "already assigned" if ALL selected stages are taken by this member
+                    const isAlreadyThisMember = !!selMember && selStages.length > 0 &&
+                      selStages.every(stageKey =>
+                        divAssignments.some(a => a.memberId === selMember && a.sku === p.sku && a.stage === stageKey)
+                      );
+                    const isPartiallyAssigned = !!selMember && selStages.length > 0 &&
+                      selStages.some(stageKey =>
+                        divAssignments.some(a => a.memberId === selMember && a.sku === p.sku && a.stage === stageKey)
+                      ) && !isAlreadyThisMember;
+                    // Per-stage status for tooltip inside pill
+                    const perStageStatus = selStages.length > 0 ? selStages.map(stageKey => {
+                      const existing = divAssignments.find(a => a.sku === p.sku && a.stage === stageKey);
+                      const who = existing ? assignableMembers.find(x => x.id === existing.memberId)?.name : null;
+                      return { stageName: STAGES.find(s => s.k === stageKey)?.n || stageKey, isFree: !existing, who };
+                    }) : [];
 
                     // For master, "other" assignments are just informational, never blocking.
                     const otherAssignments = divAssignments.filter(
@@ -3550,12 +3683,23 @@
                           {p.name && <span style={{ color: "var(--muted)", fontWeight: 400 }}>· {p.name}</span>}
                         </div>
                         {isAlreadyThisMember && (
-                          <span style={{ fontSize: 10, color: "var(--sage-ink)", fontWeight: 700, paddingLeft: 19 }}>✓ Already assigned</span>
+                          <span style={{ fontSize: 10, color: "var(--sage-ink)", fontWeight: 700, paddingLeft: 19 }}>✓ All selected stages assigned</span>
                         )}
-                        {isAssignedToOther && !isAlreadyThisMember && (
-                          <span style={{ fontSize: 10, color: "var(--peach-ink)", fontWeight: 700, paddingLeft: 19 }}>
-                            ⚠ With: {otherNames.join(", ")}
-                          </span>
+                        {isPartiallyAssigned && (
+                          <span style={{ fontSize: 10, color: "var(--peach-ink)", fontWeight: 700, paddingLeft: 19 }}>~ Partially assigned</span>
+                        )}
+                        {perStageStatus.length > 0 && (
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 3, paddingLeft: 19 }}>
+                            {perStageStatus.map((ps, i) => (
+                              <span key={i} style={{
+                                fontSize: 9.5, fontWeight: 600, borderRadius: 4, padding: "1px 6px",
+                                background: ps.isFree ? "var(--sky-bg)" : "var(--peach-bg)",
+                                color: ps.isFree ? "var(--sky-ink)" : "var(--peach-ink)"
+                              }}>
+                                {ps.stageName}: {ps.isFree ? "free" : ps.who || "taken"}
+                              </span>
+                            ))}
+                          </div>
                         )}
                       </label>
                     );
@@ -3644,13 +3788,10 @@
 
                 const myAss = divAssignments.filter(a => {
                   if (a.memberId !== m.id) return false;
-                  const key = a.sku.trim().toLowerCase();
-                  if (seenSkus.has(key)) return false;
-                  seenSkus.add(key);
-                  // For the manager themselves: exclude SKUs already pushed to team
-                  if (isManagerSelf && pushedByManagerSkus.has(key)) return false;
                   return true;
                 });
+                // Unique SKU count for the header label
+                const uniqueSkuCount = new Set(myAss.map(a => a.sku.toLowerCase())).size;
                 const isOpen = expandedMember === m.id;
                 return (
                   <div key={m.id} className="card" style={{ marginBottom: 10, overflow: "hidden" }}>
@@ -3659,35 +3800,76 @@
                       <b>{m.name}</b>
                       <span className="tag">· {m.role}</span>
                       <div className="spacer" />
-                      <span className="hint">{myAss.length} SKU{myAss.length !== 1 ? "s" : ""} assigned</span>
+                      <span className="hint">{uniqueSkuCount} SKU{uniqueSkuCount !== 1 ? "s" : ""} · {myAss.length} stage task{myAss.length !== 1 ? "s" : ""}</span>
                     </div>
                     {isOpen && (
                       myAss.length === 0
                         ? <div style={{ padding: "14px 18px", color: "var(--faint)", fontSize: 13, borderTop: "1px solid var(--line)" }}>No SKUs assigned yet.</div>
-                        : <div className="tbl-wrap" style={{ border: 0, borderRadius: 0, boxShadow: "none", borderTop: "1px solid var(--line)" }}>
-                          <table>
-                            <thead><tr><th>SKU</th><th>Task</th><th>Product name</th><th>Vendor</th><th>Pipeline</th><th>Assigned</th><th></th></tr></thead>
-                            <tbody>
-                              {myAss.map(a => {
-                                const prod = divAllProducts.find(p => p.sku === a.sku);
-                                const stageLabel = a.stage === "all"
-                                  ? "All stages"
-                                  : (a.stage || "").split(",").map(k => STAGES.find(s => s.k === k)?.n || k).filter(Boolean).join(", ") || "—";
+                        : (() => {
+                          // Group all division assignments by SKU (not just this member's)
+                          // so we can show who else has each card and for which stage
+                          const skuGroups = {};
+                          myAss.forEach(a => {
+                            const key = a.sku.toLowerCase();
+                            if (!skuGroups[key]) {
+                              const prod = divAllProducts.find(p => p.sku.toLowerCase() === key);
+                              skuGroups[key] = { sku: a.sku, prod, rows: [] };
+                            }
+                            skuGroups[key].rows.push(a);
+                          });
+                          return (
+                            <div style={{ borderTop: "1px solid var(--line)" }}>
+                              {Object.values(skuGroups).map(group => {
+                                // All assignments for this SKU across the whole division
+                                const allForSku = divAssignments.filter(a => a.sku.toLowerCase() === group.sku.toLowerCase());
+                                // Build assignee summary: stage → memberName
+                                const stageAssignees = allForSku.map(a => {
+                                  const assignedMember = assignableMembers.find(x => x.id === a.memberId);
+                                  const stageName = !a.stage || a.stage === "all"
+                                    ? "All stages"
+                                    : STAGES.find(s => s.k === a.stage)?.n || a.stage;
+                                  return { stageName, memberName: assignedMember?.name || "—", assignmentId: a.id, memberId: a.memberId, stageKey: a.stage };
+                                });
                                 return (
-                                  <tr key={a.id}>
-                                    <td><span className="psku">{a.sku}</span></td>
-                                    <td><span className="chip c-prog"><span className="dot" />{stageLabel}</span></td>
-                                    <td>{prod?.name || "—"}</td>
-                                    <td className="tag">{prod?.vendor || "—"}</td>
-                                    <td>{prod ? <Pipe p={prod} /> : "—"}</td>
-                                    <td className="tag">{fmt(a.assignedAt)}</td>
-                                    <td><button className="danger" onClick={() => unassign(a.id, a.sku, m.name)}>Remove</button></td>
-                                  </tr>
+                                  <div key={group.sku} style={{ padding: "12px 18px", borderBottom: "1px solid var(--line)", display: "flex", gap: 14, alignItems: "flex-start", flexWrap: "wrap" }}>
+                                    {/* Left: SKU + product info */}
+                                    <div style={{ minWidth: 120 }}>
+                                      <span className="psku">{group.sku}</span>
+                                      {group.prod?.name && <div style={{ fontSize: 11.5, color: "var(--ink)", fontWeight: 600, marginTop: 4 }}>{group.prod.name}</div>}
+                                      {group.prod?.vendor && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{group.prod.vendor}</div>}
+                                    </div>
+                                    {/* Middle: pipeline + stage-assignee breakdown */}
+                                    <div style={{ flex: 1, minWidth: 200 }}>
+                                      {group.prod && <div style={{ marginBottom: 8 }}><Pipe p={group.prod} /></div>}
+                                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                        {stageAssignees.map((sa, i) => (
+                                          <div key={i} style={{
+                                            display: "flex", alignItems: "center", gap: 6,
+                                            background: sa.memberId === m.id ? "var(--sky-bg)" : "var(--card-2)",
+                                            border: `1px solid ${sa.memberId === m.id ? "var(--sky)" : "var(--line2)"}`,
+                                            borderRadius: 8, padding: "4px 10px", fontSize: 11.5
+                                          }}>
+                                            <span style={{ fontWeight: 600, color: sa.memberId === m.id ? "var(--sky-ink)" : "var(--muted)" }}>{sa.stageName}</span>
+                                            <span style={{ color: "var(--faint)" }}>→</span>
+                                            <span style={{ fontWeight: 700, color: "var(--ink)" }}>{sa.memberName}</span>
+                                            {sa.memberId === m.id && (
+                                              <button className="danger" style={{ fontSize: 10, padding: "1px 6px", marginLeft: 2 }}
+                                                onClick={() => unassign(sa.assignmentId, group.sku, sa.memberName)}>✕</button>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                    {/* Right: assigned date */}
+                                    <div style={{ fontSize: 11, color: "var(--faint)", whiteSpace: "nowrap", paddingTop: 4 }}>
+                                      {fmt(group.rows[0]?.assignedAt)}
+                                    </div>
+                                  </div>
                                 );
                               })}
-                            </tbody>
-                          </table>
-                        </div>
+                            </div>
+                          );
+                        })()
                     )}
                   </div>
                 );
