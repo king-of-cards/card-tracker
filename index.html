@@ -1341,7 +1341,7 @@
     { k: "photography", n: "Photography" },
     { k: "videography", n: "Videography" },
     { k: "videoedit", n: "Video Editing" },
-    { k: "images", n: "Images Uploaded" },
+    { k: "images", n: "Images Uploaded" }, //it has to be vidio  uploaded .
     { k: "backend", n: "Backend Listing (App)" },
     { k: "website", n: "Website Listing (Shopify)" },
     { k: "scan", n: "Scan Before Dispatch" },
@@ -1974,7 +1974,7 @@
             </div>
           </header>
           <div className="content">
-            {tab === "overview" && <Overview division={division} products={divProducts} issues={openIssues} audit={audit.filter(a => a.division === division)} go={setTab} vendors={vendors[division] || []} allowedStages={allowedStages} />}
+            {tab === "overview" && <Overview division={division} products={divProducts} issues={openIssues} audit={audit.filter(a => a.division === division)} go={setTab} vendors={vendors[division] || []} allowedStages={allowedStages} auth={auth} teamMembers={teamMembers} assignments={assignments} />}
             {tab === "products" && <Products division={division} products={divProducts} vendors={vendors[division] || []} onUpsert={upsertProduct} onStage={patchStage} onStageBulk={patchStageBulk} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} allowedStages={allowedStages} operator={operator} />}
             {tab === "dispatch" && <Dispatch products={divProducts} onStore={patchStore} onStage={patchStage} operator={operator} />}
             {tab === "bulk" && <Bulk division={division} products={products} divProducts={divProducts} bulkProducts={bulkProducts} bulkStores={bulkStores} />}
@@ -1988,16 +1988,59 @@
   }
 
   /* ---------------- OVERVIEW ---------------- */
-  function Overview({ division, products, issues, audit, go, vendors = [], allowedStages = null }) {
+  function Overview({ division, products, issues, audit, go, vendors = [], allowedStages = null, auth, teamMembers = [], assignments = [] }) {
     const [fVendor, setFVendor] = useState("");
     const [fSetNo, setFSetNo] = useState("");
+    const [fMember, setFMember] = useState("");
+    const myMemberId = useMemo(() => {
+      const me = teamMembers.find(m => m.email && auth?.email && m.email.toLowerCase() === auth.email.toLowerCase());
+      return me?.id || null;
+    }, [teamMembers, auth]);
+    const myTeam = useMemo(() => {
+      const reports = teamMembers.filter(m => m.division === division && m.managerId === myMemberId);
+      const myOwn = teamMembers.find(m => m.id === myMemberId);
+      if (myOwn && !reports.some(m => m.id === myOwn.id)) return [...reports, myOwn];
+      return reports;
+    }, [teamMembers, division, myMemberId]);
+    const memberSkuMap = useMemo(() => {
+      const map = {};
+      const isMgr = !isMasterOrAdminView && myMemberId;
+
+      assignments.filter(a => a.division === division).forEach(a => {
+        (map[a.memberId] ||= new Set()).add(a.sku.toLowerCase());
+      });
+
+      // For the manager themselves: override their map entry to show only
+      // their remaining pool (received but not yet pushed to anyone)
+      if (isMgr) {
+        const myReceivedSkus = new Set(
+          assignments
+            .filter(a => a.division === division && a.memberId === myMemberId)
+            .map(a => a.sku.toLowerCase())
+        );
+        const myPushedSkus = new Set(
+          assignments
+            .filter(a => a.division === division && a.managerId === myMemberId)
+            .map(a => a.sku.toLowerCase())
+        );
+        const remaining = new Set([...myReceivedSkus].filter(s => !myPushedSkus.has(s)));
+        if (remaining.size > 0) {
+          map[myMemberId] = remaining;
+        } else {
+          delete map[myMemberId];
+        }
+      }
+
+      return map;
+    }, [assignments, division, isMasterOrAdminView, myMemberId]);
     const vendorOptions = (vendors || []).map(v => v.trim()).filter(Boolean);
     const setNoOptions = useMemo(() => [...new Set(products.map(p => p.set_no).filter(Boolean))].sort(), [products]);
     const filteredProducts = useMemo(() => products.filter(p =>
       (!fVendor || (p.vendor || "").trim().toLowerCase() === fVendor.trim().toLowerCase()) &&
-      (!fSetNo || (p.set_no || "").trim().toLowerCase() === fSetNo.trim().toLowerCase())
-    ), [products, fVendor, fSetNo]);
-    const hasFilters = fVendor || fSetNo;
+      (!fSetNo || (p.set_no || "").trim().toLowerCase() === fSetNo.trim().toLowerCase()) &&
+      (!fMember || (memberSkuMap[fMember]?.has((p.sku || "").toLowerCase())))
+    ), [products, fVendor, fSetNo, fMember, memberSkuMap]);
+    const hasFilters = fVendor || fSetNo || fMember;
 
     const total = filteredProducts.length;
     const done = filteredProducts.filter(p => productState(p) === "done").length;
@@ -2011,11 +2054,71 @@
     const storeStats = STORES.map(st => { let d = 0, r = 0, m = 0, dm = 0, pending = 0; filteredProducts.forEach(p => { const s = p.stores[st]; d += s.dispatched || 0; if (s.received) r++; else if (s.dispatched > 0) pending++; m += s.missing || 0; dm += s.damaged || 0; }); return { st, d, r, m, dm, pending }; });
     const segs = [{ label: "Listing complete", value: done, color: "var(--sage)" }, { label: "In production", value: prog, color: "var(--sky)" }, { label: "Not started", value: none, color: "var(--line2)" }, { label: "With issues", value: withIssue, color: "var(--rose)" }];
 
+    // Only count as "distributed" when assigned to a leaf (non-master push)
+    // A card assigned master→manager is still "with manager", not distributed
+    const isMasterOrAdminView = auth?.role === "master" || auth?.role === "admin";
+    const allDivProducts = products.filter(p => p.division === division);
+
+    let distributedSkus, remainingWithManager, distributionBreakdown;
+
+    if (isMasterOrAdminView) {
+      const masterAssignedSkus = new Set(
+        assignments
+          .filter(a => a.division === division && a.managerId === "master")
+          .map(a => a.sku.toLowerCase())
+      );
+      distributedSkus = allDivProducts.filter(p => masterAssignedSkus.has(p.sku.toLowerCase())).length;
+      remainingWithManager = allDivProducts.filter(p => !masterAssignedSkus.has(p.sku.toLowerCase())).length;
+      distributionBreakdown = teamMembers
+        .filter(m => m.division === division)
+        .map(m => {
+          const seen = new Set();
+          const count = assignments.filter(a => {
+            if (a.memberId !== m.id || a.division !== division) return false;
+            const key = a.sku.toLowerCase();
+            if (seen.has(key)) return false;
+            seen.add(key); return true;
+          }).length;
+          return { name: m.name, count };
+        })
+        .filter(x => x.count > 0)
+        .sort((a, b) => b.count - a.count);
+    } else {
+      const myTeamMemberIds = new Set(myTeam.map(m => m.id));
+      myTeamMemberIds.delete(myMemberId);
+      const pushedToTeamSkus = new Set(
+        assignments
+          .filter(a => a.division === division && myTeamMemberIds.has(a.memberId))
+          .map(a => a.sku.toLowerCase())
+      );
+      const mySkus = new Set(
+        assignments
+          .filter(a => a.division === division && a.memberId === myMemberId)
+          .map(a => a.sku.toLowerCase())
+      );
+      const withMeSkus = new Set([...mySkus].filter(s => !pushedToTeamSkus.has(s)));
+      distributedSkus = pushedToTeamSkus.size;
+      remainingWithManager = withMeSkus.size;
+      distributionBreakdown = myTeam
+        .filter(m => m.id !== myMemberId)
+        .map(m => {
+          const seen = new Set();
+          const count = assignments.filter(a => {
+            if (a.memberId !== m.id || a.division !== division) return false;
+            const key = a.sku.toLowerCase();
+            if (seen.has(key)) return false;
+            seen.add(key); return true;
+          }).length;
+          return { name: m.name, count };
+        })
+        .filter(x => x.count > 0)
+        .sort((a, b) => b.count - a.count);
+    }
+    const [showDistBreakdown, setShowDistBreakdown] = useState(false);
     const kpis = [
-      { lab: "Products", val: total, sub: division, ic: I.box },
+      { lab: "Total Products", val: total, sub: division, ic: I.box },
+      { lab: "With Manager", val: remainingWithManager, sub: isMasterOrAdminView ? "not yet assigned" : "remaining with me", ic: I.layers, color: remainingWithManager > 0 ? "var(--peach-ink)" : "var(--sage-ink)" },
       { lab: "Listing complete", val: done, sub: "all stages done", ic: I.check, color: "var(--sage-ink)" },
-      { lab: "In production", val: prog, sub: `${none} not started`, ic: I.gear, color: "var(--sky-ink)" },
-      { lab: "Cards dispatched", val: dispatched, sub: `${received} receipts confirmed`, ic: I.truck },
       { lab: "Issues", val: `${missing} / ${damaged}`, sub: `${issues.length} flagged rows`, ic: I.alert, color: (missing + damaged) ? "var(--rose-ink)" : "var(--ink)" },
     ];
 
@@ -2023,6 +2126,56 @@
       <div>
         <div className="grid kpis">
           {kpis.map((k, i) => (<div className="card kpi" key={i}><div className="kico">{k.ic({})}</div><div className="lab">{k.lab}</div><div className="val" style={{ color: k.color || "var(--ink)" }}>{k.val}</div><div className="sub">{k.sub}</div></div>))}
+          {/* Distributed to Team — standalone card with dropdown */}
+          <div className="card kpi" style={{ position: "relative" }}>
+            <div className="kico">{I.gear({})}</div>
+            <div className="lab">Distributed to Team</div>
+            <div className="val" style={{ color: "var(--sky-ink)" }}>{distributedSkus}</div>
+            <div className="sub" style={{ display: "flex", alignItems: "center", gap: 6, cursor: distributionBreakdown?.length > 0 ? "pointer" : "default" }}
+              onClick={() => distributionBreakdown?.length > 0 && setShowDistBreakdown(s => !s)}>
+              {distributionBreakdown?.length > 0
+                ? <><span>{distributionBreakdown.length} member{distributionBreakdown.length !== 1 ? "s" : ""}</span><span style={{ fontSize: 10, color: "var(--faint)" }}>{showDistBreakdown ? "▲" : "▼"}</span></>
+                : <span>{teamMembers.filter(m => m.division === division).length} members</span>}
+            </div>
+            {showDistBreakdown && distributionBreakdown?.length > 0 && (
+              <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 12, boxShadow: "var(--shadow-lg)", zIndex: 30, padding: "8px 0", minWidth: 180 }}>
+                {distributionBreakdown.map((x, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 14px", borderBottom: i < distributionBreakdown.length - 1 ? "1px solid var(--line)" : "none" }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>{x.name}</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "var(--sky-ink)", background: "var(--sky-bg)", borderRadius: 999, padding: "2px 10px" }}>{x.count}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="card pad" style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: "var(--ink)", whiteSpace: "nowrap" }}>SKU Distribution</div>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ display: "flex", height: 10, borderRadius: 99, overflow: "hidden", background: "var(--line2)" }}>
+              {total > 0 && <>
+                <div style={{ width: `${(distributedSkus / total) * 100}%`, background: "var(--sky)", transition: "width .4s" }} title={`Distributed: ${distributedSkus}`} />
+                <div style={{ flex: 1, background: "var(--peach)", transition: "width .4s" }} title={`With manager: ${remainingWithManager}`} />
+              </>}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 18, flexShrink: 0, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 10, height: 10, borderRadius: 3, background: "var(--sky)", display: "inline-block" }} />
+              <span style={{ color: "var(--muted)" }}>Distributed</span>
+              <b style={{ color: "var(--sky-ink)" }}>{distributedSkus}</b>
+            </span>
+            <span style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 10, height: 10, borderRadius: 3, background: "var(--peach)", display: "inline-block" }} />
+              <span style={{ color: "var(--muted)" }}>With manager</span>
+              <b style={{ color: "var(--peach-ink)" }}>{remainingWithManager}</b>
+            </span>
+            <span style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ color: "var(--muted)" }}>Total</span>
+              <b>{total}</b>
+            </span>
+          </div>
         </div>
 
         {issues.length > 0 && (
@@ -2051,7 +2204,13 @@
                   <option value="">— all set no. —</option>
                   {setNoOptions.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
-                {hasFilters && <button className="ghost" style={{ padding: "6px 10px", fontSize: 11.5 }} onClick={() => { setFVendor(""); setFSetNo(""); }}>Clear</button>}
+                {myTeam.length > 0 && (
+                  <select value={fMember} onChange={e => setFMember(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 11.5, color: fMember ? "var(--ink)" : "var(--muted)" }}>
+                    <option value="">— all my team —</option>
+                    {myTeam.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </select>
+                )}
+                {hasFilters && <button className="ghost" style={{ padding: "6px 10px", fontSize: 11.5 }} onClick={() => { setFVendor(""); setFSetNo(""); setFMember(""); }}>Clear</button>}
                 <span className="hint" style={{ whiteSpace: "nowrap" }}>manufacturing → listing → dispatch</span>
               </div>
             </div>
@@ -2133,6 +2292,9 @@
       </div>
     );
   }
+
+
+
 
   /* ---------------- PRODUCTS ---------------- */
   // function Products({ division, products, vendors, onUpsert, onStage, onStageBulk, onQC, onRemove, addVendor, allowedStages }) {
@@ -2876,6 +3038,7 @@
     const [newName, setNewName] = useState(""), [newEmail, setNewEmail] = useState(""), [newPass, setNewPass] = useState(""), [newRole, setNewRole] = useState("backend"), [addErr, setAddErr] = useState("");
     const [addMsg, setAddMsg] = useState("");
     const [selMember, setSelMember] = useState("");
+    // const [selStage, setSelStage] = useState("");
     const [selVendor, setSelVendor] = useState("");
     const [selSkus, setSelSkus] = useState([]);
     const [expandedMember, setExpandedMember] = useState(null);
@@ -2891,15 +3054,66 @@
     const divMembers = isMasterOrAdmin
       ? teamMembers
       : teamMembers.filter(m => m.division === division && m.managerId === myMemberId);
+    const myOwnRecord = useMemo(() => teamMembers.find(m => m.id === myMemberId), [teamMembers, myMemberId]);
+    // Assignable list = my direct reports + myself (so a manager can keep some SKUs for their own work)
+    const assignableMembers = useMemo(() => {
+      if (isMasterOrAdmin) return divMembers;
+      const list = [...divMembers];
+      if (myOwnRecord && !list.some(m => m.id === myOwnRecord.id)) list.push(myOwnRecord);
+      return list;
+    }, [divMembers, myOwnRecord, isMasterOrAdmin]);
     const divAssignments = assignments.filter(a => a.division === division);
     const divAllProducts = useMemo(() => allProducts.filter(p => p.division === division), [allProducts, division]);
-    const filteredProducts = useMemo(() => divAllProducts.filter(p => !selVendor || p.vendor === selVendor), [divAllProducts, selVendor]);
 
-    const availableSkus = useMemo(() => {
-      return filteredProducts
-        .filter(p => !(selMember && divAssignments.some(a => a.memberId === selMember && a.sku === p.sku)))
-        .map(p => p.sku);
-    }, [filteredProducts, selMember, divAssignments]);
+    // SKUs already assigned to ANY member under this manager
+    // Master has zero restriction — no lock applies, ever.
+    // Managers (role:member with "assign") lock per-card WITHIN THEIR OWN scope only —
+    // other managers' teams assigning the same card doesn't block this manager.
+    const myAssignedSkus = useMemo(() => {
+      if (isMasterOrAdmin) return new Set(); // unused for master
+      const myTeamIds = new Set(assignableMembers.map(m => m.id));
+      return new Set(
+        divAssignments
+          .filter(a => myTeamIds.has(a.memberId))
+          .map(a => a.sku.trim().toLowerCase())
+      );
+    }, [divAssignments, assignableMembers, isMasterOrAdmin]);
+
+    const isLocked = (sku) => isMasterOrAdmin ? false : myAssignedSkus.has(sku.trim().toLowerCase());
+    // Manager's remaining pool = cards NOT assigned to anyone yet
+    const managerPool = useMemo(() => {
+      if (isMasterOrAdmin) {
+        // Master sees ALL products always — no SKU is ever hidden from master
+        return divAllProducts;
+      } else {
+        // What master assigned TO me (memberId = myMemberId)
+        const myReceivedSkus = new Set(
+          divAssignments
+            .filter(a => a.memberId === myMemberId)
+            .map(a => a.sku.trim().toLowerCase())
+        );
+        // What I have already pushed to my team members (managerId = myMemberId)
+        const myPushedSkus = new Set(
+          divAssignments
+            .filter(a => a.managerId === myMemberId)
+            .map(a => a.sku.trim().toLowerCase())
+        );
+        // Pool = what I received minus what I already pushed
+        return divAllProducts.filter(p =>
+          myReceivedSkus.has(p.sku.trim().toLowerCase()) &&
+          !myPushedSkus.has(p.sku.trim().toLowerCase())
+        );
+      }
+    }, [divAllProducts, divAssignments, isMasterOrAdmin, myMemberId]);
+
+    // For the assignment picker, show ONLY manager's unassigned pool (filtered by vendor)
+    const filteredProducts = useMemo(() =>
+      managerPool.filter(p => !selVendor || p.vendor === selVendor),
+      [managerPool, selVendor]);
+
+    const availableSkus = useMemo(() =>
+      filteredProducts.map(p => p.sku),
+      [filteredProducts]);
 
     // const addMember = async () => {
     //   if (!newName.trim() || !newEmail.trim() || !newPass.trim()) { setAddErr("Name, email and password are required."); return; }
@@ -3003,13 +3217,99 @@
     };
 
     const assignSku = () => {
-      if (!selMember || selSkus.length === 0) { setAssErr("Select a member and at least one SKU."); return; }
-      const already = selSkus.filter(sku => divAssignments.find(a => a.memberId === selMember && a.sku === sku));
-      const toAdd = selSkus.filter(sku => !already.includes(sku));
-      if (toAdd.length === 0) { setAssErr("All selected SKUs are already assigned to this member."); return; }
-      const newRows = toAdd.map(sku => ({ id: uid(), memberId: selMember, sku, division, assignedAt: now() }));
+      if (!selMember || selSkus.length === 0) {
+        setAssErr("Select a member and at least one SKU.");
+        return;
+      }
+
+      // Global cap: total assignment rows in this division can never exceed the
+      // total number of products in this division — one card, one assignment slot.
+      // Master is exempt (fully unrestricted); managers are checked against the
+      // division-wide total, not just their own pool, since the cap is global.
+      // Cap only applies to master-level assignments (master→anyone).
+      // Manager re-assignments don't consume new slots — same card, just redistributed.
+      // if (isMasterOrAdmin) {
+      //   const masterAssignedSkus = new Set(
+      //     divAssignments
+      //       .filter(a => a.managerId === "master")
+      //       .map(a => a.sku.trim().toLowerCase())
+      //   );
+      //   if (masterAssignedSkus.size >= divAllProducts.length) {
+      //     setAssErr("No assignment slots left — every card is already distributed.");
+      //     return;
+      //   }
+      // }
+
+      // Always deduplicate — no one (not even master) can assign a SKU
+      // that is already assigned to this specific member.
+      // const alreadyThisMember = new Set(
+      //   divAssignments
+      //     .filter(a => a.memberId === selMember)
+      //     .map(a => a.sku.trim().toLowerCase())
+      // );
+
+      const alreadyThisMember = new Set(
+        divAssignments
+          .filter(a => a.memberId === selMember)
+          .map(a => a.sku.trim().toLowerCase())
+      );
+
+      // For managers: also block SKUs already pushed to anyone else
+      const alreadyPushedByMe = !isMasterOrAdmin
+        ? new Set(
+          divAssignments
+            .filter(a => a.managerId === myMemberId)
+            .map(a => a.sku.trim().toLowerCase())
+        )
+        : new Set();
+
+      const blocked = selSkus.filter(sku =>
+        alreadyThisMember.has(sku.trim().toLowerCase()) ||
+        alreadyPushedByMe.has(sku.trim().toLowerCase())
+      );
+      let toAdd = selSkus.filter(sku => !blocked.includes(sku));
+      if (!isMasterOrAdmin) {
+        // Room = how many of my received SKUs I haven't pushed yet
+        const myReceivedSkus = new Set(
+          divAssignments
+            .filter(a => a.memberId === myMemberId)
+            .map(a => a.sku.trim().toLowerCase())
+        );
+        const myPushedSkus = new Set(
+          divAssignments
+            .filter(a => a.managerId === myMemberId)
+            .map(a => a.sku.trim().toLowerCase())
+        );
+        const roomLeft = [...myReceivedSkus].filter(s => !myPushedSkus.has(s)).length;
+        if (toAdd.length > roomLeft) {
+          toAdd = toAdd.slice(0, roomLeft);
+        }
+      }
+
+      if (toAdd.length === 0) {
+        setAssErr(blocked.length
+          ? "All selected SKUs are already assigned to your team."
+          : "No room left to assign — division-wide card limit reached.");
+        return;
+      }
+
+      // Task is implicit — whatever stage(s) this manager/member is responsible
+      // for, taken straight from their own profile. Master has no fixed stage
+      // scope, so master's rows are tagged "all".
+      const myStageLabel = isMasterOrAdmin ? "all" : (auth.stages || "");
+
+      const newRows = toAdd.map(sku => ({
+        id: uid(),
+        memberId: selMember,
+        managerId: isMasterOrAdmin ? "master" : myMemberId,
+        sku,
+        stage: myStageLabel,
+        division,
+        assignedAt: now()
+      }));
       onSaveAssignments([...assignments, ...newRows]);
-      setSelSkus([]); setAssErr(already.length ? `${already.length} already assigned, skipped.` : "");
+      setSelSkus([]);
+      setAssErr(blocked.length ? `${blocked.length} already assigned to your team, skipped.` : "");
     };
 
     const unassign = (id, sku, memberName) => {
@@ -3043,8 +3343,10 @@
 
     const [selectedStages, setSelectedStages] = useState([]);
     const allStages = STAGES.filter(s => s.k !== "qc" && s.k !== "scan");
-    const allPermissions = [...allStages, { k: "bulk", n: "Bulk Upload" }, { k: "assign", n: "Assign Work" }];
-
+    const allPermissions = isMasterOrAdmin
+      ? [...allStages, { k: "bulk", n: "Bulk Upload" }, { k: "assign", n: "Assign Work" }]
+      : allStages.filter(s => (auth.stages || "").split(",").map(x => x.trim()).includes(s.k));
+    // const assignableStages = STAGES.filter(s => s.k !== "qc" && s.k !== "scan");
     return (
       <div>
         <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
@@ -3097,7 +3399,14 @@
                   </thead>
                   <tbody>
                     {divMembers.map(m => {
-                      const count = assignments.filter(a => a.memberId === m.id).length;
+                      const seen = new Set();
+                      const count = assignments.filter(a => {
+                        if (a.memberId !== m.id) return false;
+                        const key = a.sku.trim().toLowerCase();
+                        if (seen.has(key)) return false;
+                        seen.add(key);
+                        return true;
+                      }).length;
                       return (
                         <tr key={m.id}>
                           <td><b>{m.name}</b></td>
@@ -3162,11 +3471,31 @@
           <div>
             <div className="card pad" style={{ marginBottom: 16 }}>
               <h3 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 600 }}>Assign SKU to member</h3>
+              {!isMasterOrAdmin && (
+                <div style={{ display: "flex", gap: 16, marginBottom: 14, flexWrap: "wrap" }}>
+                  <div style={{ background: "var(--sky-bg)", border: "1px solid var(--sky)", borderRadius: 10, padding: "8px 14px", fontSize: 12 }}>
+                    <span style={{ color: "var(--muted)" }}>Received from master</span>
+                    <b style={{ color: "var(--sky-ink)", marginLeft: 6 }}>
+                      {new Set(divAssignments.filter(a => a.memberId === myMemberId).map(a => a.sku.toLowerCase())).size}
+                    </b>
+                  </div>
+                  <div style={{ background: "var(--sage-bg)", border: "1px solid var(--sage)", borderRadius: 10, padding: "8px 14px", fontSize: 12 }}>
+                    <span style={{ color: "var(--muted)" }}>Pushed to team</span>
+                    <b style={{ color: "var(--sage-ink)", marginLeft: 6 }}>
+                      {new Set(divAssignments.filter(a => a.managerId === myMemberId).map(a => a.sku.toLowerCase())).size}
+                    </b>
+                  </div>
+                  <div style={{ background: "var(--peach-bg)", border: "1px solid var(--peach)", borderRadius: 10, padding: "8px 14px", fontSize: 12 }}>
+                    <span style={{ color: "var(--muted)" }}>Remaining with me</span>
+                    <b style={{ color: "var(--peach-ink)", marginLeft: 6 }}>{managerPool.length}</b>
+                  </div>
+                </div>
+              )}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <label className="fld">Team member
                   <select value={selMember} onChange={e => { setSelMember(e.target.value); setSelSkus([]); setAssErr(""); }}>
                     <option value="">— select member —</option>
-                    {divMembers.map(m => <option key={m.id} value={m.id}>{m.name} ({m.role})</option>)}
+                    {assignableMembers.map(m => <option key={m.id} value={m.id}>{m.name}{m.id === myMemberId ? " (myself)" : ""}</option>)}
                   </select>
                 </label>
                 <label className="fld">Vendor (filter)
@@ -3175,6 +3504,7 @@
                     {vendors.map(v => <option key={v}>{v}</option>)}
                   </select>
                 </label>
+
               </div>
               <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
                 <button className="ghost" onClick={() => selectTop(10)} disabled={!selMember || availableSkus.filter(sku => !selSkus.includes(sku)).length === 0}>+ 10</button>
@@ -3186,35 +3516,176 @@
                 </div>
               </div>
               <label className="fld" style={{ marginTop: 10 }}>
-                SKUs to assign
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6, maxHeight: 190, overflowY: "auto", padding: 8, border: "1px solid var(--line2)", borderRadius: 9, background: "var(--card)" }}>
+                SKUs to assign <span style={{ color: "var(--muted)", fontWeight: 400 }}>
+                  — {filteredProducts.length} remaining in pool
+                  {!isMasterOrAdmin && ` · ${divAssignments.filter(a => a.managerId === myMemberId).length} already assigned`}
+                </span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6, maxHeight: 220, overflowY: "auto", padding: 8, border: "1px solid var(--line2)", borderRadius: 9, background: "var(--card)" }}>
                   {filteredProducts.length === 0 ? (
                     <div style={{ fontSize: 12.5, color: "var(--faint)", padding: "8px 4px" }}>
                       {selVendor
                         ? `No products found with vendor "${selVendor}" yet. Add or import products under this vendor first, or clear the vendor filter.`
-                        : "No products available in this division yet."}
+                        : isMasterOrAdmin
+                          ? "No products available in this division yet."
+                          : "Your team's pool is empty — every card you can assign has already been given to your team."}
                     </div>
                   ) : filteredProducts.map(p => {
-                    const isAlready = !!selMember && divAssignments.some(a => a.memberId === selMember && a.sku === p.sku);
+                    // Already assigned to the currently selected member
+                    const isAlreadyThisMember = !!selMember &&
+                      divAssignments.some(a => a.memberId === selMember && a.sku === p.sku);
+
+                    // For master, "other" assignments are just informational, never blocking.
+                    const otherAssignments = divAssignments.filter(
+                      a => a.memberId !== selMember &&
+                        a.sku === p.sku &&
+                        // exclude the manager's own "received from master" row
+                        a.memberId !== myMemberId
+                    );
+                    const otherNames = otherAssignments.map(a => {
+                      const m = assignableMembers.find(x => x.id === a.memberId);
+                      return m ? m.name : null;
+                    }).filter(Boolean);
+                    const isAssignedToOther = otherNames.length > 0;
+
+                    const isSelected = selSkus.includes(p.sku);
+
+                    let bgColor = "var(--card)";
+                    let borderColor = "var(--line2)";
+                    let textColor = "var(--ink)";
+
+                    if (isAlreadyThisMember) {
+                      bgColor = "var(--sage-bg)";
+                      borderColor = "var(--sage)";
+                      textColor = "var(--sage-ink)";
+                    } else if (isSelected) {
+                      bgColor = "var(--sky-bg)";
+                      borderColor = "var(--sky)";
+                      textColor = "var(--sky-ink)";
+                    } else if (isAssignedToOther) {
+                      // Info only — still white/selectable, just shows a note below
+                      bgColor = "var(--card)";
+                      borderColor = "var(--line2)";
+                      textColor = "var(--ink)";
+                    }
+
                     return (
-                      <label key={p.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500, color: isAlready ? "var(--faint)" : "var(--ink)", background: selSkus.includes(p.sku) ? "var(--sage-bg)" : "var(--card)", border: `1px solid ${selSkus.includes(p.sku) ? "var(--sage)" : "var(--line2)"}`, borderRadius: 8, padding: "5px 10px", cursor: isAlready ? "default" : "pointer" }}>
-                        <input type="checkbox" disabled={isAlready} checked={selSkus.includes(p.sku)} style={{ width: 13, height: 13, accentColor: "var(--sage-deep)" }}
-                          onChange={e => setSelSkus(prev => e.target.checked ? [...prev, p.sku] : prev.filter(s => s !== p.sku))} />
-                        {p.sku}{p.name ? " · " + p.name : ""}{isAlready ? " (assigned)" : ""}
+                      <label key={p.id} style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 12, fontWeight: 500, color: textColor, background: bgColor, border: `1px solid ${borderColor}`, borderRadius: 8, padding: "6px 10px", cursor: isAlreadyThisMember ? "default" : "pointer", minWidth: 160 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <input
+                            type="checkbox"
+                            disabled={isAlreadyThisMember}
+                            checked={isSelected || isAlreadyThisMember}
+                            style={{ width: 13, height: 13, accentColor: "var(--sage-deep)" }}
+                            onChange={e => {
+                              if (isAlreadyThisMember) return;
+                              setSelSkus(prev => e.target.checked ? [...prev, p.sku] : prev.filter(s => s !== p.sku));
+                            }}
+                          />
+                          <span style={{ fontWeight: 600 }}>{p.sku}</span>
+                          {p.name && <span style={{ color: "var(--muted)", fontWeight: 400 }}>· {p.name}</span>}
+                        </div>
+                        {isAlreadyThisMember && (
+                          <span style={{ fontSize: 10, color: "var(--sage-ink)", fontWeight: 700, paddingLeft: 19 }}>✓ Already assigned</span>
+                        )}
+                        {isAssignedToOther && !isAlreadyThisMember && (
+                          <span style={{ fontSize: 10, color: "var(--peach-ink)", fontWeight: 700, paddingLeft: 19 }}>
+                            ⚠ With: {otherNames.join(", ")}
+                          </span>
+                        )}
                       </label>
                     );
                   })}
                 </div>
               </label>
+
+              {/* Already assigned cards — read-only reference for manager */}
+
+              {/* Already assigned cards — read-only reference for manager */}
+              {/* Already pushed by this manager — reference panel */}
+              {!isMasterOrAdmin && divAssignments.filter(a => a.managerId === myMemberId).length > 0 && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".6px", marginBottom: 6 }}>
+                    Already assigned by you ({new Set(divAssignments.filter(a => a.managerId === myMemberId).map(a => a.sku.toLowerCase())).size} cards pushed)
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 130, overflowY: "auto", padding: 8, border: "1px solid var(--sage)", borderRadius: 9, background: "var(--sage-bg)" }}>
+                    {[...new Map(
+                      divAssignments
+                        .filter(a => a.managerId === myMemberId)
+                        .map(a => [a.sku.toLowerCase(), a])
+                    ).values()].map(a => {
+                      const prod = divAllProducts.find(p => p.sku.toLowerCase() === a.sku.toLowerCase());
+                      const recipient = assignableMembers.find(x => x.id === a.memberId);
+                      return (
+                        <div key={a.id} style={{ display: "flex", flexDirection: "column", gap: 2, background: "var(--card)", border: "1px solid var(--sage)", borderRadius: 8, padding: "5px 10px", fontSize: 11.5 }}>
+                          <span style={{ fontWeight: 700, color: "var(--ink)" }}>{a.sku}{prod?.name ? " · " + prod.name : ""}</span>
+                          <span style={{ fontSize: 10, color: "var(--sage-ink)", fontWeight: 600 }}>→ {recipient?.name || "—"}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Already assigned cards — read-only reference for master */}
+              {isMasterOrAdmin && divAllProducts.filter(p => divAssignments.some(a => a.sku.toLowerCase() === p.sku.toLowerCase() && a.managerId === "master")).length > 0 && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".6px", marginBottom: 6 }}>
+                    Already assigned ({divAllProducts.filter(p => divAssignments.some(a => a.sku.toLowerCase() === p.sku.toLowerCase())).length} cards)
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 130, overflowY: "auto", padding: 8, border: "1px solid var(--peach)", borderRadius: 9, background: "var(--peach-bg)" }}>
+                    {divAllProducts.filter(p =>
+                      divAssignments.some(a => a.sku.toLowerCase() === p.sku.toLowerCase() && a.managerId === "master")
+                    ).map(p => {
+                      const seenNames = new Set();
+                      const whoList = divAssignments
+                        .filter(a => a.sku.toLowerCase() === p.sku.toLowerCase())
+                        .map(a => {
+                          const m = assignableMembers.find(x => x.id === a.memberId);
+                          return m ? m.name : null;
+                        })
+                        .filter(name => {
+                          if (!name || seenNames.has(name)) return false;
+                          seenNames.add(name);
+                          return true;
+                        });
+                      return (
+                        <div key={p.id} style={{ display: "flex", flexDirection: "column", gap: 2, background: "var(--card)", border: "1px solid var(--peach)", borderRadius: 8, padding: "5px 10px", fontSize: 11.5 }}>
+                          <span style={{ fontWeight: 700, color: "var(--ink)" }}>{p.sku}{p.name ? " · " + p.name : ""}</span>
+                          <span style={{ fontSize: 10, color: "var(--peach-ink)", fontWeight: 600 }}>→ {whoList.join(", ")}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <button className="primary" style={{ marginTop: 12 }} onClick={assignSku}>Assign{selSkus.length > 0 ? ` (${selSkus.length})` : ""}</button>
               {assErr && <div style={{ color: "var(--rose-ink)", fontSize: 12, marginTop: 8 }}>{assErr}</div>}
               {assMsg && <div style={{ color: "var(--sage-ink)", fontSize: 12, marginTop: 8, fontWeight: 600 }}>{assMsg}</div>}
             </div>
 
-            {divMembers.length === 0
+            {assignableMembers.length === 0
               ? <div className="card empty">Add team members first before assigning SKUs.</div>
-              : divMembers.map(m => {
-                const myAss = divAssignments.filter(a => a.memberId === m.id);
+              : assignableMembers.map(m => {
+                const seenSkus = new Set();
+                // For the manager themselves, show only their remaining unassigned pool
+                // For others, show their full assigned list
+                const isManagerSelf = !isMasterOrAdmin && m.id === myMemberId;
+                const pushedByManagerSkus = isManagerSelf ? new Set(
+                  divAssignments
+                    .filter(a => a.managerId === myMemberId)
+                    .map(a => a.sku.trim().toLowerCase())
+                ) : null;
+
+                const myAss = divAssignments.filter(a => {
+                  if (a.memberId !== m.id) return false;
+                  const key = a.sku.trim().toLowerCase();
+                  if (seenSkus.has(key)) return false;
+                  seenSkus.add(key);
+                  // For the manager themselves: exclude SKUs already pushed to team
+                  if (isManagerSelf && pushedByManagerSkus.has(key)) return false;
+                  return true;
+                });
                 const isOpen = expandedMember === m.id;
                 return (
                   <div key={m.id} className="card" style={{ marginBottom: 10, overflow: "hidden" }}>
@@ -3230,13 +3701,17 @@
                         ? <div style={{ padding: "14px 18px", color: "var(--faint)", fontSize: 13, borderTop: "1px solid var(--line)" }}>No SKUs assigned yet.</div>
                         : <div className="tbl-wrap" style={{ border: 0, borderRadius: 0, boxShadow: "none", borderTop: "1px solid var(--line)" }}>
                           <table>
-                            <thead><tr><th>SKU</th><th>Product name</th><th>Vendor</th><th>Pipeline</th><th>Assigned</th><th></th></tr></thead>
+                            <thead><tr><th>SKU</th><th>Task</th><th>Product name</th><th>Vendor</th><th>Pipeline</th><th>Assigned</th><th></th></tr></thead>
                             <tbody>
                               {myAss.map(a => {
                                 const prod = divAllProducts.find(p => p.sku === a.sku);
+                                const stageLabel = a.stage === "all"
+                                  ? "All stages"
+                                  : (a.stage || "").split(",").map(k => STAGES.find(s => s.k === k)?.n || k).filter(Boolean).join(", ") || "—";
                                 return (
                                   <tr key={a.id}>
                                     <td><span className="psku">{a.sku}</span></td>
+                                    <td><span className="chip c-prog"><span className="dot" />{stageLabel}</span></td>
                                     <td>{prod?.name || "—"}</td>
                                     <td className="tag">{prod?.vendor || "—"}</td>
                                     <td>{prod ? <Pipe p={prod} /> : "—"}</td>
@@ -3349,7 +3824,15 @@
     };
 
     const getAssignedCount = (member) => {
-      return assignments.filter(a => a.memberId === member.id && a.division === division).length;
+      const seen = new Set();
+      return assignments
+        .filter(a => a.memberId === member.id && a.division === division)
+        .filter(a => {
+          const key = a.sku.trim().toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }).length;
     };
 
     const downloadReport = (member, rows) => {
