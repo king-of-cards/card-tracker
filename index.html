@@ -1736,6 +1736,17 @@
     }, [auth]);
     useEffect(() => { load(); }, [load]);
 
+    // Auto-sync every 90 seconds so users never work on stale data
+    useEffect(() => {
+      const interval = setInterval(() => {
+        // Only sync if no bulk operation is in progress
+        if (!bulkLockRef.current) {
+          load();
+        }
+      }, 90000);
+      return () => clearInterval(interval);
+    }, [load]);
+
     const logAudit = useCallback(async (action, entity, detail) => {
       const e = { id: uid(), at: now(), actor: operator || "Unattributed", action, entity, detail, division };
       setAudit(prev => { const next = [e, ...prev].slice(0, 800); return next; });
@@ -1878,14 +1889,10 @@
       const p = next.find(x => x.id === pid); logAudit("Final audit", `${p.name || p.sku || "product"}`, `Verdict: ${patch.verdict || p.verdict || "—"}`);
     }, [saveProducts, logAudit]);
     const patchStore = useCallback(async (pid, store, patch) => {
-      if (bulkLockRef.current) {
-        console.warn("Skipped patchStore — bulk stage update in progress");
-        return;
-      }
       const base = productsRef.current;
       const next = base.map(p => p.id !== pid ? p : { ...p, stores: { ...p.stores, [store]: { ...p.stores[store], ...patch, at: now() } }, updatedAt: now() });
       productsRef.current = next;
-      await saveProducts(next);
+      setProducts(next);  // update local state only — no batchUpsertProducts
       const updated = next.find(x => x.id === pid);
       await gsPost("upsertStore", {
         productId: pid,
@@ -1919,12 +1926,24 @@
       }
     }, [load]);
 
+    const assignmentSaveLockRef = useRef(false);
+
     const saveAssignments = useCallback(async (next) => {
+      // Prevent two simultaneous assignment saves from racing
+      if (assignmentSaveLockRef.current) {
+        alert("Another assignment save is in progress — please wait a moment and try again.");
+        return;
+      }
+      assignmentSaveLockRef.current = true;
       setAssignments(next);
-      const res = await gsPost("setAssignments", next);
-      if (!res || res.ok === false) {
-        alert("Could not save this assignment to the server — re-syncing.");
-        await load();
+      try {
+        const res = await gsPost("setAssignments", next);
+        if (!res || res.ok === false) {
+          alert("Could not save this assignment to the server — re-syncing.");
+          await load();
+        }
+      } finally {
+        assignmentSaveLockRef.current = false;
       }
     }, [load]);
 
@@ -1990,14 +2009,28 @@
       if (!auth) return base;
       const isMasterOrAdmin = auth.role === "master" || auth.role === "admin";
       if (isMasterOrAdmin) return base;
-      // member — find their record by email for reliable ID matching
+
       const myMember = window.__teamMembers?.find(m => m.email && auth.email && m.email.toLowerCase() === auth.email.toLowerCase());
       const myId = myMember?.id || auth.name.toLowerCase().replace(/\s+/g, "_");
-      // Get this member's assignments with their specific stages
-      const myAssignments = assignments.filter(a => a.memberId === myId);
+
+      const myAssignments = assignments.filter(a => a.memberId === myId && a.division === division);
       if (myAssignments.length === 0) return [];
-      const myAssignedSkus = myAssignments.map(a => a.sku.toLowerCase());
-      return base.filter(p => myAssignedSkus.includes(p.sku.toLowerCase()));
+
+      const myAssignedSkus = new Set(myAssignments.map(a => a.sku.toLowerCase()));
+
+      // For managers with assign access: subtract cards already pushed to team
+      const hasAssignAccess = (auth.stages || "").split(",").map(s => s.trim()).includes("assign");
+      if (hasAssignAccess) {
+        const pushedSkus = new Set(
+          assignments
+            .filter(a => a.managerId === myId && a.division === division)
+            .map(a => a.sku.toLowerCase())
+        );
+        const remainingSkus = [...myAssignedSkus].filter(sku => !pushedSkus.has(sku));
+        return base.filter(p => remainingSkus.includes(p.sku.toLowerCase()));
+      }
+
+      return base.filter(p => myAssignedSkus.has(p.sku.toLowerCase()));
     }, [products, division, auth, assignments]);
     const counts = useMemo(() => { const o = {}; DIVISIONS.forEach(d => o[d] = products.filter(p => p.division === d).length); return o; }, [products]);
     const openIssues = useMemo(() => { const l = []; divProducts.forEach(p => STORES.forEach(st => { const s = p.stores[st]; if (s && (s.missing > 0 || s.damaged > 0)) l.push({ p, store: st, s }); })); return l; }, [divProducts]);
@@ -4881,7 +4914,7 @@
     );
   }
 
-  ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+
 
   ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 </script>
