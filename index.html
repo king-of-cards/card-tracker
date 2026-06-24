@@ -2578,8 +2578,10 @@
       const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase(); if (!t.includes(q.toLowerCase())) return false;
       if (hasAssignAccess) {
         const isAssigned = !!skuAssignedTo[p.sku.trim().toLowerCase()];
-        if (assignTab === "assigned" && !isAssigned) return false;
         if (assignTab === "notassigned" && isAssigned) return false;
+        if (assignTab === "assigned" && !isAssigned) return false;
+        if (assignTab === "completed" && (!isAssigned || productState(p) !== "done")) return false;
+        if (assignTab === "pending" && (!isAssigned || productState(p) === "done")) return false;
       }
       return true;
     });
@@ -2587,14 +2589,26 @@
     return (
       <div>
         {hasAssignAccess && (
-          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-            {[["notassigned", "Not Assigned"], ["assigned", "Assigned"]].map(([k, n]) => {
-              const count = products.filter(p => {
-                const isAssigned = !!skuAssignedTo[p.sku.trim().toLowerCase()];
-                return k === "assigned" ? isAssigned : !isAssigned;
-              }).length;
+          <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+            {[
+              ["notassigned", "Not Assigned"],
+              ["assigned", "Assigned"],
+              ["completed", "Completed"],
+              ["pending", "Pending"],
+            ].map(([k, n]) => {
+              const assignedProducts = products.filter(p => !!skuAssignedTo[p.sku.trim().toLowerCase()]);
+              let count;
+              if (k === "notassigned") count = products.filter(p => !skuAssignedTo[p.sku.trim().toLowerCase()]).length;
+              else if (k === "assigned") count = assignedProducts.length;
+              else if (k === "completed") count = assignedProducts.filter(p => productState(p) === "done").length;
+              else if (k === "pending") count = assignedProducts.filter(p => productState(p) !== "done").length;
               return (
-                <button key={k} onClick={() => { setAssignTab(k); setPage(1); }} style={{ padding: "8px 16px", borderRadius: 10, border: "1px solid var(--line2)", background: assignTab === k ? "var(--ink)" : "var(--card)", color: assignTab === k ? "#fff" : "var(--ink)", fontWeight: 600, fontSize: 13 }}>
+                <button key={k} onClick={() => { setAssignTab(k); setPage(1); }} style={{
+                  padding: "8px 16px", borderRadius: 10, border: "1px solid var(--line2)",
+                  background: assignTab === k ? "var(--ink)" : "var(--card)",
+                  color: assignTab === k ? "#fff" : "var(--ink)",
+                  fontWeight: 600, fontSize: 13
+                }}>
                   {n} <span style={{ opacity: .7, marginLeft: 4 }}>{count}</span>
                 </button>
               );
@@ -2612,17 +2626,62 @@
               const sugs = products.filter(p => (p.sku + " " + p.name + " " + p.vendor).toLowerCase().includes(q.toLowerCase())).slice(0, 8);
               return sugs.length > 0 ? (
                 <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 12, boxShadow: "var(--shadow-lg)", zIndex: 50, overflow: "hidden" }}>
-                  {sugs.map(p => (
-                    <div key={p.id} onMouseDown={() => { setQ(p.sku); setShowSug(false); }}
-                      style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", cursor: "pointer", borderBottom: "1px solid var(--line)" }}
-                      onMouseEnter={e => e.currentTarget.style.background = "var(--card-2)"}
-                      onMouseLeave={e => e.currentTarget.style.background = "var(--card)"}>
-                      <span className="psku" style={{ flexShrink: 0 }}>{p.sku}</span>
-                      {p.name && <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>{p.name}</span>}
-                      {p.vendor && <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: "auto" }}>{p.vendor}</span>}
-                      {p.set_no && <span className="psku" style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)", flexShrink: 0 }}>{p.set_no}</span>}
-                    </div>
-                  ))}
+                  {sugs.map(p => {
+                    const assignedInfo = skuAssignedTo[p.sku.trim().toLowerCase()] || [];
+                    const uniqueAssignees = [...new Map(assignedInfo.map(a => [a.memberId, a])).values()];
+                    return (
+                      <div key={p.id} onMouseDown={() => { setQ(p.sku); setShowSug(false); }}
+                        style={{ display: "flex", flexDirection: "column", gap: 5, padding: "9px 14px", cursor: "pointer", borderBottom: "1px solid var(--line)" }}
+                        onMouseEnter={e => e.currentTarget.style.background = "var(--card-2)"}
+                        onMouseLeave={e => e.currentTarget.style.background = "var(--card)"}>
+                        {/* Row 1: SKU, name, vendor, set_no */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span className="psku" style={{ flexShrink: 0 }}>{p.sku}</span>
+                          {p.name && <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>{p.name}</span>}
+                          {p.vendor && <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: "auto" }}>{p.vendor}</span>}
+                          {p.set_no && <span className="psku" style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)", flexShrink: 0 }}>{p.set_no}</span>}
+                        </div>
+                        {/* Row 2: assignment info */}
+                        {uniqueAssignees.length > 0 ? (
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 5, paddingLeft: 2 }}>
+                            {uniqueAssignees.map((a, i) => {
+                              const member = teamMembers?.find(m => m.id === a.memberId);
+                              const stagesForMember = assignedInfo
+                                .filter(x => x.memberId === a.memberId)
+                                .map(x => {
+                                  const s = STAGES.find(st => st.k === x.stage);
+                                  return s ? s.n : x.stage;
+                                });
+                              return (
+                                <span key={i} style={{
+                                  display: "inline-flex", alignItems: "center", gap: 4,
+                                  fontSize: 10.5, fontWeight: 600,
+                                  background: "var(--sky-bg)", color: "var(--sky-ink)",
+                                  border: "1px solid var(--sky)", borderRadius: 6, padding: "2px 8px"
+                                }}>
+                                  → {a.memberName}
+                                  {member?.role && (
+                                    <span style={{ fontWeight: 400, color: "var(--muted)", fontSize: 10 }}>
+                                      · {member.role}
+                                    </span>
+                                  )}
+                                  {stagesForMember.length > 0 && (
+                                    <span style={{ fontWeight: 400, color: "var(--sky-ink)", fontSize: 10, opacity: 0.8 }}>
+                                      ({stagesForMember.join(", ")})
+                                    </span>
+                                  )}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 10.5, color: "var(--faint)", paddingLeft: 2 }}>
+                            Not assigned to anyone
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               ) : null;
             })()}
