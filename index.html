@@ -2724,6 +2724,7 @@
                       <div className="done-popup" style={{ position: "absolute", bottom: "calc(100% + 7px)", left: "50%", transform: "translateX(-50%)", background: "var(--ink)", color: "#fff", borderRadius: 9, padding: "8px 12px", fontSize: 11.5, whiteSpace: "nowrap", zIndex: 10, pointerEvents: "none", opacity: 0, transition: "opacity .15s", lineHeight: 1.6, boxShadow: "var(--shadow-lg)" }}>
                         <b style={{ color: "var(--sage)" }}>✓ {s.n}</b><br />
                         {st.person && <span>By: {st.person}<br /></span>}
+                        {s.k === "dimensions" && (st.height || st.width || st.weight) && <span>{st.height || "—"} × {st.width || "—"} cm · {st.weight || "—"} gm<br /></span>}
                         {st.comments && <span>Note: {st.comments}<br /></span>}
                         <span style={{ color: "#B3AFA4" }}>{st.at ? fmt(st.at) : "—"}</span>
                         <div style={{ position: "absolute", bottom: -5, left: "50%", transform: "translateX(-50%)", width: 10, height: 10, background: "var(--ink)", borderRadius: 2, rotate: "45deg" }} />
@@ -2747,39 +2748,86 @@
 
   function StageEditor({ p, stage, idx, onStage, operator }) {
     const cur = p.stages[stage.k];
-    const [status, setStatus] = useState(cur.status), [comments, setComments] = useState(cur.comments), [saved, setSaved] = useState(false);
-    useEffect(() => { setStatus(cur.status); setComments(cur.comments); }, [cur.status, cur.comments]);
+    const [status, setStatus] = useState(cur.status);
+    const [comments, setComments] = useState(cur.comments);
+    const [width, setWidth] = useState(cur.width || "");
+    const [height, setHeight] = useState(cur.height || "");
+    const [weight, setWeight] = useState(cur.weight || "");
+    const [saved, setSaved] = useState(false);
+
+    useEffect(() => {
+      setStatus(cur.status);
+      setComments(cur.comments);
+      if (stage.k === "dimensions") {
+        setWidth(cur.width || "");
+        setHeight(cur.height || "");
+        setWeight(cur.weight || "");
+      }
+    }, [cur.status, cur.comments, cur.width, cur.height, cur.weight]);
+
     const effectivePerson = (operator && operator.trim()) || cur.person || "";
-    const dirty = status !== cur.status || comments !== cur.comments;
+    const isDim = stage.k === "dimensions";
+    const dirty = status !== cur.status || comments !== cur.comments ||
+      (isDim && (width !== (cur.width || "") || height !== (cur.height || "") || weight !== (cur.weight || "")));
+
     const save = () => {
-      // Guard: if the product's authoritative status already moved away from what
-      // this row was editing (e.g. a bulk update landed), refuse to write stale state.
       if (status !== cur.status && cur.status === "Completed") {
         setStatus(cur.status); setComments(cur.comments);
         return;
       }
-      onStage(p.id, stage.k, { status, person: effectivePerson, comments });
+      const patch = { status, person: effectivePerson, comments };
+      if (isDim) { patch.width = width; patch.height = height; patch.weight = weight; }
+      onStage(p.id, stage.k, patch);
       setSaved(true);
       setTimeout(() => setSaved(false), 1400);
     };
+
     if (cur.status === "Completed") return null;
+
     return (
-      <div style={{ background: "var(--card)", border: "1px solid var(--line)", borderRadius: 11, padding: "12px 14px", display: "flex", alignItems: "center", gap: 14, boxShadow: "var(--shadow)" }}>
-        <span className="stnum" style={{ flex: "0 0 22px" }}>{idx}</span>
-        <span style={{ fontWeight: 600, fontSize: 13, width: 150, flexShrink: 0 }}>{stage.n}</span>
-        <select value={status} onChange={e => setStatus(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 9px", background: "var(--bg)", fontSize: 12, width: 130, flexShrink: 0 }}>
-          {STATUSES.map(s => <option key={s}>{s}</option>)}
-        </select>
-        <span className="tag" style={{ width: 110, flexShrink: 0, fontSize: 12, fontWeight: 600, color: "var(--sage-ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={effectivePerson || "no name set"}>
-          {effectivePerson || "—"}
-        </span>
-        <input className="txt" placeholder="comments…" value={comments} onChange={e => setComments(e.target.value)} style={{ fontSize: 12, padding: "6px 9px", flex: 1, minWidth: 0 }} />
-        <span style={{ fontSize: 10.5, color: "var(--faint)", whiteSpace: "nowrap", flexShrink: 0 }}>{cur.at ? fmt(cur.at) : "—"}</span>
-        <button className={"mini " + (saved ? "saved" : "")} disabled={!dirty && !saved} onClick={save} style={{ flexShrink: 0 }}>{saved ? "✓" : "Save"}</button>
+      <div style={{ background: "var(--card)", border: "1px solid var(--line)", borderRadius: 11, padding: "12px 14px", boxShadow: "var(--shadow)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <span className="stnum" style={{ flex: "0 0 22px" }}>{idx}</span>
+          <span style={{ fontWeight: 600, fontSize: 13, width: 150, flexShrink: 0 }}>{stage.n}</span>
+          <select value={status} onChange={e => setStatus(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 9px", background: "var(--bg)", fontSize: 12, width: 130, flexShrink: 0 }}>
+            {STATUSES.map(s => <option key={s}>{s}</option>)}
+          </select>
+          <span className="tag" style={{ width: 110, flexShrink: 0, fontSize: 12, fontWeight: 600, color: "var(--sage-ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={effectivePerson || "no name set"}>
+            {effectivePerson || "—"}
+          </span>
+          <input className="txt" placeholder="comments…" value={comments} onChange={e => setComments(e.target.value)} style={{ fontSize: 12, padding: "6px 9px", flex: 1, minWidth: 0 }} />
+          <span style={{ fontSize: 10.5, color: "var(--faint)", whiteSpace: "nowrap", flexShrink: 0 }}>{cur.at ? fmt(cur.at) : "—"}</span>
+          <button className={"mini " + (saved ? "saved" : "")} disabled={!dirty && !saved} onClick={save} style={{ flexShrink: 0 }}>{saved ? "✓" : "Save"}</button>
+        </div>
+        {isDim && (
+          <div style={{ display: "flex", gap: 10, marginTop: 10, paddingLeft: 36, flexWrap: "wrap" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>
+              Height (cm)
+              <input className="txt" type="number" placeholder="e.g. 14.5" value={height} onChange={e => setHeight(e.target.value)}
+                style={{ fontSize: 12, padding: "6px 9px", width: 110 }} />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>
+              Width (cm)
+              <input className="txt" type="number" placeholder="e.g. 10.5" value={width} onChange={e => setWidth(e.target.value)}
+                style={{ fontSize: 12, padding: "6px 9px", width: 110 }} />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>
+              Weight (gm)
+              <input className="txt" type="number" placeholder="e.g. 85" value={weight} onChange={e => setWeight(e.target.value)}
+                style={{ fontSize: 12, padding: "6px 9px", width: 110 }} />
+            </label>
+            {(cur.height || cur.width || cur.weight) && (
+              <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: 2 }}>
+                <span style={{ fontSize: 11, color: "var(--sage-ink)", fontWeight: 600, background: "var(--sage-bg)", border: "1px solid var(--sage)", borderRadius: 7, padding: "4px 10px" }}>
+                  Saved: {cur.height || "—"} × {cur.width || "—"} cm · {cur.weight || "—"} gm
+                </span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   }
-
   function QCStage({ p, idx, onQC }) {
     const [verdict, setVerdict] = useState(p.verdict || ""), [issues, setIssues] = useState(p.issues || ""), [saved, setSaved] = useState(false);
     useEffect(() => { setVerdict(p.verdict || ""); setIssues(p.issues || ""); }, [p.verdict, p.issues]);
