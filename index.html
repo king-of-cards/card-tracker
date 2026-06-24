@@ -1341,7 +1341,7 @@
     { k: "photography", n: "Photography" },
     { k: "videography", n: "Videography" },
     { k: "videoedit", n: "Video Editing" },
-    { k: "images", n: "Images Uploaded" }, //it has to be vidio  uploaded .
+    { k: "images", n: "Assets Uploaded" },
     { k: "backend", n: "Backend Listing (App)" },
     { k: "website", n: "Website Listing (Shopify)" },
     { k: "scan", n: "Scan Before Dispatch" },
@@ -1411,6 +1411,11 @@
     const role = auth.role || "";
     // master and admin see everything
     if (role === "master" || role === "admin") return true;
+    // qcaudit tab — master/admin always, or member with "qcaudit" in their stages
+    if (tabKey === "qcaudit") {
+      const stages = (auth.stages || "").split(",").map(s => s.trim());
+      return stages.includes("qcaudit");
+    }
     // assign tab — master/admin always, or member with "assign" in their stages
     if (tabKey === "assign") {
       const stages = (auth.stages || "").split(",").map(s => s.trim());
@@ -1614,6 +1619,7 @@
     const [vendors, setVendors] = useState(DEFAULT_VENDORS);
     const [teamMembers, setTeamMembers] = useState([]);
     const [assignments, setAssignments] = useState([]);
+    const [qcAuditLog, setQcAuditLog] = useState([]);
     const [navOpen, setNavOpen] = useState(false);
     const [auth, setAuth] = useState(() => {
       try {
@@ -1663,6 +1669,7 @@
         setAudit((data.audit || []).map(normalizeAuditRow));
         setVendors(data.vendors || DEFAULT_VENDORS);
         setAssignments(data.assignments || []);
+        setQcAuditLog(data.qcAudit || []);
 
         const savedMembers = data.teamMembers || [];
 
@@ -1773,6 +1780,63 @@
         bulkLockRef.current = false;
       }
     }, [logAudit]);
+
+    const submitQCAudit = useCallback(async (pid, verdict, comments, stagesBack) => {
+      const p = productsRef.current.find(x => x.id === pid);
+      if (!p) return;
+
+      // 1. Update verdict/issues on product locally + backend
+      const next = productsRef.current.map(x =>
+        x.id !== pid ? x : { ...x, verdict, issues: comments, updatedAt: now() }
+      );
+      productsRef.current = next;
+      setProducts(next);
+      await gsPost("patchQCVerdict", { id: pid, verdict, issues: comments });
+
+      // 2. If issues found — push selected stages back to In Progress
+      if (verdict === "Issues Found" && stagesBack.length > 0) {
+        for (const stageKey of stagesBack) {
+          await gsPost("batchPatchStage", {
+            ids: [pid],
+            stageKey,
+            patch: { status: "In Progress", comments: `QC flagged: ${comments}` }
+          });
+          productsRef.current = productsRef.current.map(x =>
+            x.id !== pid ? x : {
+              ...x,
+              stages: {
+                ...x.stages,
+                [stageKey]: {
+                  ...x.stages[stageKey],
+                  status: "In Progress",
+                  comments: `QC flagged: ${comments}`,
+                  at: now()
+                }
+              }
+            }
+          );
+        }
+        setProducts([...productsRef.current]);
+      }
+
+      // 3. Append to qcAudit sheet + local log
+      const entry = {
+        id: uid(), at: now(), auditor: operator,
+        sku: p.sku, division: p.division, productId: pid,
+        verdict, comments: comments || "",
+        stagesSentBack: stagesBack.join(",")
+      };
+      await gsPost("appendQCAudit", entry);
+      setQcAuditLog(prev => [entry, ...prev]);
+
+      logAudit(
+        "QC Audit", p.sku || p.name,
+        `${verdict}${comments ? " · " + comments : ""}${stagesBack.length ? " · sent back: " + stagesBack.join(", ") : ""}`
+      );
+    }, [operator, logAudit]);
+
+
+
     const patchQC = useCallback(async (pid, patch) => {
       const base = productsRef.current;
       const next = base.map(p => p.id === pid ? { ...p, ...patch, updatedAt: now() } : p);
@@ -1899,7 +1963,7 @@
     const counts = useMemo(() => { const o = {}; DIVISIONS.forEach(d => o[d] = products.filter(p => p.division === d).length); return o; }, [products]);
     const openIssues = useMemo(() => { const l = []; divProducts.forEach(p => STORES.forEach(st => { const s = p.stores[st]; if (s && (s.missing > 0 || s.damaged > 0)) l.push({ p, store: st, s }); })); return l; }, [divProducts]);
 
-    const META = { overview: ["Overview", "Production, listing & dispatch at a glance"], products: ["Products & Pipeline", "Every design and its full production lifecycle"], dispatch: ["Dispatch & Stores", "Scan, dispatch & store receipts across 11 stores"], bulk: ["Bulk Upload", "Import & update thousands of records via Excel"], audit: ["Audit Log", "A complete timestamped trail of every action"], assign: ["Assign Work", "Manage team members and assign SKUs to individuals"], process: ["Process", "Member performance reports and completed work"] };
+    const META = { overview: ["Overview", "Production, listing & dispatch at a glance"], products: ["Products & Pipeline", "Every design and its full production lifecycle"], dispatch: ["Dispatch & Stores", "Scan, dispatch & store receipts across 11 stores"], bulk: ["Bulk Upload", "Import & update thousands of records via Excel"], audit: ["Audit Log", "A complete timestamped trail of every action"], assign: ["Assign Work", "Manage team members and assign SKUs to individuals"], qcaudit: ["QC Audit", "Final quality check — approve or flag issues on completed cards"], process: ["Process", "Member performance reports and completed work"] };
 
     if (!auth) return <Login onLogin={handleLogin} />;
 
@@ -1913,7 +1977,7 @@
 
     const allowedStages = getAllowedStages(auth);
 
-    const ALL_NAV = [["overview", "Overview", I.grid], ["products", "Products & Pipeline", I.layers], ["dispatch", "Dispatch & Stores", I.truck], ["bulk", "Bulk Upload", I.upload], ["audit", "Audit Log", I.audit], ["assign", "Assign Work", I.gear], ["process", "Process", I.check]];
+    const ALL_NAV = [["overview", "Overview", I.grid], ["products", "Products & Pipeline", I.layers], ["dispatch", "Dispatch & Stores", I.truck], ["bulk", "Bulk Upload", I.upload], ["audit", "Audit Log", I.audit], ["assign", "Assign Work", I.gear], ["qcaudit", "QC Audit", I.check], ["process", "Process", I.check]];
     const NAV = ALL_NAV.filter(([k]) => canSeeTab(auth, k));
 
     // If current tab is no longer accessible, switch to first allowed tab
@@ -1982,6 +2046,7 @@
             {tab === "bulk" && <Bulk division={division} products={products} divProducts={divProducts} bulkProducts={bulkProducts} bulkStores={bulkStores} />}
             {tab === "audit" && <AuditLog audit={audit.filter(a => a.division === division)} products={products} onStage={patchStage} />}
             {tab === "assign" && (canAssign(auth) || (auth.stages || "").split(",").map(s => s.trim()).includes("assign")) && <AssignWork division={division} products={divProducts} allProducts={products} teamMembers={teamMembers} assignments={assignments} onSaveTeam={saveTeamMembers} onSaveAssignments={saveAssignments} auth={auth} vendors={vendors[division] || []} />}
+            {tab === "qcaudit" && <QCAuditTab division={division} products={divProducts} qcAuditLog={qcAuditLog} onSubmit={submitQCAudit} operator={operator} auth={auth} />}
             {tab === "process" && <Process division={division} products={products} teamMembers={teamMembers} assignments={assignments} audit={audit} />}
           </div>
         </main>
@@ -2422,6 +2487,32 @@
     const [bulkBusy, setBulkBusy] = useState(false);
     const [bulkErr, setBulkErr] = useState("");
     const isFullAccess = allowedStages === null;
+
+    // ---- Manager assigned / not-assigned split ----
+    const isMasterOrAdmin = auth?.role === "master" || auth?.role === "admin";
+    const hasAssignAccess = isMasterOrAdmin || (auth?.stages || "").split(",").map(s => s.trim()).includes("assign");
+    const myMemberId = useMemo(() => {
+      const me = teamMembers?.find(m => m.email && auth?.email && m.email.toLowerCase() === auth.email.toLowerCase());
+      return me?.id || null;
+    }, [teamMembers, auth]);
+
+    // sku -> [{ memberId, memberName, stage }] for whoever it's been pushed to by THIS manager
+    const skuAssignedTo = useMemo(() => {
+      if (!hasAssignAccess) return {};
+      const managerIdForRows = isMasterOrAdmin ? "master" : myMemberId;
+      const map = {};
+      assignments
+        .filter(a => a.division === division && a.managerId === managerIdForRows)
+        .forEach(a => {
+          const key = a.sku.trim().toLowerCase();
+          const member = teamMembers?.find(m => m.id === a.memberId);
+          if (!map[key]) map[key] = [];
+          map[key].push({ memberId: a.memberId, memberName: member?.name || "—", stage: a.stage });
+        });
+      return map;
+    }, [assignments, teamMembers, division, hasAssignAccess, isMasterOrAdmin, myMemberId]);
+
+    const [assignTab, setAssignTab] = useState("notassigned");
     const selectedIds = Object.keys(selected).filter(id => selected[id]);
     const toggleSelect = (id) => setSelected(s => ({ ...s, [id]: !s[id] }));
     const clearSelect = () => setSelected({});
@@ -2450,11 +2541,31 @@
 
     const filtered = products.filter(p => {
       const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase(); if (!t.includes(q.toLowerCase())) return false;
+      if (hasAssignAccess) {
+        const isAssigned = !!skuAssignedTo[p.sku.trim().toLowerCase()];
+        if (assignTab === "assigned" && !isAssigned) return false;
+        if (assignTab === "notassigned" && isAssigned) return false;
+      }
       return true;
     });
     const totalPages = Math.max(1, Math.ceil(filtered.length / 20));
     return (
       <div>
+        {hasAssignAccess && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            {[["notassigned", "Not Assigned"], ["assigned", "Assigned"]].map(([k, n]) => {
+              const count = products.filter(p => {
+                const isAssigned = !!skuAssignedTo[p.sku.trim().toLowerCase()];
+                return k === "assigned" ? isAssigned : !isAssigned;
+              }).length;
+              return (
+                <button key={k} onClick={() => { setAssignTab(k); setPage(1); }} style={{ padding: "8px 16px", borderRadius: 10, border: "1px solid var(--line2)", background: assignTab === k ? "var(--ink)" : "var(--card)", color: assignTab === k ? "#fff" : "var(--ink)", fontWeight: 600, fontSize: 13 }}>
+                  {n} <span style={{ opacity: .7, marginLeft: 4 }}>{count}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div className="toolbar">
           <div className="search" style={{ position: "relative" }}>
             {I.search({})}
@@ -2507,7 +2618,8 @@
               const effectiveAllowedStages = cardStages && cardStages.size > 0
                 ? (allowedStages ? allowedStages.filter(s => cardStages.has(s)) : [...cardStages])
                 : allowedStages;
-              return <ProductRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))} onStage={onStage} onQC={onQC} onRemove={onRemove} allowedStages={effectiveAllowedStages} selected={!!selected[p.id]} onSelect={() => toggleSelect(p.id)} operator={operator} />;
+              const assignedTo = skuAssignedTo[p.sku.trim().toLowerCase()];
+              return <ProductRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))} onStage={onStage} onQC={onQC} onRemove={onRemove} allowedStages={effectiveAllowedStages} selected={!!selected[p.id]} onSelect={() => toggleSelect(p.id)} operator={operator} assignedTo={assignedTo} />;
             })}</div>
             {totalPages > 1 && (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 16, flexWrap: "wrap" }}>
@@ -2526,7 +2638,7 @@
     );
   }
 
-  function ProductRow({ p, open, toggle, onStage, onQC, onRemove, allowedStages, selected, onSelect, operator }) {
+  function ProductRow({ p, open, toggle, onStage, onQC, onRemove, allowedStages, selected, onSelect, operator, assignedTo }) {
     const pct = productPct(p); const hasIssue = STAGES.some(s => p.stages[s.k].status === "Issue");
     const isFullAccess = allowedStages === null;
     // Filter stages visible to this user
@@ -2540,6 +2652,15 @@
           {p.name && <span className="pname">{p.name}</span>}
           <span className="pvend">· {p.vendor || "—"} · {p.qty || 0} cards</span>
           {p.set_no && <span className="psku" style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)" }}>{p.set_no}</span>}
+          {assignedTo && assignedTo.length > 0 && (
+            <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
+              {[...new Map(assignedTo.map(a => [a.memberId, a])).values()].map((a, i) => (
+                <span key={i} style={{ fontSize: 11, fontWeight: 700, color: "var(--sky-ink)", background: "var(--sky-bg)", border: "1px solid var(--sky)", borderRadius: 999, padding: "2px 10px" }}>
+                  → {a.memberName}
+                </span>
+              ))}
+            </span>
+          )}
           <div className="spacer" />
           {hasIssue && <Chip status="Issue" />}
           {p.verdict === "Approved" && <span className="chip c-done"><span className="dot" />QC Approved</span>}
@@ -3126,13 +3247,14 @@
     // for that exact SKU+stage combo in this division.
     const assignedSkuStageSet = useMemo(() => {
       const s = new Set();
+      const managerIdForFiltering = isMasterOrAdmin ? "master" : myMemberId;
       divAssignments.forEach(a => {
-        if (a.stage && a.stage !== "all") {
+        if (a.stage && a.stage !== "all" && a.managerId === managerIdForFiltering) {
           s.add(a.sku.trim().toLowerCase() + "|" + a.stage.trim());
         }
       });
       return s;
-    }, [divAssignments]);
+    }, [divAssignments, isMasterOrAdmin, myMemberId]);
 
     const filteredProducts = useMemo(() => {
       return managerPool.filter(p => {
@@ -3331,7 +3453,7 @@
     const [selectedStages, setSelectedStages] = useState([]);
     const allStages = STAGES.filter(s => s.k !== "qc" && s.k !== "scan");
     const allPermissions = isMasterOrAdmin
-      ? [...allStages, { k: "bulk", n: "Bulk Upload" }, { k: "assign", n: "Assign Work" }]
+      ? [...allStages, { k: "bulk", n: "Bulk Upload" }, { k: "assign", n: "Assign Work" }, { k: "qcaudit", n: "QC Audit" }]
       : allStages.filter(s => (auth.stages || "").split(",").map(x => x.trim()).includes(s.k));
     // const assignableStages = STAGES.filter(s => s.k !== "qc" && s.k !== "scan");
     return (
@@ -4130,6 +4252,273 @@
       </div>
     );
   }
+
+  function QCAuditTab({ division, products, qcAuditLog, onSubmit, operator, auth }) {
+    const [q, setQ] = useState("");
+    const [filter, setFilter] = useState("pending");
+    const [expanded, setExpanded] = useState({});
+    const [verdicts, setVerdicts] = useState({});
+    const [saving, setSaving] = useState({});
+    const [saved, setSaved] = useState({});
+
+    const eligibleStages = STAGES.filter(s => s.k !== "qc");
+
+    const filtered = useMemo(() => {
+      return products.filter(p => {
+        const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase();
+        if (q && !t.includes(q.toLowerCase())) return false;
+        if (filter === "pending") return !p.verdict;
+        if (filter === "approved") return p.verdict === "Approved";
+        if (filter === "issues") return p.verdict === "Issues Found";
+        return true;
+      });
+    }, [products, q, filter]);
+
+    const pendingCount = products.filter(p => !p.verdict).length;
+    const approvedCount = products.filter(p => p.verdict === "Approved").length;
+    const issuesCount = products.filter(p => p.verdict === "Issues Found").length;
+
+    const getVState = (pid) => verdicts[pid] || { verdict: "", comments: "", stagesBack: [] };
+    const setVState = (pid, patch) => setVerdicts(v => ({ ...v, [pid]: { ...getVState(pid), ...patch } }));
+
+    const handleSubmit = async (p) => {
+      const st = getVState(p.id);
+      if (!st.verdict) return;
+      setSaving(s => ({ ...s, [p.id]: true }));
+      await onSubmit(p.id, st.verdict, st.comments, st.stagesBack);
+      setSaving(s => ({ ...s, [p.id]: false }));
+      setSaved(s => ({ ...s, [p.id]: true }));
+      setTimeout(() => setSaved(s => ({ ...s, [p.id]: false })), 2200);
+    };
+
+    return (
+      <div>
+        {/* KPI row */}
+        <div className="grid kpis" style={{ marginBottom: 16 }}>
+          {[
+            { lab: "Pending QC", val: pendingCount, bg: "var(--peach-bg)", border: "var(--peach)", color: "var(--peach-ink)" },
+            { lab: "Approved", val: approvedCount, bg: "var(--sage-bg)", border: "var(--sage)", color: "var(--sage-ink)" },
+            { lab: "Issues Found", val: issuesCount, bg: "var(--rose-bg)", border: "var(--rose)", color: "var(--rose-ink)" },
+            { lab: "Total Products", val: products.length, bg: "var(--card)", border: "var(--line2)", color: "var(--ink)" },
+          ].map((k, i) => (
+            <div key={i} className="card kpi" style={{ background: k.bg, border: `1px solid ${k.border}` }}>
+              <div className="lab">{k.lab}</div>
+              <div className="val" style={{ color: k.color }}>{k.val}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Toolbar */}
+        <div className="toolbar">
+          <div className="search">{I.search({})}<input placeholder="Search SKU, product or vendor…" value={q} onChange={e => setQ(e.target.value)} /></div>
+          {[
+            ["pending", `Pending (${pendingCount})`],
+            ["approved", `Approved (${approvedCount})`],
+            ["issues", `Issues (${issuesCount})`],
+            ["all", "All"],
+          ].map(([k, label]) => (
+            <button key={k} onClick={() => setFilter(k)} style={{
+              padding: "8px 14px", borderRadius: 10, fontSize: 12, fontWeight: 600, cursor: "pointer",
+              background: filter === k ? "var(--ink)" : "var(--card)",
+              color: filter === k ? "#fff" : "var(--ink)",
+              border: `1px solid ${filter === k ? "var(--ink)" : "var(--line2)"}`,
+            }}>{label}</button>
+          ))}
+        </div>
+
+        {filtered.length === 0
+          ? <div className="card empty">No products match this filter.</div>
+          : <div className="plist">
+            {filtered.map(p => {
+              const st = getVState(p.id);
+              const isOpen = !!expanded[p.id];
+              const allStagesDone = eligibleStages.every(s => p.stages[s.k].status === "Completed");
+              const hasVerdict = !!p.verdict;
+
+              return (
+                <div key={p.id} className="prow">
+                  {/* Card header */}
+                  <div className="phead" onClick={() => setExpanded(e => ({ ...e, [p.id]: !e[p.id] }))}>
+                    <span className={"chev " + (isOpen ? "open" : "")}>▶</span>
+                    <span className="psku">{p.sku || "no-sku"}</span>
+                    {p.name && <span className="pname">{p.name}</span>}
+                    <span className="pvend">· {p.vendor || "—"} · {p.qty || 0} cards</span>
+                    {p.set_no && <span className="psku" style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)" }}>{p.set_no}</span>}
+                    <div className="spacer" />
+                    {p.verdict === "Approved" && <span className="chip c-done"><span className="dot" />Approved</span>}
+                    {p.verdict === "Issues Found" && <span className="chip c-issue"><span className="dot" />Issues Found</span>}
+                    {!p.verdict && allStagesDone && <span className="chip c-prog"><span className="dot" />Ready for QC</span>}
+                    {!p.verdict && !allStagesDone && <span className="chip c-app"><span className="dot" />Pipeline incomplete</span>}
+                    <Pipe p={p} />
+                  </div>
+
+                  {isOpen && (
+                    <div className="pbody" style={{ padding: "16px 18px" }}>
+
+                      {/* Pipeline overview */}
+                      <div style={{ marginBottom: 14 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".6px", marginBottom: 8 }}>Pipeline status</div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {eligibleStages.map(s => {
+                            const sg = p.stages[s.k];
+                            const c = sg.status === "Completed" ? { bg: "var(--sage-bg)", border: "var(--sage)", ink: "var(--sage-ink)", icon: "✓" }
+                              : sg.status === "In Progress" ? { bg: "var(--sky-bg)", border: "var(--sky)", ink: "var(--sky-ink)", icon: "…" }
+                                : sg.status === "Issue" ? { bg: "var(--rose-bg)", border: "var(--rose)", ink: "var(--rose-ink)", icon: "!" }
+                                  : { bg: "#F0EEE8", border: "var(--line2)", ink: "var(--muted)", icon: "○" };
+                            return (
+                              <span key={s.k} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: c.bg, border: `1px solid ${c.border}`, color: c.ink, borderRadius: 8, padding: "3px 10px", fontSize: 11.5, fontWeight: 600 }}>
+                                {c.icon} {s.n}{sg.person ? ` · ${sg.person}` : ""}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Existing verdict badge */}
+                      {hasVerdict && (
+                        <div style={{ marginBottom: 14, background: p.verdict === "Approved" ? "var(--sage-bg)" : "var(--rose-bg)", border: `1px solid ${p.verdict === "Approved" ? "var(--sage)" : "var(--rose)"}`, borderRadius: 10, padding: "10px 14px" }}>
+                          <div style={{ fontWeight: 700, fontSize: 13, color: p.verdict === "Approved" ? "var(--sage-ink)" : "var(--rose-ink)" }}>
+                            {p.verdict === "Approved" ? "✓ Currently Approved" : "⚠ Issues Found"}
+                          </div>
+                          {p.issues && <div style={{ fontSize: 12, color: "var(--ink)", marginTop: 4 }}>{p.issues}</div>}
+                          <div style={{ fontSize: 11, color: "var(--faint)", marginTop: 4 }}>Use the form below to re-audit</div>
+                        </div>
+                      )}
+
+                      {/* QC form */}
+                      <div style={{ background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 12, padding: "16px" }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".6px", marginBottom: 12 }}>
+                          {hasVerdict ? "Re-audit" : "QC Verdict"}
+                        </div>
+
+                        {/* Approve / Issues Found buttons */}
+                        <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+                          {[
+                            { v: "Approved", activeBg: "var(--sage-deep)", activeBorder: "var(--sage-deep)", passiveBg: "var(--sage-bg)", passiveBorder: "var(--sage)", ink: "var(--sage-ink)", activeInk: "#fff", label: "✓  Approve" },
+                            { v: "Issues Found", activeBg: "var(--rose-ink)", activeBorder: "var(--rose-ink)", passiveBg: "var(--rose-bg)", passiveBorder: "var(--rose)", ink: "var(--rose-ink)", activeInk: "#fff", label: "⚠  Issues Found" },
+                          ].map(opt => (
+                            <button key={opt.v}
+                              onClick={() => setVState(p.id, { verdict: opt.v, stagesBack: opt.v === "Approved" ? [] : st.stagesBack })}
+                              style={{
+                                flex: 1, padding: "11px 0", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer", transition: ".15s",
+                                background: st.verdict === opt.v ? opt.activeBg : opt.passiveBg,
+                                border: `2px solid ${st.verdict === opt.v ? opt.activeBorder : opt.passiveBorder}`,
+                                color: st.verdict === opt.v ? opt.activeInk : opt.ink,
+                              }}>
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* Issues Found — comments + stages to reopen */}
+                        {st.verdict === "Issues Found" && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                            <label className="fld">
+                              Describe the issue(s) *
+                              <textarea
+                                placeholder="e.g. colour mismatch on 3 cards, content typo in line 2, image missing…"
+                                value={st.comments || ""}
+                                onChange={e => setVState(p.id, { comments: e.target.value })}
+                                style={{ minHeight: 80, fontSize: 13 }}
+                              />
+                            </label>
+                            <label className="fld">
+                              Send these stages back to "In Progress"
+                              <div style={{ fontSize: 11, color: "var(--faint)", marginTop: 2, marginBottom: 6 }}>Only completed stages shown — select ones that need rework</div>
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                                {eligibleStages.filter(s => p.stages[s.k].status === "Completed").map(s => {
+                                  const checked = (st.stagesBack || []).includes(s.k);
+                                  return (
+                                    <label key={s.k} style={{
+                                      display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500, cursor: "pointer",
+                                      background: checked ? "var(--sky-bg)" : "var(--card)",
+                                      border: `1px solid ${checked ? "var(--sky)" : "var(--line2)"}`,
+                                      color: checked ? "var(--sky-ink)" : "var(--ink)",
+                                      borderRadius: 8, padding: "5px 10px",
+                                    }}>
+                                      <input type="checkbox" checked={checked}
+                                        style={{ width: 13, height: 13, accentColor: "var(--sky-ink)" }}
+                                        onChange={e => {
+                                          const prev = st.stagesBack || [];
+                                          setVState(p.id, { stagesBack: e.target.checked ? [...prev, s.k] : prev.filter(k => k !== s.k) });
+                                        }} />
+                                      {s.n}
+                                    </label>
+                                  );
+                                })}
+                                {eligibleStages.filter(s => p.stages[s.k].status === "Completed").length === 0 && (
+                                  <span style={{ fontSize: 12, color: "var(--faint)" }}>No completed stages to send back</span>
+                                )}
+                              </div>
+                            </label>
+                          </div>
+                        )}
+
+                        {/* Auditor + submit */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 16, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                            Auditor: <b style={{ color: "var(--ink)" }}>{operator}</b>
+                          </span>
+                          <div style={{ flex: 1 }} />
+                          <button
+                            onClick={() => handleSubmit(p)}
+                            disabled={!st.verdict || saving[p.id] || (st.verdict === "Issues Found" && !st.comments?.trim())}
+                            style={{
+                              padding: "10px 24px", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer", border: 0, transition: ".15s",
+                              background: saved[p.id] ? "var(--sage)" : st.verdict === "Approved" ? "var(--sage-deep)" : st.verdict === "Issues Found" ? "var(--rose-ink)" : "var(--faint)",
+                              color: "#fff",
+                              opacity: (!st.verdict || saving[p.id] || (st.verdict === "Issues Found" && !st.comments?.trim())) ? 0.45 : 1,
+                            }}>
+                            {saving[p.id] ? "Saving…" : saved[p.id] ? "✓ Saved" : st.verdict === "Approved" ? "Confirm Approval" : st.verdict === "Issues Found" ? "Submit & Send Back" : "Select a verdict first"}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* QC history for this card */}
+                      {(() => {
+                        const history = qcAuditLog.filter(r => r.productId === p.id);
+                        if (!history.length) return null;
+                        return (
+                          <div style={{ marginTop: 16 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".6px", marginBottom: 8 }}>QC history</div>
+                            <div style={{ border: "1px solid var(--line)", borderRadius: 10, overflow: "hidden" }}>
+                              {history.map((r, i) => (
+                                <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "10px 14px", borderBottom: i < history.length - 1 ? "1px solid var(--line)" : "none", background: r.verdict === "Approved" ? "var(--sage-bg)" : "var(--rose-bg)" }}>
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                      <span style={{ fontWeight: 700, fontSize: 12, color: r.verdict === "Approved" ? "var(--sage-ink)" : "var(--rose-ink)" }}>
+                                        {r.verdict === "Approved" ? "✓ Approved" : "⚠ Issues Found"}
+                                      </span>
+                                      {r.stagesSentBack && r.stagesSentBack !== "" && (
+                                        <span style={{ fontSize: 11, color: "var(--sky-ink)", fontWeight: 600, background: "var(--sky-bg)", border: "1px solid var(--sky)", borderRadius: 6, padding: "1px 8px" }}>
+                                          ↩ {r.stagesSentBack.split(",").map(k => STAGES.find(s => s.k === k)?.n || k).join(", ")}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {r.comments && <div style={{ fontSize: 12, color: "var(--ink)", marginTop: 3 }}>{r.comments}</div>}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: "var(--faint)", whiteSpace: "nowrap", textAlign: "right", flexShrink: 0 }}>
+                                    <div>{fmt(r.at)}</div>
+                                    <div style={{ fontWeight: 600, color: "var(--muted)" }}>by {r.auditor}</div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        }
+      </div>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 
   ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 </script>
