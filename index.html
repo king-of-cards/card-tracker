@@ -1340,15 +1340,18 @@
     { k: "content", n: "Content" },
     { k: "photography", n: "Photography" },
     { k: "videography", n: "Videography" },
+    { k: "dimensions", n: "Dimensions" },
     { k: "videoedit", n: "Video Editing" },
-    { k: "images", n: "Assets Uploaded" },
+    { k: "images", n: "Video Uploaded" },
     { k: "backend", n: "Backend Listing (App)" },
     { k: "website", n: "Website Listing (Shopify)" },
     { k: "scan", n: "Scan Before Dispatch" },
-    { k: "qc", n: "Final QC / Audit" },
+    { k: "qc", n: "QC Check" },
+    { k: "finalqc", n: "Final QC / Audit" },
   ];
   const STATUSES = ["Not Started", "In Progress", "Completed", "Issue"];
-  const STAGE_COLS = STAGES.filter(s => s.k !== "qc");
+  // finalqc is the verdict screen (uses p.verdict/p.issues, not a stages[] entry) — excluded from pipeline stage list
+  const STAGE_COLS = STAGES.filter(s => s.k !== "finalqc");
   const DEFAULT_VENDORS = {
     "KOC Cards": ["KOC", "Patrika", "Mayur", "Rasiklal", "Venis", "Ferry Card", "Mack Mark", "Shubham", "Mani Creation", "Jimit", "Reel Card", "Swamy Cards", "Remco", "Sanskurti", "Aakarshak"],
     "Bombay Cards": ["Rasiklal & Bros", "Patrika Palace", "Real Cards", "JIMIT CARDS", "Aakarshak Cards", "Devarajan & sons", "Sanskruti Cards", "Rama Cards", "Mack Mark", "Phoenix Cards", "Remco Cards", "Venis Cards", "Mani Creation", "Rickabchand", "Shankheshwar Cards", "Shubham Cards", "Creative Crafts", "Ferry Cards", "Swamy Cards"]
@@ -1501,13 +1504,36 @@
   function normStatus(v) { const m = { "not started": "Not Started", "notstarted": "Not Started", "in progress": "In Progress", "inprogress": "In Progress", "progress": "In Progress", "wip": "In Progress", "pending": "In Progress", "completed": "Completed", "complete": "Completed", "done": "Completed", "approved": "Completed", "issue": "Issue", "issues": "Issue", "error": "Issue" }; return m[String(v).trim().toLowerCase()] || null; }
   function normBool(v) { return /^(y|yes|true|1|received|recd|done|✓|x)$/i.test(String(v).trim()); }
   function normDate(v) { if (v instanceof Date && !isNaN(v)) return v.toISOString().slice(0, 10); if (typeof v === "number") { const d = new Date(Date.UTC(1899, 11, 30) + v * 86400000); return d.toISOString().slice(0, 10); } return String(v).trim(); }
-  function fieldFromProduct(p, h) { if (["division", "sku", "name", "vendor", "inward", "qty", "note", "set_no"].includes(h)) return p[h] ?? ""; if (h === "qc_verdict") return p.verdict || ""; if (h === "qc_issues") return p.issues || ""; const mm = h.match(/^(.+)_(status|person|comments)$/); if (mm && p.stages[mm[1]]) return p.stages[mm[1]][mm[2]] || ""; return ""; }
-  const PROD_HEADERS = (() => { const h = ["division", "sku", "name", "vendor", "inward", "qty", "note", "set_no"]; STAGE_COLS.forEach(s => h.push(s.k + "_status", s.k + "_person", s.k + "_comments")); h.push("qc_verdict", "qc_issues"); return h; })();
+  function fieldFromProduct(p, h) {
+    if (["division", "sku", "name", "vendor", "inward", "qty", "note", "set_no"].includes(h)) return p[h] ?? "";
+    if (h === "qc_verdict") return p.verdict || "";
+    if (h === "qc_issues") return p.issues || "";
+    if (h === "dimensions_width") return p.stages?.dimensions?.width || "";
+    if (h === "dimensions_height") return p.stages?.dimensions?.height || "";
+    if (h === "dimensions_weight") return p.stages?.dimensions?.weight || "";
+    const mm = h.match(/^(.+)_(status|person|comments)$/);
+    if (mm && p.stages[mm[1]]) return p.stages[mm[1]][mm[2]] || "";
+    return "";
+  }
+  const PROD_HEADERS = (() => {
+    const h = ["division", "sku", "name", "vendor", "inward", "qty", "note", "set_no"];
+    STAGE_COLS.forEach(s => {
+      h.push(s.k + "_status", s.k + "_person", s.k + "_comments");
+      if (s.k === "dimensions") h.push("dimensions_width", "dimensions_height", "dimensions_weight");
+    });
+    h.push("qc_verdict", "qc_issues");
+    return h;
+  })();
   const STORE_HEADERS = ["division", "sku", "store", "dispatched", "received", "missing", "damaged", "notes"];
   function ensureStages(p) {
     if (!p.stages) p.stages = {};
     STAGES.forEach(s => {
       if (!p.stages[s.k]) p.stages[s.k] = { status: "Not Started", person: "", comments: "", at: "" };
+      if (s.k === "dimensions") {
+        if (p.stages[s.k].width === undefined) p.stages[s.k].width = "";
+        if (p.stages[s.k].height === undefined) p.stages[s.k].height = "";
+        if (p.stages[s.k].weight === undefined) p.stages[s.k].weight = "";
+      }
     });
     if (!p.stores) p.stores = {};
     STORES.forEach(st => {
@@ -1516,7 +1542,10 @@
     return p;
   }
   function blankProduct(division, vendor) {
-    const stages = {}; STAGES.forEach(s => stages[s.k] = { status: "Not Started", person: "", comments: "", at: "" });
+    const stages = {}; STAGES.forEach(s => {
+      stages[s.k] = { status: "Not Started", person: "", comments: "", at: "" };
+      if (s.k === "dimensions") { stages[s.k].width = ""; stages[s.k].height = ""; stages[s.k].weight = ""; }
+    });
     const stores = {}; STORES.forEach(st => stores[st] = { dispatched: 0, received: false, receivedAt: "", receivedBy: "", missing: 0, damaged: 0, notes: "", at: "" });
     return { id: uid(), division, sku: "", name: "", vendor: vendor || "", inward: "", qty: 0, note: "", stages, stores, verdict: "", issues: "", createdAt: now(), updatedAt: now() };
   }
@@ -1915,6 +1944,12 @@
           const k = s.k; let t = false; const cur = { ...prod.stages[k] }; const st = row[k + "_status"], pe = row[k + "_person"], co = row[k + "_comments"];
           if (st !== "" && st != null) { const ns = normStatus(st); if (ns) { cur.status = ns; t = true; } else errs.push(`Row ${i + 2}: invalid status "${st}" in ${k}_status`); }
           if (pe !== "" && pe != null) { cur.person = String(pe).trim(); t = true; } if (co !== "" && co != null) { cur.comments = String(co).trim(); t = true; }
+          if (k === "dimensions") {
+            const w = row["dimensions_width"], h2 = row["dimensions_height"], wt = row["dimensions_weight"];
+            if (w !== "" && w != null) { cur.width = String(w).trim(); t = true; }
+            if (h2 !== "" && h2 != null) { cur.height = String(h2).trim(); t = true; }
+            if (wt !== "" && wt != null) { cur.weight = String(wt).trim(); t = true; }
+          }
           if (t) { cur.at = now(); prod.stages[k] = cur; }
         });
         if (g("qc_verdict")) { const v = String(row.qc_verdict).trim(); if (/appro/i.test(v)) prod.verdict = "Approved"; else if (/issue/i.test(v)) prod.verdict = "Issues Found"; }
@@ -2671,15 +2706,15 @@
           <div className="pbody">
             {/* Active stage cards grid */}
             <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "14px 16px" }}>
-              {visibleStages.filter(s => s.k !== "qc" && p.stages[s.k].status !== "Completed").map((s, i) => (
+              {visibleStages.filter(s => s.k !== "finalqc" && p.stages[s.k].status !== "Completed").map((s, i) => (
                 <StageEditor key={s.k} p={p} stage={s} idx={STAGES.findIndex(st => st.k === s.k) + 1} onStage={onStage} operator={operator} />
               ))}
             </div>
             {/* Completed stages — pill popup style */}
-            {visibleStages.filter(s => s.k !== "qc" && p.stages[s.k].status === "Completed").length > 0 && (
+            {visibleStages.filter(s => s.k !== "finalqc" && p.stages[s.k].status === "Completed").length > 0 && (
               <div style={{ borderTop: "1px solid var(--line)", padding: "10px 16px", background: "var(--sage-bg)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color: "var(--sage-ink)", letterSpacing: ".6px", textTransform: "uppercase", whiteSpace: "nowrap" }}>Done</span>
-                {visibleStages.filter(s => s.k !== "qc" && p.stages[s.k].status === "Completed").map(s => {
+                {visibleStages.filter(s => s.k !== "finalqc" && p.stages[s.k].status === "Completed").map(s => {
                   const st = p.stages[s.k];
                   return (
                     <div key={s.k} style={{ position: "relative", display: "inline-block" }} className="done-pill-wrap">
@@ -3451,7 +3486,7 @@
     };
 
     const [selectedStages, setSelectedStages] = useState([]);
-    const allStages = STAGES.filter(s => s.k !== "qc" && s.k !== "scan");
+    const allStages = STAGES.filter(s => s.k !== "finalqc" && s.k !== "scan");
     const allPermissions = isMasterOrAdmin
       ? [...allStages, { k: "bulk", n: "Bulk Upload" }, { k: "assign", n: "Assign Work" }, { k: "qcaudit", n: "QC Audit" }]
       : allStages.filter(s => (auth.stages || "").split(",").map(x => x.trim()).includes(s.k));
@@ -3618,7 +3653,7 @@
               {selMember && (() => {
                 const member = assignableMembers.find(m => m.id === selMember);
                 const memberStageKeys = (member?.stages || "").split(",").map(s => s.trim()).filter(Boolean);
-                const pickableStages = STAGES.filter(s => s.k !== "qc" && s.k !== "scan" && memberStageKeys.includes(s.k));
+                const pickableStages = STAGES.filter(s => s.k !== "finalqc" && s.k !== "scan" && memberStageKeys.includes(s.k));
                 return pickableStages.length > 0 ? (
                   <label className="fld" style={{ marginTop: 10 }}>
                     Stages to assign for this member
@@ -4261,7 +4296,7 @@
     const [saving, setSaving] = useState({});
     const [saved, setSaved] = useState({});
 
-    const eligibleStages = STAGES.filter(s => s.k !== "qc");
+    const eligibleStages = STAGES.filter(s => s.k !== "finalqc");
 
     const filtered = useMemo(() => {
       return products.filter(p => {
