@@ -1711,16 +1711,20 @@
         const fromSheet = sheetUsers
           .filter(u => u.email && u.role !== "master" && u.role !== "admin")
           .map(u => {
+            // teamMembers sheet is the source of truth for managerId and division
+            // Users sheet often has these blank — always prefer teamMembers
             const saved = savedMembers.find(m => m.email && m.email.toLowerCase() === u.email.toLowerCase());
             return {
               id: saved?.id || (u.name ? u.name.toLowerCase().replace(/\s+/g, "_") : uid()),
               name: u.name || u.email,
               email: u.email,
-              password: u.password || "",
-              role: u.role || "member",
+              password: u.password || saved?.password || "",
+              role: u.role || saved?.role || "member",
               stages: u.stages || saved?.stages || "",
-              division: saved?.division || u.division || "KOC Cards",
-              managerId: saved?.managerId || u.managerId || null,
+              // teamMembers sheet (saved) has the correct division and managerId
+              // Users sheet leaves these blank — don't fall back to u.division/u.managerId
+              division: saved?.division || "KOC Cards",
+              managerId: saved?.managerId ?? null,
               joinedAt: saved?.joinedAt || u.joinedAt || ""
             };
           });
@@ -2548,6 +2552,89 @@
     }, [assignments, teamMembers, division, hasAssignAccess, isMasterOrAdmin, myMemberId]);
 
     const [assignTab, setAssignTab] = useState("notassigned");
+    const [filterMember, setFilterMember] = useState(""); // NEW
+    // Member filter stats — per member: assigned / completed / pending counts
+    // Member filter stats — calculated from actual stage statuses in products (Google Sheet data)
+    const memberStats = useMemo(() => {
+      if (!hasAssignAccess) return [];
+      const managerIdForRows = isMasterOrAdmin ? "master" : myMemberId;
+
+      // Step 1: build per-member map from assignments (one row per stage per SKU)
+      const memberMap = {};
+      assignments
+        .filter(a => a.division === division && a.managerId === managerIdForRows)
+        .forEach(a => {
+          const mid = a.memberId;
+          const sku = (a.sku || "").trim().toLowerCase();
+          const stage = (a.stage || "").trim();
+          if (!mid || !sku) return;
+
+          if (!memberMap[mid]) {
+            const m = teamMembers?.find(x => x.id === mid);
+            memberMap[mid] = { id: mid, name: m?.name || mid, skus: new Set(), stageTasks: [] };
+          }
+          memberMap[mid].skus.add(sku);
+          // Only add if it's a real stage key (not blank or "all")
+          if (stage && stage !== "all") {
+            memberMap[mid].stageTasks.push({ sku, stageKey: stage });
+          }
+        });
+
+      // Step 2: build fast sku→product lookup from live products (from Google Sheet)
+      const skuProdMap = {};
+      products.forEach(p => {
+        skuProdMap[(p.sku || "").trim().toLowerCase()] = p;
+      });
+
+      // Step 3: compute stats per member
+      return Object.values(memberMap).map(m => {
+        let completedTasks = 0, inProgressTasks = 0, issueTasks = 0, notStartedTasks = 0;
+        const totalTasks = m.stageTasks.length;
+
+        m.stageTasks.forEach(({ sku, stageKey }) => {
+          const prod = skuProdMap[sku];
+          const status = prod?.stages?.[stageKey]?.status || "Not Started";
+          if (status === "Completed") completedTasks++;
+          else if (status === "In Progress") inProgressTasks++;
+          else if (status === "Issue") issueTasks++;
+          else notStartedTasks++;
+        });
+
+        // Card-level: done = ALL assigned stages for that card are Completed
+        let cardsDone = 0, cardsPending = 0;
+        m.skus.forEach(sku => {
+          const prod = skuProdMap[sku];
+          // Get all stage tasks for this member on this exact card
+          const tasksForCard = m.stageTasks.filter(t => t.sku === sku);
+          if (tasksForCard.length === 0) {
+            // No specific stage recorded — treat as pending
+            cardsPending++;
+            return;
+          }
+          // A card is "done" for this member only if every one of their
+          // assigned stages on it reads "Completed" in the live product data
+          const allDone = tasksForCard.every(({ stageKey }) =>
+            skuProdMap[sku]?.stages?.[stageKey]?.status === "Completed"
+          );
+          if (allDone) cardsDone++;
+          else cardsPending++;
+        });
+
+        return {
+          id: m.id,
+          name: m.name,
+          skus: m.skus,
+          assigned: m.skus.size,
+          completed: cardsDone,
+          pending: cardsPending,
+          totalTasks,
+          completedTasks,
+          inProgressTasks,
+          issueTasks,
+          notStartedTasks,
+        };
+      }).sort((a, b) => a.name.localeCompare(b.name));
+    }, [assignments, division, hasAssignAccess, isMasterOrAdmin, myMemberId, teamMembers, products]);
     const selectedIds = Object.keys(selected).filter(id => selected[id]);
     const toggleSelect = (id) => setSelected(s => ({ ...s, [id]: !s[id] }));
     const clearSelect = () => setSelected({});
@@ -2580,8 +2667,41 @@
         const isAssigned = !!skuAssignedTo[p.sku.trim().toLowerCase()];
         if (assignTab === "notassigned" && isAssigned) return false;
         if (assignTab === "assigned" && !isAssigned) return false;
-        if (assignTab === "completed" && (!isAssigned || productState(p) !== "done")) return false;
-        if (assignTab === "pending" && (!isAssigned || productState(p) === "done")) return false;
+        if (assignTab === "completed") {
+          if (!isAssigned) return false;
+          const targetMemberId = filterMember || myMemberId;
+          const myAssignedStagesForCard = assignments.filter(
+            a => a.division === division &&
+              a.memberId === targetMemberId &&
+              a.sku.trim().toLowerCase() === p.sku.trim().toLowerCase()
+          );
+          const allStageDone = myAssignedStagesForCard.length > 0 && myAssignedStagesForCard.every(a => {
+            const stageKey = a.stage;
+            if (!stageKey || stageKey === "all") return productState(p) === "done";
+            return p.stages?.[stageKey]?.status === "Completed";
+          });
+          if (!allStageDone) return false;
+        }
+        if (assignTab === "pending") {
+          if (!isAssigned) return false;
+          const targetMemberId = filterMember || myMemberId;
+          const myAssignedStagesForCard = assignments.filter(
+            a => a.division === division &&
+              a.memberId === targetMemberId &&
+              a.sku.trim().toLowerCase() === p.sku.trim().toLowerCase()
+          );
+          const allStageDone = myAssignedStagesForCard.length > 0 && myAssignedStagesForCard.every(a => {
+            const stageKey = a.stage;
+            if (!stageKey || stageKey === "all") return productState(p) === "done";
+            return p.stages?.[stageKey]?.status === "Completed";
+          });
+          if (allStageDone) return false;
+        }
+      }
+      // Member filter
+      if (filterMember) {
+        const ms = memberStats.find(m => m.id === filterMember);
+        if (!ms || !ms.skus.has(p.sku.trim().toLowerCase())) return false;
       }
       return true;
     });
@@ -2600,8 +2720,49 @@
               let count;
               if (k === "notassigned") count = products.filter(p => !skuAssignedTo[p.sku.trim().toLowerCase()]).length;
               else if (k === "assigned") count = assignedProducts.length;
-              else if (k === "completed") count = assignedProducts.filter(p => productState(p) === "done").length;
-              else if (k === "pending") count = assignedProducts.filter(p => productState(p) !== "done").length;
+              else if (k === "completed") {
+                const targetMemberId = filterMember || myMemberId;
+                count = assignedProducts.filter(p => {
+                  const myStages = assignments.filter(
+                    a => a.division === division &&
+                      a.memberId === targetMemberId &&
+                      a.sku.trim().toLowerCase() === p.sku.trim().toLowerCase()
+                  );
+                  return myStages.length > 0 && myStages.every(a => {
+                    if (!a.stage || a.stage === "all") return productState(p) === "done";
+                    return p.stages?.[a.stage]?.status === "Completed";
+                  });
+                }).length;
+              }
+              else if (k === "pending") {
+                const targetMemberId = filterMember || myMemberId;
+                count = assignedProducts.filter(p => {
+                  const myStages = assignments.filter(
+                    a => a.division === division &&
+                      a.memberId === targetMemberId &&
+                      a.sku.trim().toLowerCase() === p.sku.trim().toLowerCase()
+                  );
+                  if (myStages.length === 0) return true;
+                  return !myStages.every(a => {
+                    if (!a.stage || a.stage === "all") return productState(p) === "done";
+                    return p.stages?.[a.stage]?.status === "Completed";
+                  });
+                }).length;
+              }
+              else if (k === "pending") {
+                count = assignedProducts.filter(p => {
+                  const myStages = assignments.filter(
+                    a => a.division === division &&
+                      a.memberId === myMemberId &&
+                      a.sku.trim().toLowerCase() === p.sku.trim().toLowerCase()
+                  );
+                  if (myStages.length === 0) return true;
+                  return !myStages.every(a => {
+                    if (!a.stage || a.stage === "all") return productState(p) === "done";
+                    return p.stages?.[a.stage]?.status === "Completed";
+                  });
+                }).length;
+              }
               return (
                 <button key={k} onClick={() => { setAssignTab(k); setPage(1); }} style={{
                   padding: "8px 16px", borderRadius: 10, border: "1px solid var(--line2)",
@@ -2613,6 +2774,47 @@
                 </button>
               );
             })}
+          </div>
+        )}
+        {hasAssignAccess && memberStats.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+            <select
+              value={filterMember}
+              onChange={e => { setFilterMember(e.target.value); setPage(1); }}
+              style={{ border: "1px solid var(--line2)", borderRadius: 10, padding: "9px 12px", background: "var(--card)", fontSize: 13, fontWeight: 500, minWidth: 180 }}
+            >
+              <option value="">— all members —</option>
+              {memberStats.map(m => (
+                <option key={m.id} value={m.id}>
+                  {m.name} · {m.assigned} cards · {m.completedTasks}/{m.totalTasks} stages done · {m.pending} pending
+                </option>
+              ))}
+            </select>
+            {filterMember && (() => {
+              const ms = memberStats.find(m => m.id === filterMember);
+              if (!ms) return null;
+              return (
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ background: "var(--sky-bg)", color: "var(--sky-ink)", border: "1px solid var(--sky)", borderRadius: 999, padding: "3px 12px", fontSize: 12, fontWeight: 700 }}>
+                    {ms.assigned} cards assigned
+                  </span>
+                  <span style={{ background: "var(--sage-bg)", color: "var(--sage-ink)", border: "1px solid var(--sage)", borderRadius: 999, padding: "3px 12px", fontSize: 12, fontWeight: 700 }}>
+                    ✓ {ms.completedTasks}/{ms.totalTasks} stages done
+                  </span>
+                  <span style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)", borderRadius: 999, padding: "3px 12px", fontSize: 12, fontWeight: 700 }}>
+                    ⏳ {ms.pending} cards pending
+                  </span>
+                  {ms.issueTasks > 0 && (
+                    <span style={{ background: "var(--rose-bg)", color: "var(--rose-ink)", border: "1px solid var(--rose)", borderRadius: 999, padding: "3px 12px", fontSize: 12, fontWeight: 700 }}>
+                      ⚠ {ms.issueTasks} issues
+                    </span>
+                  )}
+                  <button className="ghost" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => { setFilterMember(""); setPage(1); }}>
+                    Clear
+                  </button>
+                </div>
+              );
+            })()}
           </div>
         )}
         <div className="toolbar">
@@ -3342,7 +3544,7 @@
     }, [teamMembers, auth.email]);
     const canManageMembers = isMasterOrAdmin || (auth.stages || "").split(",").map(s => s.trim()).includes("assign");
     const divMembers = isMasterOrAdmin
-      ? teamMembers
+      ? teamMembers.filter(m => m.division === division)
       : teamMembers.filter(m => m.division === division && m.managerId === myMemberId);
     const myOwnRecord = useMemo(() => teamMembers.find(m => m.id === myMemberId), [teamMembers, myMemberId]);
     // Assignable list = my direct reports + myself (so a manager can keep some SKUs for their own work)
@@ -3541,9 +3743,28 @@
 
       let updatedAssignments = [...assignments];
       selSkus.forEach(sku => {
+        const skuLower = sku.trim().toLowerCase();
+        const isAssigningAll = selStages.includes("all");
+
+        if (isAssigningAll) {
+          // Assigning "all" to this member on this SKU — drop every existing
+          // row (any stage, including a prior "all") for this exact member+sku,
+          // since a single "all" row supersedes specific-stage rows entirely.
+          updatedAssignments = updatedAssignments.filter(a =>
+            !(a.division === division && a.memberId === selMember && a.sku.trim().toLowerCase() === skuLower)
+          );
+        } else {
+          // Assigning specific stage(s) — first drop any leftover "all" row for
+          // this member+sku (it would otherwise coexist and poison every
+          // completion check, since "all" requires the whole product to be done).
+          updatedAssignments = updatedAssignments.filter(a =>
+            !(a.division === division && a.memberId === selMember && a.sku.trim().toLowerCase() === skuLower && a.stage === "all")
+          );
+        }
+
         selStages.forEach(stageKey => {
           updatedAssignments = updatedAssignments.filter(a =>
-            !(a.division === division && a.sku.trim().toLowerCase() === sku.trim().toLowerCase() && a.stage === stageKey)
+            !(a.division === division && a.memberId === selMember && a.sku.trim().toLowerCase() === skuLower && a.stage === stageKey)
           );
           updatedAssignments.push({
             id: uid(),
