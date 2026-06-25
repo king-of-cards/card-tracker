@@ -1440,43 +1440,97 @@
   }
 
   /* ---------- storage (shared across team) ---------- */
-  const GS_URL = "https://script.google.com/macros/s/AKfycbwhvIeomL6wiBH_3LgbskV__BNy0j_w1BlOBVz53oLZa2LRTD1aH79zeXPbsNCqYAE/exec";
-  const GS_USERS_URL = "https://script.google.com/macros/s/AKfycbx6jn_Alaw714TOnD9DH6TxbiNlHrJb0crDV5l2lRxz1fWcIgRHs40UUQwZNiQ2CTCX/exec";
+  // const GS_URL = "https://script.google.com/macros/s/AKfycbwhvIeomL6wiBH_3LgbskV__BNy0j_w1BlOBVz53oLZa2LRTD1aH79zeXPbsNCqYAE/exec";
+  // const GS_USERS_URL = "https://script.google.com/macros/s/AKfycbx6jn_Alaw714TOnD9DH6TxbiNlHrJb0crDV5l2lRxz1fWcIgRHs40UUQwZNiQ2CTCX/exec";
+
+  // async function gsGetUsers() {
+  //   try {
+  //     const r = await fetch(GS_URL + "?action=getUsers", { redirect: "follow" });
+  //     return JSON.parse(await r.text());
+  //   } catch (e) { console.error("gsGetUsers", e); return []; }
+  // }
+  // async function gsGet() {
+  //   try {
+  //     const r = await fetch(GS_URL + "?action=getAll", { redirect: "follow" });
+  //     const text = await r.text();
+  //     return JSON.parse(text);
+  //   } catch (e) { console.error("gsGet", e); return null; }
+  // }
+  // async function gsPost(action, payload) {
+  //   try {
+  //     const r = await fetch(GS_URL, {
+  //       method: "POST",
+  //       redirect: "follow",
+  //       body: JSON.stringify({ action, payload })
+  //     });
+  //     const text = await r.text();
+  //     try {
+  //       const parsed = JSON.parse(text);
+  //       console.log(`gsPost[${action}] ->`, parsed);
+  //       return parsed;
+  //     } catch {
+  //       console.error(`gsPost[${action}] returned non-JSON (likely a backend error page):`, text);
+  //       return { ok: false, raw: text };
+  //     }
+  //   } catch (e) {
+  //     console.error(`gsPost[${action}] network error`, e);
+  //     return { ok: false, error: e.message };
+  //   }
+  // }
+
+
+
+
+
+  const API = "http://localhost:3001"; //production url 
+
 
   async function gsGetUsers() {
     try {
-      const r = await fetch(GS_URL + "?action=getUsers", { redirect: "follow" });
-      return JSON.parse(await r.text());
+      const r = await fetch(API + "/api/getUsers");
+      return await r.json();
     } catch (e) { console.error("gsGetUsers", e); return []; }
   }
+
   async function gsGet() {
     try {
-      const r = await fetch(GS_URL + "?action=getAll", { redirect: "follow" });
-      const text = await r.text();
-      return JSON.parse(text);
+      const r = await fetch(API + "/api/getAll");
+      return await r.json();
     } catch (e) { console.error("gsGet", e); return null; }
   }
+
   async function gsPost(action, payload) {
+    const ROUTE_MAP = {
+      appendAudit:          "/api/appendAudit",
+      batchUpsertProducts:  "/api/batchUpsertProducts",
+      batchPatchStage:      "/api/batchPatchStage",
+      patchQCVerdict:       "/api/patchQCVerdict",
+      appendQCAudit:        "/api/appendQCAudit",
+      upsertStore:          "/api/upsertStore",
+      deleteProduct:        "/api/deleteProduct",
+      setVendors:           "/api/setVendors",
+      setTeamMembers:       "/api/setTeamMembers",
+      setAssignments:       "/api/setAssignments",
+      saveUsers:            "/api/saveUsers",
+      appendAssignmentHistory: "/api/appendAssignmentHistory",
+    };
+    const route = ROUTE_MAP[action];
+    if (!route) { console.warn("gsPost: unknown action", action); return { ok: false }; }
     try {
-      const r = await fetch(GS_URL, {
+      const r = await fetch(API + route, {
         method: "POST",
-        redirect: "follow",
-        body: JSON.stringify({ action, payload })
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       });
-      const text = await r.text();
-      try {
-        const parsed = JSON.parse(text);
-        console.log(`gsPost[${action}] ->`, parsed);
-        return parsed;
-      } catch {
-        console.error(`gsPost[${action}] returned non-JSON (likely a backend error page):`, text);
-        return { ok: false, raw: text };
-      }
+      return await r.json();
     } catch (e) {
-      console.error(`gsPost[${action}] network error`, e);
+      console.error(`gsPost[${action}] error`, e);
       return { ok: false, error: e.message };
     }
   }
+
+
+
   /* ---------- utils ---------- */
   const now = () => new Date().toISOString();
   const uid = () => Math.random().toString(36).slice(2, 9);
@@ -2030,10 +2084,13 @@
         return base.filter(p => remainingSkus.includes(p.sku.toLowerCase()));
       }
 
+      // const hasAssignAccess = (auth.stages || "").split(",").map(s => s.trim()).includes("assign");
+      // if (hasAssignAccess) return base;
+
       return base.filter(p => myAssignedSkus.has(p.sku.toLowerCase()));
     }, [products, division, auth, assignments]);
     const counts = useMemo(() => { const o = {}; DIVISIONS.forEach(d => o[d] = products.filter(p => p.division === d).length); return o; }, [products]);
-    const openIssues = useMemo(() => { const l = []; divProducts.forEach(p => STORES.forEach(st => { const s = p.stores[st]; if (s && (s.missing > 0 || s.damaged > 0)) l.push({ p, store: st, s }); })); return l; }, [divProducts]);
+    const openIssues = useMemo(() => { const l = []; divProducts.forEach(p => STORES.forEach(st => { const s = p.stores[st]; if (s && (s.missing > 0 || s.damaged > 0)) l.push({ p, store: st, s, type: "store" }); })); return l; }, [divProducts]);
 
     const META = { overview: ["Overview", "Production, listing & dispatch at a glance"], products: ["Products & Pipeline", "Every design and its full production lifecycle"], dispatch: ["Dispatch & Stores", "Scan, dispatch & store receipts across 11 stores"], bulk: ["Bulk Upload", "Import & update thousands of records via Excel"], audit: ["Audit Log", "A complete timestamped trail of every action"], assign: ["Assign Work", "Manage team members and assign SKUs to individuals"], qcaudit: ["QC Audit", "Final quality check — approve or flag issues on completed cards"], process: ["Process", "Member performance reports and completed work"] };
 
@@ -2113,7 +2170,7 @@
           </header>
           <div className="content">
             {tab === "overview" && <Overview division={division} products={divProducts} issues={openIssues} audit={audit.filter(a => a.division === division)} go={setTab} vendors={vendors[division] || []} allowedStages={allowedStages} auth={auth} teamMembers={teamMembers} assignments={assignments} />}
-            {tab === "products" && <Products division={division} products={divProducts} vendors={vendors[division] || []} onUpsert={upsertProduct} onStage={patchStage} onStageBulk={patchStageBulk} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} allowedStages={allowedStages} operator={operator} auth={auth} assignments={assignments} teamMembers={teamMembers} />}
+            {tab === "products" && <Products division={division} products={divProducts} allDivProducts={products.filter(p => p.division === division)} vendors={vendors[division] || []} onUpsert={upsertProduct} onStage={patchStage} onStageBulk={patchStageBulk} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} allowedStages={allowedStages} operator={operator} auth={auth} assignments={assignments} teamMembers={teamMembers} />}
             {tab === "dispatch" && <Dispatch products={divProducts} onStore={patchStore} onStage={patchStage} operator={operator} />}
             {tab === "bulk" && <Bulk division={division} products={products} divProducts={divProducts} bulkProducts={bulkProducts} bulkStores={bulkStores} />}
             {tab === "audit" && <AuditLog audit={audit.filter(a => a.division === division)} products={products} onStage={patchStage} />}
@@ -2258,7 +2315,7 @@
       { lab: "Total Products", val: total, sub: division, ic: I.box },
       { lab: "With Manager", val: remainingWithManager, sub: isMasterOrAdminView ? "not yet assigned" : "remaining with me", ic: I.layers, color: remainingWithManager > 0 ? "var(--peach-ink)" : "var(--sage-ink)" },
       { lab: "Listing complete", val: done, sub: "all stages done", ic: I.check, color: "var(--sage-ink)" },
-      { lab: "Issues", val: `${missing} / ${damaged}`, sub: `${issues.length} flagged rows`, ic: I.alert, color: (missing + damaged) ? "var(--rose-ink)" : "var(--ink)" },
+      { lab: "Issues", val: `${missing} / ${damaged}`, sub: `${issues.length} store flags · ${products.filter(p => p.verdict === "Issues Found").length} QC flags`, ic: I.alert, color: (missing + damaged + products.filter(p => p.verdict === "Issues Found").length) ? "var(--rose-ink)" : "var(--ink)" },
     ];
 
     return (
@@ -2317,18 +2374,29 @@
           </div>
         </div>
 
-        {issues.length > 0 && (
-          <div className="sec">
-            <div className="sec-h"><h3>Live alerts · missing & damaged</h3><span className="hint">reported by store executives</span></div>
-            {issues.slice(0, 6).map((x, i) => (
-              <div className="alert" key={i}><div className="ic">!</div>
-                <div className="tx"><b>{x.store}</b> — {x.s.missing > 0 ? `${x.s.missing} missing` : ""}{x.s.missing > 0 && x.s.damaged > 0 ? ", " : ""}{x.s.damaged > 0 ? `${x.s.damaged} damaged` : ""} · <b>{x.p.name || x.p.sku || "product"}</b> ({x.p.vendor || "—"}){x.s.notes ? ` · "${x.s.notes}"` : ""} <span className="tag">· {fmt(x.s.at)}</span></div>
-                <button className="ghost" onClick={() => go("dispatch")}>Resolve</button>
+        {(issues.length > 0 || products.filter(p => p.verdict === "Issues Found").length > 0) && (
+              <div className="sec">
+                <div className="sec-h"><h3>Live alerts · missing, damaged & QC issues</h3><span className="hint">store reports + QC flags</span></div>
+                {issues.slice(0, 6).map((x, i) => (
+                  <div className="alert" key={"store-" + i}><div className="ic">!</div>
+                    <div className="tx"><b>{x.store}</b> — {x.s.missing > 0 ? `${x.s.missing} missing` : ""}{x.s.missing > 0 && x.s.damaged > 0 ? ", " : ""}{x.s.damaged > 0 ? `${x.s.damaged} damaged` : ""} · <b>{x.p.name || x.p.sku || "product"}</b> ({x.p.vendor || "—"}){x.s.notes ? ` · "${x.s.notes}"` : ""} <span className="tag">· {fmt(x.s.at)}</span></div>
+                    <button className="ghost" onClick={() => go("dispatch")}>Resolve</button>
+                  </div>
+                ))}
+                {issues.length > 6 && <div className="tag" style={{ marginTop: 4 }}>+{issues.length - 6} more in Dispatch & Stores</div>}
+                {products.filter(p => p.verdict === "Issues Found").map((p, i) => (
+                  <div className="alert" key={"qc-" + i} style={{ borderColor: "var(--rose)", background: "var(--rose-bg)" }}>
+                    <div className="ic" style={{ background: "var(--rose-ink)" }}>QC</div>
+                    <div className="tx">
+                      <b>QC Issues Found</b> — <b>{p.name || p.sku || "product"}</b> ({p.vendor || "—"})
+                      {p.issues ? ` · "${p.issues}"` : ""}
+                      <span className="tag"> · SKU: {p.sku}</span>
+                    </div>
+                    <button className="ghost" onClick={() => go("qcaudit")}>Review</button>
+                  </div>
+                ))}
               </div>
-            ))}
-            {issues.length > 6 && <div className="tag" style={{ marginTop: 4 }}>+{issues.length - 6} more in Dispatch & Stores</div>}
-          </div>
-        )}
+            )}
 
         <div className="sec ov-grid">
           <div className="card pad">
@@ -2537,7 +2605,8 @@
   // }
 
 
-  function Products({ division, products, vendors, onUpsert, onStage, onStageBulk, onQC, onRemove, addVendor, allowedStages, operator, auth, assignments, teamMembers }) {
+  function Products({ division, products, vendors, onUpsert, onStage, onStageBulk, onQC, onRemove, addVendor, allowedStages, operator, auth, assignments, teamMembers, allDivProducts }) {
+
     // Build a map: sku → [stageKeys] that THIS member was specifically assigned
     const myAssignedStagesPerSku = useMemo(() => {
       if (!auth || auth.role === "master" || auth.role === "admin") return null;
@@ -2614,10 +2683,11 @@
         });
 
       // Step 2: build fast sku→product lookup from live products (from Google Sheet)
-      const skuProdMap = {};
-      products.forEach(p => {
-        skuProdMap[(p.sku || "").trim().toLowerCase()] = p;
-      });
+      // REPLACE — use allDivProducts so stage statuses are always from full dataset:
+        const skuProdMap = {};
+        (allDivProducts || products).forEach(p => {
+          skuProdMap[(p.sku || "").trim().toLowerCase()] = p;
+        });
 
       // Step 3: compute stats per member
       return Object.values(memberMap).map(m => {
@@ -2678,10 +2748,15 @@
       setBulkErr("");
       const personName = (operator && operator.trim()) || "";
       try {
-        if (onStageBulk) {
-          await onStageBulk(selectedIds, bulkStage, { status: bulkStatus, person: personName });
-        } else {
-          for (const id of selectedIds) { await onStage(id, bulkStage, { status: bulkStatus, person: personName }); }
+        
+        const CHUNK = 25;
+        for (let i = 0; i < selectedIds.length; i += CHUNK) {
+          const chunk = selectedIds.slice(i, i + CHUNK);
+          if (onStageBulk) {
+            await onStageBulk(chunk, bulkStage, { status: bulkStatus, person: personName });
+          } else {
+            for (const id of chunk) { await onStage(id, bulkStage, { status: bulkStatus, person: personName }); }
+          }
         }
         clearSelect();
       } catch (e) {
@@ -2694,8 +2769,14 @@
 
     useEffect(() => { window.__openAdd = () => { if (isFullAccess) setModal(true); }; return () => { delete window.__openAdd; }; }, [isFullAccess]);
 
-    const filtered = products.filter(p => {
-      const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase(); if (!t.includes(q.toLowerCase())) return false;
+    const sourceProducts = (hasAssignAccess && (assignTab === "assigned" || assignTab === "completed" || assignTab === "pending"))
+      ? (allDivProducts || products)
+      : products;
+      
+
+    const filtered = sourceProducts.filter(p => {
+      const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase();
+      if (!t.includes(q.toLowerCase())) return false;
       if (hasAssignAccess) {
         const isAssigned = !!skuAssignedTo[p.sku.trim().toLowerCase()];
         if (assignTab === "notassigned" && isAssigned) return false;
@@ -2708,12 +2789,15 @@
               a.memberId === targetMemberId &&
               a.sku.trim().toLowerCase() === p.sku.trim().toLowerCase()
           );
-          const allStageDone = myAssignedStagesForCard.length > 0 && myAssignedStagesForCard.every(a => {
+          if (myAssignedStagesForCard.length === 0) return false; // not assigned to this member
+          const specificStages = myAssignedStagesForCard.filter(a => a.stage && a.stage !== "all");
+          const stagesToCheck = specificStages.length > 0 ? specificStages : myAssignedStagesForCard;
+          const allStageDone = stagesToCheck.every(a => {
             const stageKey = a.stage;
             if (!stageKey || stageKey === "all") return productState(p) === "done";
             return p.stages?.[stageKey]?.status === "Completed";
           });
-          if (!allStageDone) return false;
+          if (!allStageDone) return false; // not all stages done, exclude from completed
         }
         if (assignTab === "pending") {
           if (!isAssigned) return false;
@@ -2723,12 +2807,13 @@
               a.memberId === targetMemberId &&
               a.sku.trim().toLowerCase() === p.sku.trim().toLowerCase()
           );
-          const allStageDone = myAssignedStagesForCard.length > 0 && myAssignedStagesForCard.every(a => {
+          if (myAssignedStagesForCard.length === 0) return false; // not assigned to this member at all
+          const allStageDone = myAssignedStagesForCard.every(a => {
             const stageKey = a.stage;
             if (!stageKey || stageKey === "all") return productState(p) === "done";
             return p.stages?.[stageKey]?.status === "Completed";
           });
-          if (allStageDone) return false;
+          if (allStageDone) return false; // it's completed, exclude from pending
         }
       }
       // Member filter
@@ -2749,19 +2834,38 @@
               ["completed", "Completed"],
               ["pending", "Pending"],
             ].map(([k, n]) => {
-              const assignedProducts = products.filter(p => !!skuAssignedTo[p.sku.trim().toLowerCase()]);
+              
+              const assignedProducts = (allDivProducts || products).filter(p => !!skuAssignedTo[p.sku.trim().toLowerCase()]);
               let count;
               if (k === "notassigned") count = products.filter(p => !skuAssignedTo[p.sku.trim().toLowerCase()]).length;
-              else if (k === "assigned") count = assignedProducts.length;
+              else if (k === "assigned") {
+                  if (filterMember) {
+                    const ms = memberStats.find(m => m.id === filterMember);
+                    count = ms ? ms.assigned : 0;
+                  } else {
+                    count = assignedProducts.length;
+                  }
+                }
               else if (k === "completed") {
                 const targetMemberId = filterMember || myMemberId;
-                count = assignedProducts.filter(p => {
+                const memberAssignedSkus = new Set(
+                  assignments
+                    .filter(a => a.division === division && a.memberId === targetMemberId)
+                    .map(a => a.sku.toLowerCase())
+                );
+                const memberPool = (allDivProducts || products).filter(p =>
+                  memberAssignedSkus.has(p.sku.trim().toLowerCase())
+                );
+                count = memberPool.filter(p => {
                   const myStages = assignments.filter(
                     a => a.division === division &&
                       a.memberId === targetMemberId &&
                       a.sku.trim().toLowerCase() === p.sku.trim().toLowerCase()
                   );
-                  return myStages.length > 0 && myStages.every(a => {
+                  if (myStages.length === 0) return false;
+                  const specificStages = myStages.filter(a => a.stage && a.stage !== "all");
+                  const stagesToCheck = specificStages.length > 0 ? specificStages : myStages;
+                  return stagesToCheck.every(a => {
                     if (!a.stage || a.stage === "all") return productState(p) === "done";
                     return p.stages?.[a.stage]?.status === "Completed";
                   });
@@ -2769,33 +2873,44 @@
               }
               else if (k === "pending") {
                 const targetMemberId = filterMember || myMemberId;
-                count = assignedProducts.filter(p => {
+                // Get all SKUs assigned to this specific member
+                const memberAssignedSkus = new Set(
+                  assignments
+                    .filter(a => a.division === division && a.memberId === targetMemberId)
+                    .map(a => a.sku.toLowerCase())
+                );
+                const memberPool = (allDivProducts || products).filter(p =>
+                  memberAssignedSkus.has(p.sku.trim().toLowerCase())
+                );
+                count = memberPool.filter(p => {
                   const myStages = assignments.filter(
                     a => a.division === division &&
                       a.memberId === targetMemberId &&
                       a.sku.trim().toLowerCase() === p.sku.trim().toLowerCase()
                   );
-                  if (myStages.length === 0) return true;
-                  return !myStages.every(a => {
+                  if (myStages.length === 0) return false;
+                  const specificStages = myStages.filter(a => a.stage && a.stage !== "all");
+                  const stagesToCheck = specificStages.length > 0 ? specificStages : myStages;
+                  return !stagesToCheck.every(a => {
                     if (!a.stage || a.stage === "all") return productState(p) === "done";
                     return p.stages?.[a.stage]?.status === "Completed";
                   });
                 }).length;
               }
-              else if (k === "pending") {
-                count = assignedProducts.filter(p => {
-                  const myStages = assignments.filter(
-                    a => a.division === division &&
-                      a.memberId === myMemberId &&
-                      a.sku.trim().toLowerCase() === p.sku.trim().toLowerCase()
-                  );
-                  if (myStages.length === 0) return true;
-                  return !myStages.every(a => {
-                    if (!a.stage || a.stage === "all") return productState(p) === "done";
-                    return p.stages?.[a.stage]?.status === "Completed";
-                  });
-                }).length;
-              }
+              // else if (k === "pending") {
+              //   count = assignedProducts.filter(p => {
+              //     const myStages = assignments.filter(
+              //       a => a.division === division &&
+              //         a.memberId === myMemberId &&
+              //         a.sku.trim().toLowerCase() === p.sku.trim().toLowerCase()
+              //     );
+              //     if (myStages.length === 0) return true;
+              //     return !myStages.every(a => {
+              //       if (!a.stage || a.stage === "all") return productState(p) === "done";
+              //       return p.stages?.[a.stage]?.status === "Completed";
+              //     });
+              //   }).length;
+              // }
               return (
                 <button key={k} onClick={() => { setAssignTab(k); setPage(1); }} style={{
                   padding: "8px 16px", borderRadius: 10, border: "1px solid var(--line2)",
@@ -2948,7 +3063,20 @@
                 ? (allowedStages ? allowedStages.filter(s => cardStages.has(s)) : [...cardStages])
                 : allowedStages;
               const assignedTo = skuAssignedTo[p.sku.trim().toLowerCase()];
-              return <ProductRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))} onStage={onStage} onQC={onQC} onRemove={onRemove} allowedStages={effectiveAllowedStages} selected={!!selected[p.id]} onSelect={() => toggleSelect(p.id)} operator={operator} assignedTo={assignedTo} />;
+
+              // When viewing a specific member's cards, show THEIR stage assignments
+              const memberSpecificStages = filterMember
+                ? assignments
+                    .filter(a => a.memberId === filterMember && 
+                                a.division === division && 
+                                a.sku.trim().toLowerCase() === p.sku.trim().toLowerCase())
+                    .map(a => {
+                      const stageName = STAGES.find(s => s.k === a.stage)?.n || a.stage;
+                      const stageStatus = p.stages?.[a.stage]?.status || "Not Started";
+                      return { stage: a.stage, stageName, stageStatus, memberId: a.memberId };
+                    })
+                : [];
+              return <ProductRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))} onStage={onStage} onQC={onQC} onRemove={onRemove} allowedStages={effectiveAllowedStages} selected={!!selected[p.id]} onSelect={() => toggleSelect(p.id)} operator={operator} assignedTo={assignedTo} memberStages={memberSpecificStages} />;
             })}</div>
             {totalPages > 1 && (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 16, flexWrap: "wrap" }}>
@@ -2967,7 +3095,8 @@
     );
   }
 
-  function ProductRow({ p, open, toggle, onStage, onQC, onRemove, allowedStages, selected, onSelect, operator, assignedTo }) {
+  function ProductRow({ p, open, toggle, onStage, onQC, onRemove, allowedStages, selected, onSelect, operator, assignedTo, memberStages }) {
+
     const pct = productPct(p); const hasIssue = STAGES.some(s => p.stages[s.k].status === "Issue");
     const isFullAccess = allowedStages === null;
     // Filter stages visible to this user
@@ -2982,14 +3111,28 @@
           <span className="pvend">· {p.vendor || "—"} · {p.qty || 0} cards</span>
           {p.set_no && <span className="psku" style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)" }}>{p.set_no}</span>}
           {assignedTo && assignedTo.length > 0 && (
-            <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
-              {[...new Map(assignedTo.map(a => [a.memberId, a])).values()].map((a, i) => (
-                <span key={i} style={{ fontSize: 11, fontWeight: 700, color: "var(--sky-ink)", background: "var(--sky-bg)", border: "1px solid var(--sky)", borderRadius: 999, padding: "2px 10px" }}>
-                  → {a.memberName}
-                </span>
-              ))}
-            </span>
-          )}
+              <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
+                {[...new Map(assignedTo.map(a => [a.memberId, a])).values()].map((a, i) => (
+                  <span key={i} style={{ fontSize: 11, fontWeight: 700, color: "var(--sky-ink)", background: "var(--sky-bg)", border: "1px solid var(--sky)", borderRadius: 999, padding: "2px 10px" }}>
+                    → {a.memberName}
+                  </span>
+                ))}
+              </span>
+            )}
+            {memberStages && memberStages.length > 0 && (
+              <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
+                {memberStages.map((ms, i) => (
+                  <span key={i} style={{
+                    fontSize: 11, fontWeight: 600, borderRadius: 999, padding: "2px 10px",
+                    background: ms.stageStatus === "Completed" ? "var(--sage-bg)" : ms.stageStatus === "In Progress" ? "var(--sky-bg)" : ms.stageStatus === "Issue" ? "var(--rose-bg)" : "#F0EEE8",
+                    color: ms.stageStatus === "Completed" ? "var(--sage-ink)" : ms.stageStatus === "In Progress" ? "var(--sky-ink)" : ms.stageStatus === "Issue" ? "var(--rose-ink)" : "var(--muted)",
+                    border: `1px solid ${ms.stageStatus === "Completed" ? "var(--sage)" : ms.stageStatus === "In Progress" ? "var(--sky)" : ms.stageStatus === "Issue" ? "var(--rose)" : "var(--line2)"}`,
+                  }}>
+                    {ms.stageName}: {ms.stageStatus}
+                  </span>
+                ))}
+              </span>
+            )}
           <div className="spacer" />
           {hasIssue && <Chip status="Issue" />}
           {p.verdict === "Approved" && <span className="chip c-done"><span className="dot" />QC Approved</span>}
@@ -3606,6 +3749,7 @@
 
     const isLocked = (sku) => isMasterOrAdmin ? false : myAssignedSkus.has(sku.trim().toLowerCase());
     // Manager's remaining pool = cards NOT assigned to anyone yet
+    // REPLACE WITH:
     const managerPool = useMemo(() => {
       if (isMasterOrAdmin) {
         return divAllProducts;
@@ -3615,7 +3759,17 @@
             .filter(a => a.memberId === myMemberId)
             .map(a => a.sku.trim().toLowerCase())
         );
-        return divAllProducts.filter(p => myReceivedSkus.has(p.sku.trim().toLowerCase()));
+        // Cards chitra already pushed to her team members
+        const pushedSkus = new Set(
+          divAssignments
+            .filter(a => a.managerId === myMemberId)
+            .map(a => a.sku.trim().toLowerCase())
+        );
+        // Remaining = received but NOT yet pushed to anyone
+        return divAllProducts.filter(p =>
+          myReceivedSkus.has(p.sku.trim().toLowerCase()) &&
+          !pushedSkus.has(p.sku.trim().toLowerCase())
+        );
       }
     }, [divAllProducts, divAssignments, isMasterOrAdmin, myMemberId]);
 
@@ -3811,6 +3965,22 @@
         });
       });
       onSaveAssignments(updatedAssignments);
+      selSkus.forEach(sku => {
+        selStages.forEach(stageKey => {
+          gsPost("appendAssignmentHistory", {
+            id: uid(),
+            action: "assigned",
+            sku,
+            division,
+            fromMemberId: null,
+            toMemberId: selMember,
+            managerId: isMasterOrAdmin ? "master" : myMemberId,
+            stage: stageKey,
+            note: "",
+            at: now()
+          });
+        });
+      });
       setSelSkus([]);
       setSelStages([]);
       setAssErr("");
@@ -3818,6 +3988,20 @@
     };
 
     const unassign = (id, sku, memberName) => {
+
+      
+      gsPost("appendAssignmentHistory", {
+        id: uid(),
+        action: "unassigned",
+        sku,
+        division,
+        fromMemberId: id,  // the assignment id being removed
+        toMemberId: null,
+        managerId: isMasterOrAdmin ? "master" : myMemberId,
+        stage: "",
+        note: `Removed by ${auth.name}`,
+        at: now()
+      });
       onSaveAssignments(assignments.filter(a => a.id !== id));
       setAssErr("");
       setAssMsg(`✓ Removed ${sku} from ${memberName}.`);
@@ -4656,6 +4840,31 @@
     const [verdicts, setVerdicts] = useState({});
     const [saving, setSaving] = useState({});
     const [saved, setSaved] = useState({});
+    const [copied, setCopied] = useState({});
+
+    const [bulkSelected, setBulkSelected] = useState(new Set());
+    const [bulkBusy, setBulkBusy] = useState(false);
+    const [bulkDone, setBulkDone] = useState(false);
+
+    const toggleBulkSelect = (id) => setBulkSelected(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+    const selectAllVisible = () => setBulkSelected(new Set(filtered.map(p => p.id)));
+    const clearBulkSelect = () => setBulkSelected(new Set());
+
+    const bulkApprove = async () => {
+      if (bulkSelected.size === 0) return;
+      setBulkBusy(true);
+      for (const pid of bulkSelected) {
+        await onSubmit(pid, "Approved", "", []);
+      }
+      setBulkBusy(false);
+      setBulkDone(true);
+      setBulkSelected(new Set());
+      setTimeout(() => setBulkDone(false), 2000);
+    };
 
     const eligibleStages = STAGES.filter(s => s.k !== "finalqc");
 
@@ -4706,7 +4915,46 @@
 
         {/* Toolbar */}
         <div className="toolbar">
-          <div className="search">{I.search({})}<input placeholder="Search SKU, product or vendor…" value={q} onChange={e => setQ(e.target.value)} /></div>
+          <div className="search" style={{ position: "relative" }}>
+            {I.search({})}
+            <input
+              placeholder="Search SKU, product or vendor…"
+              value={q}
+              onChange={e => { setQ(e.target.value); }}
+              onBlur={() => setTimeout(() => setQ(q => q), 150)}
+            />
+            {q.length > 0 && (() => {
+              const sugs = products.filter(p =>
+                (p.sku + " " + p.name + " " + p.vendor).toLowerCase().includes(q.toLowerCase())
+              ).slice(0, 8);
+              return sugs.length > 0 ? (
+                <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 12, boxShadow: "var(--shadow-lg)", zIndex: 50, overflow: "hidden" }}>
+                  {sugs.map(p => (
+                    <div
+                      key={p.id}
+                      onMouseDown={() => setQ(p.sku)}
+                      style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", cursor: "pointer", borderBottom: "1px solid var(--line)" }}
+                      onMouseEnter={e => e.currentTarget.style.background = "var(--card-2)"}
+                      onMouseLeave={e => e.currentTarget.style.background = "var(--card)"}
+                    >
+                      <span className="psku" style={{ flexShrink: 0 }}>{p.sku}</span>
+                      {p.name && <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>{p.name}</span>}
+                      {p.vendor && <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: "auto" }}>{p.vendor}</span>}
+                      {p.set_no && <span className="psku" style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)", flexShrink: 0 }}>{p.set_no}</span>}
+                      <span style={{
+                        fontSize: 10.5, fontWeight: 700, borderRadius: 999, padding: "2px 9px", flexShrink: 0,
+                        background: p.verdict === "Approved" ? "var(--sage-bg)" : p.verdict === "Issues Found" ? "var(--rose-bg)" : "var(--peach-bg)",
+                        color: p.verdict === "Approved" ? "var(--sage-ink)" : p.verdict === "Issues Found" ? "var(--rose-ink)" : "var(--peach-ink)",
+                        border: `1px solid ${p.verdict === "Approved" ? "var(--sage)" : p.verdict === "Issues Found" ? "var(--rose)" : "var(--peach)"}`,
+                      }}>
+                        {p.verdict === "Approved" ? "✓ Approved" : p.verdict === "Issues Found" ? "⚠ Issues" : "⏳ Pending"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : null;
+            })()}
+          </div>
           {[
             ["pending", `Pending (${pendingCount})`],
             ["approved", `Approved (${approvedCount})`],
@@ -4722,6 +4970,39 @@
           ))}
         </div>
 
+        {/* Bulk selection bar */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, fontWeight: 600, color: "var(--muted)", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={bulkSelected.size === filtered.length && filtered.length > 0}
+              onChange={e => e.target.checked ? selectAllVisible() : clearBulkSelect()}
+              style={{ width: 15, height: 15, accentColor: "var(--sage-deep)" }}
+            />
+            Select all ({filtered.length})
+          </label>
+          {bulkSelected.size > 0 && (
+            <>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "var(--sky-ink)", background: "var(--sky-bg)", border: "1px solid var(--sky)", borderRadius: 999, padding: "3px 14px" }}>
+                {bulkSelected.size} selected
+              </span>
+              <button
+                onClick={bulkApprove}
+                disabled={bulkBusy}
+                style={{
+                  padding: "8px 20px", borderRadius: 10, fontWeight: 700, fontSize: 13,
+                  background: bulkDone ? "var(--sage)" : "var(--sage-deep)",
+                  color: "#fff", border: 0, cursor: "pointer", opacity: bulkBusy ? 0.6 : 1
+                }}>
+                {bulkBusy ? "Approving…" : bulkDone ? "✓ Done" : `✓ Approve all (${bulkSelected.size})`}
+              </button>
+              <button className="ghost" style={{ padding: "7px 14px", fontSize: 12 }} onClick={clearBulkSelect}>
+                Clear
+              </button>
+            </>
+          )}
+        </div>
+
         {filtered.length === 0
           ? <div className="card empty">No products match this filter.</div>
           : <div className="plist">
@@ -4735,9 +5016,33 @@
                 <div key={p.id} className="prow">
                   {/* Card header */}
                   <div className="phead" onClick={() => setExpanded(e => ({ ...e, [p.id]: !e[p.id] }))}>
-                    <span className={"chev " + (isOpen ? "open" : "")}>▶</span>
+                        <input
+                          type="checkbox"
+                          checked={bulkSelected.has(p.id)}
+                          onChange={e => { e.stopPropagation(); toggleBulkSelect(p.id); }}
+                          onClick={e => e.stopPropagation()}
+                          style={{ width: 15, height: 15, accentColor: "var(--sage-deep)", cursor: "pointer", flexShrink: 0 }}
+                        />
+                        <span className={"chev " + (isOpen ? "open" : "")}>▶</span>
                     <span className="psku">{p.sku || "no-sku"}</span>
-                    {p.name && <span className="pname">{p.name}</span>}
+                      <button
+                        onClick={e => {
+                          e.stopPropagation();
+                          navigator.clipboard.writeText(p.sku || "");
+                          setCopied(c => ({ ...c, [p.id]: true }));
+                          setTimeout(() => setCopied(c => ({ ...c, [p.id]: false })), 1500);
+                        }}
+                        style={{
+                          fontSize: 10.5, fontWeight: 700, padding: "2px 9px", borderRadius: 6, cursor: "pointer",
+                          background: copied[p.id] ? "var(--sage-bg)" : "var(--card)",
+                          border: `1px solid ${copied[p.id] ? "var(--sage)" : "var(--line2)"}`,
+                          color: copied[p.id] ? "var(--sage-ink)" : "var(--muted)",
+                          flexShrink: 0, transition: ".15s"
+                        }}
+                      >
+                        {copied[p.id] ? "✓ Copied" : "Copy SKU"}
+                      </button>
+                      {p.name && <span className="pname">{p.name}</span>}
                     <span className="pvend">· {p.vendor || "—"} · {p.qty || 0} cards</span>
                     {p.set_no && <span className="psku" style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)" }}>{p.set_no}</span>}
                     <div className="spacer" />

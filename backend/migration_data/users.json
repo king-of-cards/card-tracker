@@ -1,0 +1,37 @@
+[
+  {
+    "email": "admin@kingofcards.in",
+    "password": "admin123",
+    "name": "Admin",
+    "role": "admin",
+    "stages": "all"
+  },
+  {
+    "email": "rahul.b@kingofcards.in",
+    "password": "rahul123",
+    "name": "Rahul",
+    "role": "master",
+    "stages": "all"
+  },
+  {
+    "email": "gungun@kingofcards.in",
+    "password": "gungun123",
+    "name": "Gungun",
+    "role": "master",
+    "stages": "all"
+  },
+  {
+    "email": "backend@kingofcards.in",
+    "password": "backend123",
+    "name": "Backend Team",
+    "role": "member",
+    "stages": "barcoding,content,backend,website"
+  },
+  {
+    "email": "video@kingofcards.in",
+    "password": "video123",
+    "name": "Video Team",
+    "role": "member",
+    "stages": "photography,videography,videoedit,images"
+  }
+]
