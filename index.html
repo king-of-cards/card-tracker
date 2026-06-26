@@ -2315,7 +2315,7 @@
       { lab: "Total Products", val: total, sub: division, ic: I.box },
       { lab: "With Manager", val: remainingWithManager, sub: isMasterOrAdminView ? "not yet assigned" : "remaining with me", ic: I.layers, color: remainingWithManager > 0 ? "var(--peach-ink)" : "var(--sage-ink)" },
       { lab: "Listing complete", val: done, sub: "all stages done", ic: I.check, color: "var(--sage-ink)" },
-      { lab: "Issues", val: `${missing} / ${damaged}`, sub: `${issues.length} store flags · ${products.filter(p => p.verdict === "Issues Found").length} QC flags`, ic: I.alert, color: (missing + damaged + products.filter(p => p.verdict === "Issues Found").length) ? "var(--rose-ink)" : "var(--ink)" },
+      { lab: "Issues", val: products.filter(p => p.verdict === "Issues Found").length, sub: `${products.filter(p => p.verdict === "Issues Found").length} QC flags`, ic: I.alert, color: products.filter(p => p.verdict === "Issues Found").length ? "var(--rose-ink)" : "var(--ink)" },
     ];
 
     return (
@@ -2465,6 +2465,26 @@
                       </tr>
                     );
                   })}
+
+                  <tr style={{ borderBottom: "1px solid var(--line)" }}>
+                    <td style={{ padding: "10px 10px", fontWeight: 600, fontSize: 13 }}>QC Audit</td>
+                    <td style={{ textAlign: "center", padding: "10px 10px" }}>
+                      <span style={{ color: "var(--faint)" }}>—</span>
+                    </td>
+                    <td style={{ textAlign: "center", padding: "10px 10px" }}>
+                      <span style={{ color: "var(--faint)" }}>—</span>
+                    </td>
+                    <td style={{ textAlign: "center", padding: "10px 10px" }}>
+                      {filteredProducts.filter(p => p.verdict === "Approved").length > 0
+                        ? <span style={{ background: "var(--sage-bg)", color: "var(--sage-ink)", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{filteredProducts.filter(p => p.verdict === "Approved").length}</span>
+                        : <span style={{ color: "var(--faint)" }}>—</span>}
+                    </td>
+                    <td style={{ textAlign: "center", padding: "10px 10px" }}>
+                      {filteredProducts.filter(p => p.verdict === "Issues Found").length > 0
+                        ? <span style={{ background: "var(--rose-bg)", color: "var(--rose-ink)", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{filteredProducts.filter(p => p.verdict === "Issues Found").length}</span>
+                        : <span style={{ color: "var(--faint)" }}>—</span>}
+                    </td>
+                  </tr>
                 </tbody>
               </table>
             </div>
