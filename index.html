@@ -3907,22 +3907,28 @@
       if (isMasterOrAdmin) {
         return divAllProducts;
       } else {
-        const myReceivedSkus = new Set(
-          divAssignments
-            .filter(a => a.memberId === myMemberId)
-            .map(a => a.sku.trim().toLowerCase())
-        );
-        // Cards chitra already pushed to her team members
-        const pushedSkus = new Set(
-          divAssignments
-            .filter(a => a.managerId === myMemberId)
-            .map(a => a.sku.trim().toLowerCase())
-        );
-        // Remaining = received but NOT yet pushed to anyone
-        return divAllProducts.filter(p =>
-          myReceivedSkus.has(p.sku.trim().toLowerCase()) &&
-          !pushedSkus.has(p.sku.trim().toLowerCase())
-        );
+        // Pool = cards assigned to me (memberId === myMemberId) where
+        // MY specific assigned stages are NOT all Completed in the DB.
+        // This matches exactly what the backend/DB says is still pending.
+        const myAssignmentRows = divAssignments.filter(a => a.memberId === myMemberId);
+        // Group by SKU → list of stage assignments for me on that card
+        const skuStageMap = {};
+        myAssignmentRows.forEach(a => {
+          const key = a.sku.trim().toLowerCase();
+          (skuStageMap[key] ||= []).push(a);
+        });
+        return divAllProducts.filter(p => {
+          const key = p.sku.trim().toLowerCase();
+          const myRows = skuStageMap[key];
+          if (!myRows || myRows.length === 0) return false;
+          // A card stays in the pool if any of MY assigned stages is not yet Completed
+          const specificStages = myRows.filter(a => a.stage && a.stage !== "all");
+          const stagesToCheck = specificStages.length > 0 ? specificStages : myRows;
+          return !stagesToCheck.every(a => {
+            if (!a.stage || a.stage === "all") return productState(p) === "done";
+            return p.stages?.[a.stage]?.status === "Completed";
+          });
+        });
       }
     }, [divAllProducts, divAssignments, isMasterOrAdmin, myMemberId]);
 
@@ -4310,22 +4316,34 @@
               <h3 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 600 }}>Assign SKU to member</h3>
               {!isMasterOrAdmin && (
                 <div style={{ display: "flex", gap: 16, marginBottom: 14, flexWrap: "wrap" }}>
-                  <div style={{ background: "var(--sky-bg)", border: "1px solid var(--sky)", borderRadius: 10, padding: "8px 14px", fontSize: 12 }}>
-                    <span style={{ color: "var(--muted)" }}>Received from master</span>
-                    <b style={{ color: "var(--sky-ink)", marginLeft: 6 }}>
-                      {new Set(divAssignments.filter(a => a.memberId === myMemberId).map(a => a.sku.toLowerCase())).size}
-                    </b>
-                  </div>
-                  <div style={{ background: "var(--sage-bg)", border: "1px solid var(--sage)", borderRadius: 10, padding: "8px 14px", fontSize: 12 }}>
-                    <span style={{ color: "var(--muted)" }}>Pushed to team</span>
-                    <b style={{ color: "var(--sage-ink)", marginLeft: 6 }}>
-                      {new Set(divAssignments.filter(a => a.managerId === myMemberId).map(a => a.sku.toLowerCase())).size}
-                    </b>
-                  </div>
-                  <div style={{ background: "var(--peach-bg)", border: "1px solid var(--peach)", borderRadius: 10, padding: "8px 14px", fontSize: 12 }}>
-                    <span style={{ color: "var(--muted)" }}>Remaining with me</span>
-                    <b style={{ color: "var(--peach-ink)", marginLeft: 6 }}>{managerPool.length}</b>
-                  </div>
+                  {(() => {
+                    const receivedSkus = new Set(
+                      divAssignments.filter(a => a.memberId === myMemberId)
+                        .map(a => a.sku.trim().toLowerCase())
+                    );
+                    const pushedSkus = new Set(
+                      divAssignments.filter(a => a.managerId === myMemberId && a.memberId !== myMemberId)
+                        .map(a => a.sku.trim().toLowerCase())
+                    );
+                    // Remaining = cards in my pool (stages not yet completed per DB)
+                    const remainingCount = managerPool.length;
+                    return (
+                      <>
+                        <div style={{ background: "var(--sky-bg)", border: "1px solid var(--sky)", borderRadius: 10, padding: "8px 14px", fontSize: 12 }}>
+                          <span style={{ color: "var(--muted)" }}>Received from master</span>
+                          <b style={{ color: "var(--sky-ink)", marginLeft: 6 }}>{receivedSkus.size}</b>
+                        </div>
+                        <div style={{ background: "var(--sage-bg)", border: "1px solid var(--sage)", borderRadius: 10, padding: "8px 14px", fontSize: 12 }}>
+                          <span style={{ color: "var(--muted)" }}>Pushed to team</span>
+                          <b style={{ color: "var(--sage-ink)", marginLeft: 6 }}>{pushedSkus.size}</b>
+                        </div>
+                        <div style={{ background: "var(--peach-bg)", border: "1px solid var(--peach)", borderRadius: 10, padding: "8px 14px", fontSize: 12 }}>
+                          <span style={{ color: "var(--muted)" }}>Remaining with me</span>
+                          <b style={{ color: "var(--peach-ink)", marginLeft: 6 }}>{remainingCount}</b>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               )}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
