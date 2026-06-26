@@ -2952,7 +2952,7 @@
               style={{ border: "1px solid var(--line2)", borderRadius: 10, padding: "9px 12px", background: "var(--card)", fontSize: 13, fontWeight: 500, minWidth: 180 }}
             >
               <option value="">— all members —</option>
-              {memberStats.map(m => (
+              {memberStats.filter(m => m.id !== myMemberId).map(m => (
                 <option key={m.id} value={m.id}>
                   {m.name} · {m.assigned} cards · {m.completedTasks}/{m.totalTasks} stages done · {m.pending} pending
                 </option>
