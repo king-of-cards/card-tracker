@@ -1482,8 +1482,8 @@
 
 
 
-  const API = " https://cardtracker.ddns.net"
-
+  // const API = " https://cardtracker.ddns.net"
+  const API = "http://localhost:8080"
 
   async function gsGetUsers() {
     try {
@@ -2215,10 +2215,28 @@
     const [fVendor, setFVendor] = useState("");
     const [fSetNo, setFSetNo] = useState("");
     const [fMember, setFMember] = useState("");
+    // const [pipelineStats, setPipelineStats] = useState(null);
     const myMemberId = useMemo(() => {
       const me = teamMembers.find(m => m.email && auth?.email && m.email.toLowerCase() === auth.email.toLowerCase());
       return me?.id || null;
     }, [teamMembers, auth]);
+    const [dbStats, setDbStats] = useState(null);
+    const [pipelineStats, setPipelineStats] = useState(null);
+
+    useEffect(() => {
+      if (!auth || !myMemberId) return;
+      
+      fetch(`${API}/api/memberStats?memberId=${encodeURIComponent(myMemberId)}&division=${encodeURIComponent(division)}`)
+        .then(r => r.json())
+        .then(data => { if (data.ok) setDbStats(data); })
+        .catch(e => console.error("memberStats fetch failed", e));
+
+      fetch(`${API}/api/pipelineStats?memberId=${encodeURIComponent(myMemberId)}&division=${encodeURIComponent(division)}`)
+        .then(r => r.json())
+        .then(data => { if (data.ok) setPipelineStats(data.stages); })
+        .catch(e => console.error("pipelineStats fetch failed", e));
+
+    }, [myMemberId, division, auth]);
     const myTeam = useMemo(() => {
       const reports = teamMembers.filter(m => m.division === division && m.managerId === myMemberId);
       const myOwn = teamMembers.find(m => m.id === myMemberId);
@@ -2276,7 +2294,7 @@
       );
       return (allDivProducts || products).filter(p => mySkus.has(p.sku.trim().toLowerCase()));
     }, [allDivProducts, products, assignments, division, isMasterOrAdminView, myMemberId]);
-    const filterPool = fMember ? (allDivProducts || products) : myFullPool;
+    const filterPool = myFullPool;
 
     // Single source of truth for "is this card done, for this manager's own scope".
     // A card counts as complete only when every stage THIS manager was specifically
@@ -2306,18 +2324,32 @@
           .map(a => a.sku.trim().toLowerCase())
       );
     }, [assignments, division, myMemberId]);
-    const filteredProducts = useMemo(() => filterPool.filter(p =>
-      (!fVendor || (p.vendor || "").trim().toLowerCase() === fVendor.trim().toLowerCase()) &&
-      (!fSetNo || (p.set_no || "").trim().toLowerCase() === fSetNo.trim().toLowerCase()) &&
-      (!fMember || (memberSkuMap[fMember]?.has((p.sku || "").trim().toLowerCase())))
-    ), [filterPool, fVendor, fSetNo, fMember, memberSkuMap]);
+    const filteredProducts = useMemo(() => {
+  // When a team member is selected, scope pipeline table to THEIR cards only
+  // drawn from the full division pool so counts reflect actual DB stage statuses
+      if (fMember) {
+        const memberSkus = memberSkuMap[fMember];
+        return (allDivProducts || products).filter(p =>
+          (!fVendor || (p.vendor || "").trim().toLowerCase() === fVendor.trim().toLowerCase()) &&
+          (!fSetNo || (p.set_no || "").trim().toLowerCase() === fSetNo.trim().toLowerCase()) &&
+          (memberSkus?.has((p.sku || "").trim().toLowerCase()))
+        );
+      }
+      // No member filter — show chitra's complete 96-card pool
+      return myFullPool.filter(p =>
+        (!fVendor || (p.vendor || "").trim().toLowerCase() === fVendor.trim().toLowerCase()) &&
+        (!fSetNo || (p.set_no || "").trim().toLowerCase() === fSetNo.trim().toLowerCase())
+      );
+    }, [myFullPool, allDivProducts, products, fVendor, fSetNo, fMember, memberSkuMap]);
     const hasFilters = fVendor || fSetNo || fMember;
 
-    const total = filteredProducts.length;
-    const done = filteredProducts.filter(p => isCardCompleteForMe(p)).length;
-    const prog = filteredProducts.filter(p => !isCardCompleteForMe(p) && productState(p) === "prog").length;
-    const none = filteredProducts.filter(p => !isCardCompleteForMe(p) && productState(p) === "none").length;
-    const withIssue = filteredProducts.filter(p => !isCardCompleteForMe(p) && productState(p) === "issue").length;
+    const total = myFullPool.length;
+    const useDbForDonut = !fMember && !fVendor && !fSetNo && !isMasterOrAdminView && dbStats;
+    const done = useDbForDonut ? Number(dbStats.completed) : filteredProducts.filter(p => isCardCompleteForMe(p)).length;
+    const pendingCards = useDbForDonut ? Number(dbStats.pending) : filteredProducts.filter(p => !isCardCompleteForMe(p)).length;
+    const prog = useDbForDonut ? 0 : filteredProducts.filter(p => !isCardCompleteForMe(p) && productState(p) === "prog").length;
+    const none = useDbForDonut ? pendingCards : filteredProducts.filter(p => !isCardCompleteForMe(p) && productState(p) === "none").length;
+    const withIssue = useDbForDonut ? 0 : filteredProducts.filter(p => !isCardCompleteForMe(p) && productState(p) === "issue").length;
     let dispatched = 0, received = 0, missing = 0, damaged = 0;
     filteredProducts.forEach(p => STORES.forEach(st => { const s = p.stores[st]; dispatched += s.dispatched || 0; if (s.received) received++; missing += s.missing || 0; damaged += s.damaged || 0; }));
     // const visibleStages = allowedStages ? STAGES.filter(s => allowedStages.includes(s.k)) : STAGES;
@@ -2371,9 +2403,8 @@
           .filter(a => a.division === division && a.memberId === myMemberId)
           .map(a => a.sku.toLowerCase())
       );
-      const withMeSkus = new Set([...mySkus].filter(s => !pushedToTeamSkus.has(s)));
       distributedSkus = pushedToTeamSkus.size;
-      remainingWithManager = withMeSkus.size;
+      remainingWithManager = myFullPool.length - distributedSkus;
       distributionBreakdown = myTeam
         .filter(m => m.id !== myMemberId)
         .map(m => {
@@ -2401,12 +2432,41 @@
       ? done
       : myFullPool.filter(p => isCardCompleteForMe(p)).length;
 
+    // Cards chitra kept for herself (not pushed to any team member)
+    const myPersonalPool = useMemo(() => {
+      if (isMasterOrAdminView) return myFullPool;
+      return myFullPool.filter(p => !pushedToTeamSkuSet.has(p.sku.trim().toLowerCase()));
+    }, [myFullPool, pushedToTeamSkuSet, isMasterOrAdminView]);
+
+    const myPersonalComplete = myPersonalPool.filter(p => isCardCompleteForMe(p)).length;
+    const myPersonalPending = myPersonalPool.filter(p => !isCardCompleteForMe(p)).length;
+
+    const totalVal = isMasterOrAdminView ? myFullPool.length 
+      : (dbStats ? Number(dbStats.total_assigned) : myFullPool.length);
+    const pendingVal = isMasterOrAdminView ? pendingCount 
+      : (dbStats ? Number(dbStats.pending) : myPersonalPending);
+    const completeVal = isMasterOrAdminView ? completeCount 
+      : (dbStats ? Number(dbStats.completed) : myPersonalComplete);
+    const distributedVal = isMasterOrAdminView ? distributedSkus 
+      : (dbStats ? Number(dbStats.pushed_to_team) : distributedSkus);
+    const withManagerVal = isMasterOrAdminView ? remainingWithManager 
+      : (dbStats ? Number(dbStats.kept_by_manager) : myPersonalPool.length);
+
     const kpis = [
-      { lab: "Total Products", val: total, sub: division, ic: I.box },
-      { lab: "Pending", val: pendingCount, sub: isMasterOrAdminView ? "not yet assigned" : "still in progress", ic: I.layers, color: pendingCount > 0 ? "var(--peach-ink)" : "var(--sage-ink)" },
-      { lab: "Complete", val: completeCount, sub: "my stages done", ic: I.check, color: "var(--sage-ink)" },
+      { lab: "Total Products", val: totalVal, sub: division, ic: I.box },
+      { lab: "Pending", val: pendingVal, sub: isMasterOrAdminView ? "not yet assigned" : "with me, not done", ic: I.layers, color: pendingVal > 0 ? "var(--peach-ink)" : "var(--sage-ink)" },
+      { lab: "Complete", val: completeVal, sub: isMasterOrAdminView ? "fully done" : "done by me personally", ic: I.check, color: "var(--sage-ink)" },
       { lab: "Issues", val: products.filter(p => p.verdict === "Issues Found").length, sub: `${products.filter(p => p.verdict === "Issues Found").length} QC flags`, ic: I.alert, color: products.filter(p => p.verdict === "Issues Found").length ? "var(--rose-ink)" : "var(--ink)" },
     ];
+
+
+    useEffect(() => {
+      if (!auth || !myMemberId) return;
+      fetch(`${API}/api/pipelineStats?memberId=${encodeURIComponent(myMemberId)}&division=${encodeURIComponent(division)}`)
+        .then(r => r.json())
+        .then(data => { if (data.ok) setPipelineStats(data.stages); })
+        .catch(e => console.error("pipelineStats fetch failed", e));
+    }, [myMemberId, division, auth]);
 
     return (
       <div>
@@ -2416,7 +2476,7 @@
           <div className="card kpi" style={{ position: "relative" }}>
             <div className="kico">{I.gear({})}</div>
             <div className="lab">Distributed to Team</div>
-            <div className="val" style={{ color: "var(--sky-ink)" }}>{distributedSkus}</div>
+            <div className="val" style={{ color: "var(--sky-ink)" }}>{distributedVal}</div>
             <div className="sub" style={{ display: "flex", alignItems: "center", gap: 6, cursor: distributionBreakdown?.length > 0 ? "pointer" : "default" }}
               onClick={() => distributionBreakdown?.length > 0 && setShowDistBreakdown(s => !s)}>
               {distributionBreakdown?.length > 0
@@ -2441,7 +2501,7 @@
           <div style={{ flex: 1, minWidth: 200 }}>
             <div style={{ display: "flex", height: 10, borderRadius: 99, overflow: "hidden", background: "var(--line2)" }}>
               {total > 0 && <>
-                <div style={{ width: `${(distributedSkus / total) * 100}%`, background: "var(--sky)", transition: "width .4s" }} title={`Distributed: ${distributedSkus}`} />
+                <div style={{ width: `${(distributedVal / totalVal) * 100}%`, background: "var(--sky)", transition: "width .4s" }} title={`Distributed: ${distributedVal}`} />
                 <div style={{ flex: 1, background: "var(--peach)", transition: "width .4s" }} title={`With manager: ${remainingWithManager}`} />
               </>}
             </div>
@@ -2450,12 +2510,12 @@
             <span style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ width: 10, height: 10, borderRadius: 3, background: "var(--sky)", display: "inline-block" }} />
               <span style={{ color: "var(--muted)" }}>Distributed</span>
-              <b style={{ color: "var(--sky-ink)" }}>{distributedSkus}</b>
+              <b style={{ color: "var(--sky-ink)" }}>{distributedVal}</b>
             </span>
             <span style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ width: 10, height: 10, borderRadius: 3, background: "var(--peach)", display: "inline-block" }} />
               <span style={{ color: "var(--muted)" }}>With manager</span>
-              <b style={{ color: "var(--peach-ink)" }}>{remainingWithManager}</b>
+              <b style={{ color: "var(--peach-ink)" }}>{isMasterOrAdminView ? remainingWithManager : withManagerVal}</b>
             </span>
             <span style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ color: "var(--muted)" }}>Total</span>
@@ -2514,7 +2574,7 @@
                 <span className="hint" style={{ whiteSpace: "nowrap" }}>manufacturing → listing → dispatch</span>
               </div>
             </div>
-            {hasFilters && <div className="tag" style={{ marginBottom: 10 }}>Showing {filteredProducts.length} of {products.length} {division} products{fVendor ? ` · vendor: ${fVendor}` : ""}{fSetNo ? ` · set no: ${fSetNo}` : ""}</div>}
+            {hasFilters && <div className="tag" style={{ marginBottom: 10 }}>Showing {filteredProducts.length} of {totalVal} {division} products{fVendor ? ` · vendor: ${fVendor}` : ""}{fSetNo ? ` · set no: ${fSetNo}` : ""}{fMember ? ` · member filter` : ""}</div>}
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
@@ -2528,10 +2588,13 @@
                 </thead>
                 <tbody>
                   {stageStats.map(s => {
-                    const notStarted = filteredProducts.filter(p => p.stages[s.k].status === "Not Started").length;
-                    const inProgress = filteredProducts.filter(p => p.stages[s.k].status === "In Progress").length;
-                    const completed = filteredProducts.filter(p => p.stages[s.k].status === "Completed").length;
-                    const issue = filteredProducts.filter(p => p.stages[s.k].status === "Issue").length;
+                    // Use DB pipeline stats when no filter is active — most accurate
+                    // Fall back to JS-computed counts when a filter is applied
+                    const useDb = fMember === myMemberId && !fVendor && !fSetNo && !isMasterOrAdminView && pipelineStats && pipelineStats[s.k];
+                    const notStarted = useDb ? pipelineStats[s.k].notStarted : filteredProducts.filter(p => p.stages[s.k].status === "Not Started").length;
+                    const inProgress = useDb ? pipelineStats[s.k].inProgress : filteredProducts.filter(p => p.stages[s.k].status === "In Progress").length;
+                    const completed = useDb ? pipelineStats[s.k].completed : filteredProducts.filter(p => p.stages[s.k].status === "Completed").length;
+                    const issue = useDb ? pipelineStats[s.k].issue : filteredProducts.filter(p => p.stages[s.k].status === "Issue").length;
                     return (
                       <tr key={s.k} style={{ borderBottom: "1px solid var(--line)" }}>
                         <td style={{ padding: "10px 10px", fontWeight: 600, fontSize: 13 }}>{s.n}</td>
@@ -2585,7 +2648,7 @@
           <div className="card pad">
             <div className="sec-h" style={{ marginBottom: 10 }}><h3>Status mix</h3></div>
             <div className="donutwrap">
-              <Donut segments={segs} centerTop={total} centerBot="products" />
+              <Donut segments={segs} centerTop={totalVal} centerBot="products" />
               <div className="legend">
                 {segs.map((s, i) => (<div className="li" key={i}><span className="sw" style={{ background: s.color }} />{s.label}<span className="num">{s.value}</span></div>))}
               </div>

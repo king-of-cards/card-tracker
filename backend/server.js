@@ -586,6 +586,118 @@ app.post("/api/appendAudit", async (req, res) => {
   }
 });
 
+/* ----------------------------------------------------------------
+   GET /api/memberStats?memberId=chitra&division=KOC Cards
+   Returns accurate counts straight from DB for Overview KPIs
+---------------------------------------------------------------- */
+app.get("/api/memberStats", async (req, res) => {
+  const { memberId, division } = req.query;
+  if (!memberId || !division) return res.status(400).json({ ok: false, error: "memberId and division required" });
+  try {
+    const { rows } = await pool.query(`
+      WITH member_skus AS (
+        SELECT DISTINCT sku
+        FROM assignments
+        WHERE member_id = $1 AND division = $2
+      ),
+      pushed_skus AS (
+        SELECT DISTINCT sku
+        FROM assignments
+        WHERE manager_id = $1
+          AND member_id != $1
+          AND division = $2
+      ),
+      kept_skus AS (
+        SELECT sku FROM member_skus
+        WHERE sku NOT IN (SELECT sku FROM pushed_skus)
+      ),
+      -- Card-level completion: for every card this member is assigned on
+      -- (regardless of who assigned it), compare how many stages they own
+      -- on that card vs how many of those stages are Completed.
+      target_assignments AS (
+        SELECT DISTINCT p.id AS product_id, a.stage AS assigned_stage
+        FROM assignments a
+        JOIN products p ON p.sku = a.sku AND p.division = a.division
+        WHERE a.member_id = $1 AND a.division = $2
+      ),
+      card_level AS (
+        SELECT
+          ta.product_id,
+          COUNT(*) AS stages_owned,
+          COUNT(*) FILTER (WHERE se.status = 'Completed') AS stages_completed
+        FROM target_assignments ta
+        JOIN stage_entries se
+          ON se.product_id = ta.product_id
+          AND se.stage_key = ta.assigned_stage
+        GROUP BY ta.product_id
+      )
+      SELECT
+        (SELECT COUNT(*) FROM member_skus) AS total_assigned,
+        (SELECT COUNT(*) FROM pushed_skus) AS pushed_to_team,
+        (SELECT COUNT(*) FROM kept_skus)   AS kept_by_manager,
+        (SELECT COUNT(*) FROM card_level WHERE stages_completed = stages_owned) AS completed,
+        (SELECT COUNT(*) FROM card_level WHERE stages_completed < stages_owned) AS pending
+    `, [memberId, division]);
+
+    res.json({ ok: true, ...rows[0] });
+  } catch (e) {
+    console.error("memberStats error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+
+
+/* ----------------------------------------------------------------
+   GET /api/pipelineStats?memberId=chitra&division=KOC Cards
+   Returns per-stage counts for all SKUs assigned to this member
+---------------------------------------------------------------- */
+app.get("/api/pipelineStats", async (req, res) => {
+  const { memberId, division } = req.query;
+  if (!memberId || !division) return res.status(400).json({ ok: false, error: "memberId and division required" });
+  try {
+    const { rows } = await pool.query(`
+      WITH member_skus AS (
+        SELECT DISTINCT p.id as product_id, a.stage as assigned_stage
+        FROM assignments a
+        JOIN products p ON p.sku = a.sku AND p.division = a.division
+        WHERE a.member_id = $1
+          AND a.division = $2
+      )
+      SELECT
+        se.stage_key,
+        COUNT(*) FILTER (WHERE se.status = 'Not Started') as not_started,
+        COUNT(*) FILTER (WHERE se.status = 'In Progress') as in_progress,
+        COUNT(*) FILTER (WHERE se.status = 'Completed') as completed,
+        COUNT(*) FILTER (WHERE se.status = 'Issue') as issue
+      FROM member_skus ms
+      JOIN stage_entries se ON se.product_id = ms.product_id
+        AND se.stage_key = ms.assigned_stage
+      GROUP BY se.stage_key
+    `, [memberId, division]);
+
+    const stages = {};
+    rows.forEach(r => {
+      stages[r.stage_key] = {
+        notStarted: Number(r.not_started),
+        inProgress: Number(r.in_progress),
+        completed: Number(r.completed),
+        issue: Number(r.issue),
+      };
+    });
+
+    res.json({ ok: true, stages });
+  } catch (e) {
+    console.error("pipelineStats error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+
+
+
+
+
 app.listen(process.env.PORT, () => {
   console.log(`Server running on http://localhost:${process.env.PORT}`);
 });
