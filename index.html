@@ -2238,11 +2238,14 @@
 
     }, [myMemberId, division, auth]);
     const myTeam = useMemo(() => {
+      if (auth?.role === "master" || auth?.role === "admin") {
+        return teamMembers.filter(m => m.division === division);
+      }
       const reports = teamMembers.filter(m => m.division === division && m.managerId === myMemberId);
       const myOwn = teamMembers.find(m => m.id === myMemberId);
       if (myOwn && !reports.some(m => m.id === myOwn.id)) return [...reports, myOwn];
       return reports;
-    }, [teamMembers, division, myMemberId]);
+    }, [teamMembers, division, myMemberId, auth]);
     const isMasterOrAdminView = auth?.role === "master" || auth?.role === "admin";
     const memberSkuMap = useMemo(() => {
       const map = {};
@@ -2295,6 +2298,88 @@
       return (allDivProducts || products).filter(p => mySkus.has(p.sku.trim().toLowerCase()));
     }, [allDivProducts, products, assignments, division, isMasterOrAdminView, myMemberId]);
     const filterPool = myFullPool;
+
+    // Pending/Complete KPIs now reflect the Website Listing (Shopify) stage
+    // specifically, across the full platform pool for this scope.
+    const WEBSITE_STAGE_KEY = "website";
+    const websiteStats = useMemo(() => {
+      const pool = isMasterOrAdminView ? (allDivProducts || products) : myFullPool;
+      const completed = pool.filter(p => p.stages[WEBSITE_STAGE_KEY]?.status === "Completed").length;
+      const pending = pool.length - completed;
+      return { completed, pending, total: pool.length };
+    }, [isMasterOrAdminView, allDivProducts, products, myFullPool]);
+
+    // Stage-by-stage status for whichever member is selected in the filter,
+    // scoped to ONLY the stages that member was actually assigned (not the
+    // full pipeline), so the master dashboard isn't confusing all-stage noise.
+    const selectedMemberBreakdown = useMemo(() => {
+      if (!fMember) return null;
+      const member = teamMembers.find(m => m.id === fMember);
+      if (!member) return null;
+      const pool = allDivProducts || products;
+
+      // Build sku -> [stageKeys assigned to this member] from assignments
+      const skuStageMap = {};
+      assignments
+        .filter(a => a.memberId === fMember && a.division === division)
+        .forEach(a => {
+          const key = (a.sku || "").trim().toLowerCase();
+          const stageKey = a.stage && a.stage !== "all" ? a.stage : null;
+          if (!skuStageMap[key]) skuStageMap[key] = new Set();
+          if (stageKey) skuStageMap[key].add(stageKey);
+        });
+
+      // Collect every distinct stage this member has been assigned anywhere
+      const assignedStageKeys = [...new Set(
+        Object.values(skuStageMap).flatMap(set => [...set])
+      )];
+
+      const perStage = assignedStageKeys.map(stageKey => {
+        let completed = 0, inProgress = 0, issue = 0, notStarted = 0, total = 0;
+        Object.entries(skuStageMap).forEach(([sku, stages]) => {
+          if (!stages.has(stageKey)) return;
+          const prod = pool.find(p => p.sku.trim().toLowerCase() === sku);
+          if (!prod) return;
+          total++;
+          const status = prod.stages?.[stageKey]?.status || "Not Started";
+          if (status === "Completed") completed++;
+          else if (status === "In Progress") inProgress++;
+          else if (status === "Issue") issue++;
+          else notStarted++;
+        });
+        const s = STAGES.find(x => x.k === stageKey);
+        return { key: stageKey, name: s?.n || stageKey, completed, inProgress, issue, notStarted, total };
+      });
+
+      const cardsAssigned = Object.keys(skuStageMap).length;
+      const cardsDone = Object.entries(skuStageMap).filter(([sku, stages]) => {
+        const prod = pool.find(p => p.sku.trim().toLowerCase() === sku);
+        if (!prod || stages.size === 0) return false;
+        return [...stages].every(stageKey => prod.stages?.[stageKey]?.status === "Completed");
+      }).length;
+
+      return { memberName: member.name, perStage, cardsAssigned, cardsDone, cardsPending: cardsAssigned - cardsDone };
+    }, [fMember, teamMembers, assignments, division, allDivProducts, products]);
+
+    // Group myTeam by their manager so master/admin can see who reports to
+    // whom (e.g. everyone under Chitra clustered together), while a manager
+    // viewing their own team just sees a flat list (they only have one group).
+    const groupedTeamOptions = useMemo(() => {
+      const managerNameOf = (managerId) => {
+        if (!managerId) return "Unassigned / Direct";
+        const mgr = teamMembers.find(x => x.id === managerId);
+        return mgr ? mgr.name : managerId;
+      };
+      const groups = {};
+      myTeam.forEach(m => {
+        const label = m.id === myMemberId ? "Myself" : managerNameOf(m.managerId);
+        if (!groups[label]) groups[label] = [];
+        groups[label].push(m);
+      });
+      return Object.entries(groups)
+        .map(([label, members]) => ({ label, members: members.sort((a, b) => a.name.localeCompare(b.name)) }))
+        .sort((a, b) => a.label === "Myself" ? -1 : b.label === "Myself" ? 1 : a.label.localeCompare(b.label));
+    }, [myTeam, teamMembers, myMemberId]);
 
     // Single source of truth for "is this card done, for this manager's own scope".
     // A card counts as complete only when every stage THIS manager was specifically
@@ -2357,7 +2442,10 @@
     const visibleStages = allowedStages 
       ? STAGES.filter(s => allowedStages.includes(s.k) && !OVERVIEW_EXCLUDED.includes(s.k)) 
       : STAGES.filter(s => !OVERVIEW_EXCLUDED.includes(s.k));
-    const stageStats = visibleStages.map(s => ({ ...s, done: filteredProducts.filter(p => p.stages[s.k].status === "Completed").length, issue: filteredProducts.filter(p => p.stages[s.k].status === "Issue").length }));
+    const stageStats = (fMember && selectedMemberBreakdown
+      ? selectedMemberBreakdown.perStage.map(s => ({ k: s.key, n: s.name, done: s.completed, issue: s.issue }))
+      : visibleStages.map(s => ({ ...s, done: filteredProducts.filter(p => p.stages[s.k].status === "Completed").length, issue: filteredProducts.filter(p => p.stages[s.k].status === "Issue").length }))
+    );
     const storeStats = STORES.map(st => { let d = 0, r = 0, m = 0, dm = 0, pending = 0; filteredProducts.forEach(p => { const s = p.stores[st]; d += s.dispatched || 0; if (s.received) r++; else if (s.dispatched > 0) pending++; m += s.missing || 0; dm += s.damaged || 0; }); return { st, d, r, m, dm, pending }; });
     const segs = [{ label: "Listing complete", value: done, color: "var(--sage)" }, { label: "In production", value: prog, color: "var(--sky)" }, { label: "Not started", value: none, color: "var(--line2)" }, { label: "With issues", value: withIssue, color: "var(--rose)" }];
 
@@ -2443,10 +2531,8 @@
 
     const totalVal = isMasterOrAdminView ? myFullPool.length 
       : (dbStats ? Number(dbStats.total_assigned) : myFullPool.length);
-    const pendingVal = isMasterOrAdminView ? pendingCount 
-      : (dbStats ? Number(dbStats.pending) : myPersonalPending);
-    const completeVal = isMasterOrAdminView ? completeCount 
-      : (dbStats ? Number(dbStats.completed) : myPersonalComplete);
+    const pendingVal = websiteStats.pending;
+    const completeVal = websiteStats.completed;
     const distributedVal = isMasterOrAdminView ? distributedSkus 
       : (dbStats ? Number(dbStats.pushed_to_team) : distributedSkus);
     const withManagerVal = isMasterOrAdminView ? remainingWithManager 
@@ -2565,9 +2651,28 @@
                   {setNoOptions.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
                 {myTeam.length > 0 && (
-                  <select value={fMember} onChange={e => setFMember(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 11.5, color: fMember ? "var(--ink)" : "var(--muted)" }}>
+                  <select
+                    value={fMember}
+                    onChange={e => setFMember(e.target.value)}
+                    style={{
+                      border: `1px solid ${fMember ? "var(--sky)" : "var(--line2)"}`,
+                      borderRadius: 8, padding: "6px 10px",
+                      background: fMember ? "var(--sky-bg)" : "var(--card)",
+                      fontSize: 11.5, fontWeight: fMember ? 700 : 400,
+                      color: fMember ? "var(--sky-ink)" : "var(--muted)",
+                      minWidth: 200, cursor: "pointer"
+                    }}
+                  >
                     <option value="">— all my team —</option>
-                    {myTeam.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                    {groupedTeamOptions.map(g => (
+                      <optgroup key={g.label} label={isMasterOrAdminView ? `👤 Under ${g.label}` : g.label}>
+                        {g.members.map(m => (
+                          <option key={m.id} value={m.id}>
+                            {m.name}{m.id === myMemberId ? " (me)" : ""}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
                   </select>
                 )}
                 {hasFilters && <button className="ghost" style={{ padding: "6px 10px", fontSize: 11.5 }} onClick={() => { setFVendor(""); setFSetNo(""); setFMember(""); }}>Clear</button>}
@@ -2575,6 +2680,39 @@
               </div>
             </div>
             {hasFilters && <div className="tag" style={{ marginBottom: 10 }}>Showing {filteredProducts.length} of {totalVal} {division} products{fVendor ? ` · vendor: ${fVendor}` : ""}{fSetNo ? ` · set no: ${fSetNo}` : ""}{fMember ? ` · member filter` : ""}</div>}
+            {selectedMemberBreakdown && (
+              <div style={{ marginBottom: 14, border: "1px solid var(--sky)", background: "var(--sky-bg)", borderRadius: 12, padding: "12px 16px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+                  <b style={{ fontSize: 13, color: "var(--sky-ink)" }}>{selectedMemberBreakdown.memberName}'s assigned work</b>
+                  <span style={{ fontSize: 11.5, background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 999, padding: "2px 10px", fontWeight: 600 }}>
+                    {selectedMemberBreakdown.cardsAssigned} cards assigned
+                  </span>
+                  <span style={{ fontSize: 11.5, background: "var(--sage-bg)", color: "var(--sage-ink)", border: "1px solid var(--sage)", borderRadius: 999, padding: "2px 10px", fontWeight: 700 }}>
+                    ✓ {selectedMemberBreakdown.cardsDone} done
+                  </span>
+                  <span style={{ fontSize: 11.5, background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)", borderRadius: 999, padding: "2px 10px", fontWeight: 700 }}>
+                    ⏳ {selectedMemberBreakdown.cardsPending} pending
+                  </span>
+                </div>
+                {selectedMemberBreakdown.perStage.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "var(--faint)" }}>No specific stages assigned to this member yet.</div>
+                ) : (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {selectedMemberBreakdown.perStage.map(s => (
+                      <div key={s.key} style={{ background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 9, padding: "7px 12px", minWidth: 150 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>{s.name}</div>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--sage-ink)" }}>✓ {s.completed}</span>
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--sky-ink)" }}>… {s.inProgress}</span>
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--muted)" }}>○ {s.notStarted}</span>
+                          {s.issue > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--rose-ink)" }}>! {s.issue}</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
@@ -2588,13 +2726,18 @@
                 </thead>
                 <tbody>
                   {stageStats.map(s => {
+                    // When a member is selected, use their own assigned-stage counts
+                    // (computed in selectedMemberBreakdown) instead of the full pool.
+                    const memberStage = fMember && selectedMemberBreakdown
+                      ? selectedMemberBreakdown.perStage.find(x => x.key === s.k)
+                      : null;
                     // Use DB pipeline stats when no filter is active — most accurate
                     // Fall back to JS-computed counts when a filter is applied
-                    const useDb = fMember === myMemberId && !fVendor && !fSetNo && !isMasterOrAdminView && pipelineStats && pipelineStats[s.k];
-                    const notStarted = useDb ? pipelineStats[s.k].notStarted : filteredProducts.filter(p => p.stages[s.k].status === "Not Started").length;
-                    const inProgress = useDb ? pipelineStats[s.k].inProgress : filteredProducts.filter(p => p.stages[s.k].status === "In Progress").length;
-                    const completed = useDb ? pipelineStats[s.k].completed : filteredProducts.filter(p => p.stages[s.k].status === "Completed").length;
-                    const issue = useDb ? pipelineStats[s.k].issue : filteredProducts.filter(p => p.stages[s.k].status === "Issue").length;
+                    const useDb = !memberStage && fMember === myMemberId && !fVendor && !fSetNo && !isMasterOrAdminView && pipelineStats && pipelineStats[s.k];
+                    const notStarted = memberStage ? memberStage.notStarted : useDb ? pipelineStats[s.k].notStarted : filteredProducts.filter(p => p.stages[s.k].status === "Not Started").length;
+                    const inProgress = memberStage ? memberStage.inProgress : useDb ? pipelineStats[s.k].inProgress : filteredProducts.filter(p => p.stages[s.k].status === "In Progress").length;
+                    const completed = memberStage ? memberStage.completed : useDb ? pipelineStats[s.k].completed : filteredProducts.filter(p => p.stages[s.k].status === "Completed").length;
+                    const issue = memberStage ? memberStage.issue : useDb ? pipelineStats[s.k].issue : filteredProducts.filter(p => p.stages[s.k].status === "Issue").length;
                     return (
                       <tr key={s.k} style={{ borderBottom: "1px solid var(--line)" }}>
                         <td style={{ padding: "10px 10px", fontWeight: 600, fontSize: 13 }}>{s.n}</td>
