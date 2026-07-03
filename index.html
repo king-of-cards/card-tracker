@@ -4061,9 +4061,14 @@
     //const [newName, setNewName] = useState(""), [newEmail, setNewEmail] = useState(""), [newPass, setNewPass] = useState(""), [newRole, setNewRole] = useState("backend"), [addErr, setAddErr] = useState("");
     const [newName, setNewName] = useState(""), [newEmail, setNewEmail] = useState(""), [newPass, setNewPass] = useState(""), [newRole, setNewRole] = useState("backend"), [addErr, setAddErr] = useState("");
     const [addMsg, setAddMsg] = useState("");
+    const [editingId, setEditingId] = useState(null);
+    const [editName, setEditName] = useState("");
+    const [editStages, setEditStages] = useState([]);
+    const [editErr, setEditErr] = useState("");
     const [selMember, setSelMember] = useState("");
     // const [selStage, setSelStage] = useState("");
     const [selVendor, setSelVendor] = useState("");
+    const [selSetNo, setSelSetNo] = useState("");
     const [selSkus, setSelSkus] = useState([]);
     const [selStages, setSelStages] = useState([]);
     const [expandedMember, setExpandedMember] = useState(null);
@@ -4152,9 +4157,14 @@
       return s;
     }, [divAssignments, isMasterOrAdmin, myMemberId]);
 
+    const setNoOptions = useMemo(() =>
+      [...new Set(managerPool.map(p => p.set_no).filter(Boolean))].sort(),
+      [managerPool]);
+
     const filteredProducts = useMemo(() => {
       return managerPool.filter(p => {
         if (selVendor && p.vendor !== selVendor) return false;
+        if (selSetNo && (p.set_no || "").trim() !== selSetNo) return false;
         if (skuSearch.length >= 2) {
           const q = skuSearch.toLowerCase();
           if (!(p.sku.toLowerCase().includes(q) || (p.name || "").toLowerCase().includes(q))) return false;
@@ -4168,7 +4178,7 @@
         }
         return true;
       });
-    }, [managerPool, selVendor, skuSearch, selStages, assignedSkuStageSet]);
+    }, [managerPool, selVendor, selSetNo, skuSearch, selStages, assignedSkuStageSet]);
 
     const availableSkus = useMemo(() =>
       filteredProducts.map(p => p.sku),
@@ -4281,6 +4291,39 @@
         const updated = existingUsers.filter(u => u.email.toLowerCase() !== member.email.toLowerCase());
         await gsPost("saveUsers", updated);
       }
+    };
+
+    const startEdit = (m) => {
+      setEditingId(m.id);
+      setEditName(m.name);
+      setEditStages((m.stages || "").split(",").map(s => s.trim()).filter(Boolean));
+      setEditErr("");
+    };
+
+    const cancelEdit = () => {
+      setEditingId(null);
+      setEditErr("");
+    };
+
+    const saveEdit = async () => {
+      if (!editName.trim()) { setEditErr("Name is required."); return; }
+      if (editStages.length === 0) { setEditErr("Select at least one stage."); return; }
+      const nameVal = editName.trim();
+      const stagesVal = editStages.join(",");
+      const member = teamMembers.find(m => m.id === editingId);
+      if (!member) { setEditingId(null); return; }
+
+      const updatedTeam = teamMembers.map(m => m.id === editingId ? { ...m, name: nameVal, stages: stagesVal } : m);
+      onSaveTeam(updatedTeam);
+      setEditingId(null);
+
+      const existingUsers = await gsGetUsers();
+      const updatedUsers = existingUsers.map(u =>
+        u.email.toLowerCase() === member.email.toLowerCase()
+          ? { ...u, name: nameVal, stages: stagesVal }
+          : u
+      );
+      await gsPost("saveUsers", updatedUsers);
     };
 
     // const [selStages, setSelStages] = useState([]);
@@ -4456,6 +4499,50 @@
                         seen.add(key);
                         return true;
                       }).length;
+
+                      if (editingId === m.id) {
+                        return (
+                          <tr key={m.id} style={{ background: "var(--sky-bg)" }}>
+                            <td colSpan={7} style={{ padding: "14px 16px" }}>
+                              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                                <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                                  <label className="fld" style={{ minWidth: 220 }}>
+                                    Name
+                                    <input className="txt" value={editName} onChange={e => { setEditName(e.target.value); setEditErr(""); }} />
+                                  </label>
+                                  <span className="tag">{m.email} (login email can't be changed here)</span>
+                                </div>
+                                <div>
+                                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".6px", marginBottom: 6 }}>
+                                    Stages & access
+                                  </div>
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                                    {allPermissions.map(s => (
+                                      <label key={s.k} style={{
+                                        display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 500, color: "var(--ink)",
+                                        background: editStages.includes(s.k) ? (s.k === "bulk" ? "var(--peach-bg)" : s.k === "assign" ? "var(--lav-bg)" : "var(--sage-bg)") : "var(--card)",
+                                        border: `1px solid ${editStages.includes(s.k) ? (s.k === "bulk" ? "var(--peach)" : s.k === "assign" ? "var(--lav)" : "var(--sage)") : "var(--line2)"}`,
+                                        borderRadius: 8, padding: "5px 10px", cursor: "pointer"
+                                      }}>
+                                        <input type="checkbox" checked={editStages.includes(s.k)}
+                                          style={{ width: 13, height: 13, accentColor: s.k === "bulk" ? "var(--peach-ink)" : "var(--sage-deep)" }}
+                                          onChange={e => setEditStages(prev => e.target.checked ? [...prev, s.k] : prev.filter(k => k !== s.k))} />
+                                        {s.n}
+                                      </label>
+                                    ))}
+                                  </div>
+                                </div>
+                                {editErr && <div style={{ color: "var(--rose-ink)", fontSize: 12 }}>{editErr}</div>}
+                                <div style={{ display: "flex", gap: 8 }}>
+                                  <button className="primary" onClick={saveEdit}>Save changes</button>
+                                  <button className="ghost" onClick={cancelEdit}>Cancel</button>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      }
+
                       return (
                         <tr key={m.id}>
                           <td><b>{m.name}</b></td>
@@ -4495,7 +4582,10 @@
 
                           <td className="num">{count}</td>
 
-                          <td>
+                          <td style={{ display: "flex", gap: 6 }}>
+                            <button className="ghost" style={{ padding: "5px 10px", fontSize: 11.5 }} onClick={() => startEdit(m)}>
+                              Edit
+                            </button>
                             <button
                               className="danger"
                               onClick={() => {
@@ -4552,7 +4642,7 @@
                   })()}
                 </div>
               )}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
                 <label className="fld">Team member
                   <select value={selMember} onChange={e => { setSelMember(e.target.value); setSelSkus([]); setSelStages([]); setSkuSearch(""); setAssErr(""); }}>
                     <option value="">— select member —</option>
@@ -4563,6 +4653,12 @@
                   <select value={selVendor} onChange={e => { setSelVendor(e.target.value); setSelSkus([]); setSkuSearch(""); setAssErr(""); }}>
                     <option value="">— all vendors —</option>
                     {vendors.map(v => <option key={v}>{v}</option>)}
+                  </select>
+                </label>
+                <label className="fld">Set No. (filter)
+                  <select value={selSetNo} onChange={e => { setSelSetNo(e.target.value); setSelSkus([]); setSkuSearch(""); setAssErr(""); }}>
+                    <option value="">— all set no. —</option>
+                    {setNoOptions.map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </label>
 
