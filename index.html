@@ -1513,6 +1513,7 @@
       setAssignments:       "/api/setAssignments",
       saveUsers:            "/api/saveUsers",
       appendAssignmentHistory: "/api/appendAssignmentHistory",
+      bulkImportProducts: "/api/bulkImportProducts",
     };
     const route = ROUTE_MAP[action];
     if (!route) { console.warn("gsPost: unknown action", action); return { ok: false }; }
@@ -2031,39 +2032,45 @@
     const saveOperator = (v) => { setOperator(v); localStorage.setItem("ct:operator", v); };
 
     const bulkProducts = useCallback(async (rows) => {
-      let created = 0, updated = 0; const errs = []; const newV = new Set(); let next = [...products];
-      rows.forEach((row, i) => {
-        const sku = String(row.sku || "").trim(); if (!sku || sku.toUpperCase().includes("EXAMPLE")) return;
-        const div = DIVISIONS.includes(String(row.division || "").trim()) ? String(row.division).trim() : division;
-        let existing = next.find(p => p.division === div && p.sku.toLowerCase() === sku.toLowerCase()); let prod, isNew = false;
-        if (existing) { prod = { ...existing, stages: { ...existing.stages } }; } else { prod = blankProduct(div, ""); prod.sku = sku; isNew = true; }
-        const g = k => row[k] !== "" && row[k] != null;
-        if (g("name")) prod.name = String(row.name).trim();
-        if (g("vendor")) { prod.vendor = String(row.vendor).trim(); if (!(vendors[div] || []).includes(prod.vendor)) newV.add(div + "|" + prod.vendor); }
-        if (g("inward")) prod.inward = normDate(row.inward);
-        if (g("qty") && !isNaN(+row.qty)) prod.qty = +row.qty;
-        if (g("note")) prod.note = String(row.note).trim();
-        if (g("set_no")) prod.set_no = String(row.set_no).trim();
-        STAGE_COLS.forEach(s => {
-          const k = s.k; let t = false; const cur = { ...prod.stages[k] }; const st = row[k + "_status"], pe = row[k + "_person"], co = row[k + "_comments"];
-          if (st !== "" && st != null) { const ns = normStatus(st); if (ns) { cur.status = ns; t = true; } else errs.push(`Row ${i + 2}: invalid status "${st}" in ${k}_status`); }
-          if (pe !== "" && pe != null) { cur.person = String(pe).trim(); t = true; } if (co !== "" && co != null) { cur.comments = String(co).trim(); t = true; }
-          if (k === "dimensions") {
-            const w = row["dimensions_width"], h2 = row["dimensions_height"], wt = row["dimensions_weight"];
-            if (w !== "" && w != null) { cur.width = String(w).trim(); t = true; }
-            if (h2 !== "" && h2 != null) { cur.height = String(h2).trim(); t = true; }
-            if (wt !== "" && wt != null) { cur.weight = String(wt).trim(); t = true; }
+      const validRows = rows.filter(r => {
+        const sku = String(r.sku || "").trim();
+        return sku && !sku.toUpperCase().includes("EXAMPLE");
+      }).map(r => ({ ...r, division: DIVISIONS.includes(String(r.division || "").trim()) ? String(r.division).trim() : division }));
+
+      const CHUNK = 500;       // was 50 — safe now that each chunk is set-based
+      const CONCURRENCY = 3;   // run a few chunks in parallel
+      let created = 0, updated = 0; const errs = [];
+
+      const chunks = [];
+      for (let i = 0; i < validRows.length; i += CHUNK) chunks.push(validRows.slice(i, i + CHUNK));
+
+      for (let i = 0; i < chunks.length; i += CONCURRENCY) {
+        const batch = chunks.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(batch.map(async chunk => {
+          let res = null;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            res = await gsPost("bulkImportProducts", chunk);
+            if (res && res.ok) break;
+            console.warn(`bulkImportProducts attempt ${attempt + 1} failed`, res);
+            await new Promise(r => setTimeout(r, 700 * (attempt + 1)));
           }
-          if (t) { cur.at = now(); prod.stages[k] = cur; }
+          return res;
+        }));
+        results.forEach((res, idx) => {
+          if (!res || !res.ok) {
+            errs.push(`Chunk failed after 3 retries (${batch[idx].length} rows): ${res?.error || "no response / network error"}`);
+            return;
+          }
+          created += res.created; updated += res.updated;
+          if (res.failed?.length) errs.push(...res.failed.map(f => `${f.sku}: ${f.error}`));
         });
-        if (g("qc_verdict")) { const v = String(row.qc_verdict).trim(); if (/appro/i.test(v)) prod.verdict = "Approved"; else if (/issue/i.test(v)) prod.verdict = "Issues Found"; }
-        if (g("qc_issues")) prod.issues = String(row.qc_issues).trim(); prod.updatedAt = now();
-        if (isNew) { next = [prod, ...next]; created++; } else { next = next.map(p => p.id === prod.id ? prod : p); updated++; }
-      });
-      await saveProducts(next); newV.forEach(s => { const [d, n] = s.split("|"); addVendor(d, n); });
-      logAudit("Bulk import", `${created + updated} products`, `${created} created, ${updated} updated${errs.length ? `, ${errs.length} field errors` : ""}`);
+      }
+
+      await load();
+      logAudit("Bulk import", `${created + updated} products`,
+        `${created} created, ${updated} updated${errs.length ? `, ${errs.length} error(s)` : ""}`);
       return { created, updated, errs };
-    }, [products, division, vendors, saveProducts, addVendor, logAudit]);
+    }, [division, load, logAudit]);
 
     const bulkStores = useCallback(async (rows) => {
       let updated = 0; const errs = []; let next = [...products];

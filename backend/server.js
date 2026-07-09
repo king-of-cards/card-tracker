@@ -220,6 +220,12 @@ app.post("/api/batchUpsertProducts", async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    if (row.vendor && String(row.vendor).trim()) {
+      await client.query(
+        `INSERT INTO vendors (division, vendor_name) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [division, String(row.vendor).trim()]
+      );
+    }
     for (const p of products) {
       await client.query(
         `INSERT INTO products (id, division, sku, name, vendor, inward, qty, note, set_no, verdict, issues, created_at, updated_at)
@@ -692,6 +698,161 @@ app.get("/api/pipelineStats", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+
+
+
+function normStatusServer(v) {
+  if (!v) return null;
+  const m = { "not started": "Not Started", "in progress": "In Progress", "wip": "In Progress",
+    "pending": "In Progress", "completed": "Completed", "complete": "Completed", "done": "Completed",
+    "approved": "Completed", "issue": "Issue", "issues": "Issue" };
+  return m[String(v).trim().toLowerCase()] || null;
+}
+
+app.post("/api/bulkImportProducts", async (req, res) => {
+  const rows = req.body;
+  if (!Array.isArray(rows)) return res.status(400).json({ ok: false, error: "expected array" });
+
+  const validRows = rows.filter(r => {
+    const sku = String(r.sku || "").trim();
+    return sku && !sku.toUpperCase().includes("EXAMPLE");
+  });
+
+  const results = { total: rows.length, created: 0, updated: 0, failed: [] };
+  if (validRows.length === 0) return res.json({ ok: true, ...results });
+
+  const client = await pool.connect();
+  try {
+    await client.query("SET LOCAL statement_timeout = '120s'");
+    await client.query("BEGIN");
+
+    // ---- 1. Bulk upsert products (ONE query for the whole chunk) ----
+    const divisions = [], skus = [], names = [], vendors = [], inwards = [], qtys = [], notes = [], setNos = [];
+    validRows.forEach(r => {
+      divisions.push(r.division || null);
+      skus.push(String(r.sku).trim());
+      names.push(r.name || "");
+      vendors.push(r.vendor || null);
+      inwards.push(r.inward ? String(r.inward) : null);
+      qtys.push(Number(r.qty) || 0);
+      notes.push(r.note || "");
+      setNos.push(r.set_no || null);
+    });
+
+    const upsertResult = await client.query(
+      `INSERT INTO products (id, division, sku, name, vendor, inward, qty, note, set_no, created_at, updated_at)
+       SELECT gen_random_uuid()::text, d, s, n, v, NULLIF(i,'')::date, q, nt, sn, now(), now()
+       FROM unnest($1::division_name[], $2::text[], $3::text[], $4::text[], $5::text[], $6::int[], $7::text[], $8::text[])
+         AS t(d, s, n, v, i, q, nt, sn)
+       ON CONFLICT (division, sku) DO UPDATE SET
+         name    = COALESCE(NULLIF(EXCLUDED.name,''), products.name),
+         vendor  = COALESCE(EXCLUDED.vendor, products.vendor),
+         inward  = COALESCE(EXCLUDED.inward, products.inward),
+         qty     = CASE WHEN EXCLUDED.qty > 0 THEN EXCLUDED.qty ELSE products.qty END,
+         note    = COALESCE(NULLIF(EXCLUDED.note,''), products.note),
+         set_no  = COALESCE(NULLIF(EXCLUDED.set_no,''), products.set_no),
+         updated_at = now()
+       RETURNING id, sku, division, (xmax = 0) AS inserted`,
+      [divisions, skus, names, vendors, inwards, qtys, notes, setNos]
+    );
+
+    const skuToId = {};
+    upsertResult.rows.forEach(r => {
+      skuToId[r.division + "||" + r.sku.toLowerCase()] = r.id;
+      r.inserted ? results.created++ : results.updated++;
+    });
+
+    // ---- 2. Bulk upsert vendors (deduped, ONE query) ----
+    const vendorPairs = new Set();
+    validRows.forEach(r => {
+      if (r.vendor && String(r.vendor).trim()) {
+        vendorPairs.add((r.division || "") + "||" + String(r.vendor).trim());
+      }
+    });
+    if (vendorPairs.size > 0) {
+      const vDivs = [], vNames = [];
+      vendorPairs.forEach(p => { const [d, n] = p.split("||"); vDivs.push(d); vNames.push(n); });
+      await client.query(
+        `INSERT INTO vendors (division, vendor_name)
+         SELECT * FROM unnest($1::division_name[], $2::text[]) ON CONFLICT DO NOTHING`,
+        [vDivs, vNames]
+      );
+    }
+
+    // ---- 3. Bulk upsert stage_entries (ONE query for ALL stages of ALL rows) ----
+    const pids = [], stageKeys = [], statuses = [], persons = [], commentsArr = [], widths = [], heights = [], weights = [];
+    validRows.forEach(r => {
+      const key = (r.division || "") + "||" + String(r.sku).trim().toLowerCase();
+      const productId = skuToId[key];
+      if (!productId) { results.failed.push({ sku: r.sku, error: "product upsert failed" }); return; }
+      for (const s of STAGE_KEYS) {
+        if (s === "finalqc") continue;
+        const statusRaw = r[s + "_status"], person = r[s + "_person"] || "", comm = r[s + "_comments"] || "";
+        const width  = s === "dimensions" ? (r.dimensions_width  ? Number(r.dimensions_width)  : null) : null;
+        const height = s === "dimensions" ? (r.dimensions_height ? Number(r.dimensions_height) : null) : null;
+        const weight = s === "dimensions" ? (r.dimensions_weight ? Number(r.dimensions_weight) : null) : null;
+        if (!statusRaw && !person && !comm && width == null && height == null && weight == null) continue;
+        pids.push(productId);
+        stageKeys.push(s);
+        statuses.push(normStatusServer(statusRaw));
+        persons.push(person);
+        commentsArr.push(comm);
+        widths.push(width);
+        heights.push(height);
+        weights.push(weight);
+      }
+    });
+
+    if (pids.length > 0) {
+      await client.query(
+        `INSERT INTO stage_entries (product_id, stage_key, status, person, comments, updated_at, width_cm, height_cm, weight_gm)
+         SELECT p, sk, st, pe, co, now(), w, h, wt
+         FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::numeric[], $7::numeric[], $8::numeric[])
+           AS t(p, sk, st, pe, co, w, h, wt)
+         ON CONFLICT (product_id, stage_key) DO UPDATE SET
+           status   = COALESCE(EXCLUDED.status, stage_entries.status),
+           person   = COALESCE(NULLIF(EXCLUDED.person,''), stage_entries.person),
+           comments = COALESCE(NULLIF(EXCLUDED.comments,''), stage_entries.comments),
+           updated_at = now(),
+           width_cm  = COALESCE(EXCLUDED.width_cm, stage_entries.width_cm),
+           height_cm = COALESCE(EXCLUDED.height_cm, stage_entries.height_cm),
+           weight_gm = COALESCE(EXCLUDED.weight_gm, stage_entries.weight_gm)`,
+        [pids, stageKeys, statuses, persons, commentsArr, widths, heights, weights]
+      );
+    }
+
+    // ---- 4. QC verdicts (ONE query) ----
+    const qcIds = [], qcVerdicts = [], qcIssues = [];
+    validRows.forEach(r => {
+      if (!r.qc_verdict) return;
+      const key = (r.division || "") + "||" + String(r.sku).trim().toLowerCase();
+      const productId = skuToId[key];
+      if (!productId) return;
+      const v = /appro/i.test(r.qc_verdict) ? "Approved" : /issue/i.test(r.qc_verdict) ? "Issues Found" : null;
+      if (!v) return;
+      qcIds.push(productId); qcVerdicts.push(v); qcIssues.push(r.qc_issues || "");
+    });
+    if (qcIds.length > 0) {
+      await client.query(
+        `UPDATE products p SET verdict = t.v, issues = t.iss, updated_at = now()
+         FROM unnest($1::text[], $2::text[], $3::text[]) AS t(id, v, iss)
+         WHERE p.id = t.id`,
+        [qcIds, qcVerdicts, qcIssues]
+      );
+    }
+
+    await client.query("COMMIT");
+    res.json({ ok: true, ...results });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error("bulkImportProducts error", e);
+    res.status(500).json({ ok: false, error: e.message, ...results });
+  } finally {
+    client.release();
+  }
+});
+
 
 
 
