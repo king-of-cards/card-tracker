@@ -1778,8 +1778,8 @@
               stages: u.stages || saved?.stages || "",
               // teamMembers sheet (saved) has the correct division and managerId
               // Users sheet leaves these blank — don't fall back to u.division/u.managerId
-              division: saved?.division || "KOC Cards",
-              managerId: saved?.managerId ?? null,
+              division: saved?.division || u.division || "KOC Cards",
+              managerId: saved?.managerId ?? u.managerId ?? null,
               joinedAt: saved?.joinedAt || u.joinedAt || ""
             };
           });
@@ -2244,15 +2244,20 @@
         .catch(e => console.error("pipelineStats fetch failed", e));
 
     }, [myMemberId, division, auth]);
+    const memberActiveInDivision = useCallback((m) => {
+      if (m.division === division) return true;
+      return assignments.some(a => a.memberId === m.id && a.division === division);
+    }, [assignments, division]);
+
     const myTeam = useMemo(() => {
       if (auth?.role === "master" || auth?.role === "admin") {
-        return teamMembers.filter(m => m.division === division);
+        return teamMembers.filter(memberActiveInDivision);
       }
-      const reports = teamMembers.filter(m => m.division === division && m.managerId === myMemberId);
+      const reports = teamMembers.filter(m => memberActiveInDivision(m) && m.managerId === myMemberId);
       const myOwn = teamMembers.find(m => m.id === myMemberId);
       if (myOwn && !reports.some(m => m.id === myOwn.id)) return [...reports, myOwn];
       return reports;
-    }, [teamMembers, division, myMemberId, auth]);
+    }, [teamMembers, division, myMemberId, auth, memberActiveInDivision]);
     const isMasterOrAdminView = auth?.role === "master" || auth?.role === "admin";
     const memberSkuMap = useMemo(() => {
       const map = {};
@@ -4090,9 +4095,14 @@
       return me?.id || null;
     }, [teamMembers, auth.email]);
     const canManageMembers = isMasterOrAdmin || (auth.stages || "").split(",").map(s => s.trim()).includes("assign");
+    const memberActiveInDivision = useCallback((m) => {
+      if (m.division === division) return true;
+      return assignments.some(a => a.memberId === m.id && a.division === division);
+    }, [assignments, division]);
+
     const divMembers = isMasterOrAdmin
-      ? teamMembers.filter(m => m.division === division)
-      : teamMembers.filter(m => m.division === division && m.managerId === myMemberId);
+      ? teamMembers.filter(memberActiveInDivision)
+      : teamMembers.filter(m => memberActiveInDivision(m) && m.managerId === myMemberId);
     const myOwnRecord = useMemo(() => teamMembers.find(m => m.id === myMemberId), [teamMembers, myMemberId]);
     // Assignable list = my direct reports + myself (so a manager can keep some SKUs for their own work)
     const assignableMembers = useMemo(() => {
@@ -5177,12 +5187,9 @@
       return { bg: "#F0EEE8", border: "var(--line2)", ink: "var(--muted)" };
     };
 
-    let divMembers = teamMembers.filter(m => m.division === division);
-    if (divMembers.length === 0) {
-      const knownDivisions = new Set(["KOC Cards", "Bombay Cards"]);
-      const orphaned = teamMembers.filter(m => !knownDivisions.has(m.division));
-      if (orphaned.length > 0) divMembers = orphaned;
-    }
+    let divMembers = teamMembers.filter(m =>
+      m.division === division || assignments.some(a => a.memberId === m.id && a.division === division)
+    );
 
     // ---- DEBUG PANEL ---------------------------------------------------
     // Shows exactly what raw audit data the app received, so you can see
