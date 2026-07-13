@@ -543,28 +543,141 @@ app.post("/api/saveUsers", async (req, res) => {
 /* ----------------------------------------------------------------
    POST /api/setAssignments   body: array of assignment objects (full replace)
 ---------------------------------------------------------------- */
+// app.post("/api/setAssignments", async (req, res) => {
+//   const assignments = req.body;
+//   if (!Array.isArray(assignments)) return res.status(400).json({ ok: false, error: "expected array" });
+//   const client = await pool.connect();
+//   try {
+//     await client.query("BEGIN");
+//     await client.query("DELETE FROM assignments");
+//     for (const a of assignments) {
+//       // resolve product_id from sku+division since the frontend only sends sku
+//       const { rows } = await client.query(
+//         "SELECT id FROM products WHERE division = $1 AND lower(sku) = lower($2)",
+//         [a.division, a.sku]
+//       );
+//       if (!rows.length) continue; // skip orphaned assignment rows
+//       await client.query(
+//         `INSERT INTO assignments (id, member_id, manager_id, product_id, sku, division, stage, assigned_at)
+//          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+//         [a.id, a.memberId, a.managerId, rows[0].id, a.sku, a.division, a.stage, a.assignedAt || new Date().toISOString()]
+//       );
+//     }
+//     await client.query("COMMIT");
+//     res.json({ ok: true });
+//   } catch (e) {
+//     await client.query("ROLLBACK");
+//     console.error("setAssignments error", e);
+//     res.status(500).json({ ok: false, error: e.message });
+//   } finally {
+//     client.release();
+//   }
+// });
+
+
 app.post("/api/setAssignments", async (req, res) => {
   const assignments = req.body;
-  if (!Array.isArray(assignments)) return res.status(400).json({ ok: false, error: "expected array" });
+
+  if (!Array.isArray(assignments)) {
+    return res.status(400).json({ ok: false, error: "expected array" });
+  }
+
+  // ---- Safety guard #1: refuse to touch anything on a suspiciously empty/small payload ----
+  // A legitimate "clear everything" action should be explicit, not implied by an empty array.
+  const { rows: countRows } = await pool.query("SELECT COUNT(*) FROM assignments");
+  const currentCount = Number(countRows[0].count);
+
+  if (assignments.length === 0 && currentCount > 0) {
+    return res.status(400).json({
+      ok: false,
+      error: `Refusing to clear ${currentCount} existing assignments via empty array. ` +
+             `If you really want to delete all assignments, call POST /api/clearAssignments with {"confirm": true}.`
+    });
+  }
+
+  // ---- Safety guard #2: refuse a payload that would wipe out a large chunk of existing data ----
+  // e.g. if we currently have 500 rows and the incoming payload only resolves to 20,
+  // that's very likely a bug (partial fetch, wrong division filter, etc.), not intent.
+  const SHRINK_THRESHOLD = 0.5; // refuse if new count would be <50% of current, when current is non-trivial
+  if (currentCount > 20 && assignments.length < currentCount * SHRINK_THRESHOLD) {
+    return res.status(400).json({
+      ok: false,
+      error: `Payload has ${assignments.length} rows but ${currentCount} currently exist — ` +
+             `this looks like a partial/incorrect payload, not an intentional bulk edit. ` +
+             `Pass {"force": true} in the body alongside the array if this is intentional.`,
+      currentCount,
+      incomingCount: assignments.length
+    });
+  }
+
   const client = await pool.connect();
   try {
+    await client.query("SET LOCAL statement_timeout = '120s'");
     await client.query("BEGIN");
-    await client.query("DELETE FROM assignments");
-    for (const a of assignments) {
-      // resolve product_id from sku+division since the frontend only sends sku
-      const { rows } = await client.query(
-        "SELECT id FROM products WHERE division = $1 AND lower(sku) = lower($2)",
-        [a.division, a.sku]
+
+    // ---- Resolve product ids up front (unchanged) ----
+    let prodMap = {};
+    if (assignments.length > 0) {
+      const skus = assignments.map(a => a.sku);
+      const divisions = assignments.map(a => a.division);
+      const { rows: prodRows } = await client.query(
+        `SELECT id, division, lower(sku) as sku_lower
+         FROM products
+         WHERE (division, lower(sku)) IN (
+           SELECT * FROM unnest($1::division_name[], $2::text[])
+         )`,
+        [divisions, skus.map(s => s.toLowerCase())]
       );
-      if (!rows.length) continue; // skip orphaned assignment rows
+      prodRows.forEach(r => { prodMap[r.division + "||" + r.sku_lower] = r.id; });
+    }
+
+    const ids = [], memberIds = [], managerIds = [], productIds = [], outSkus = [], outDivisions = [], stages = [], assignedAts = [];
+    const validIncomingIds = [];
+    assignments.forEach(a => {
+      const pid = prodMap[a.division + "||" + a.sku.toLowerCase()];
+      if (!pid) return; // skip orphaned rows
+      ids.push(a.id);
+      memberIds.push(a.memberId);
+      managerIds.push(a.managerId);
+      productIds.push(pid);
+      outSkus.push(a.sku);
+      outDivisions.push(a.division);
+      stages.push(a.stage);
+      assignedAts.push(a.assignedAt || new Date().toISOString());
+      validIncomingIds.push(a.id);
+    });
+
+    // ---- Upsert everything in the payload ----
+    if (ids.length > 0) {
       await client.query(
         `INSERT INTO assignments (id, member_id, manager_id, product_id, sku, division, stage, assigned_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [a.id, a.memberId, a.managerId, rows[0].id, a.sku, a.division, a.stage, a.assignedAt || new Date().toISOString()]
+         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::division_name[], $7::text[], $8::timestamptz[])
+         ON CONFLICT (id) DO UPDATE SET
+           member_id = EXCLUDED.member_id,
+           manager_id = EXCLUDED.manager_id,
+           product_id = EXCLUDED.product_id,
+           sku = EXCLUDED.sku,
+           division = EXCLUDED.division,
+           stage = EXCLUDED.stage,
+           assigned_at = EXCLUDED.assigned_at`,
+        [ids, memberIds, managerIds, productIds, outSkus, outDivisions, stages, assignedAts]
       );
     }
+
+    // ---- Delete only rows NOT present in the incoming payload ----
+    // This replaces the blanket DELETE FROM assignments. An empty/bad payload
+    // now deletes nothing (validIncomingIds is empty -> NOT IN () is a no-op guard below).
+    if (validIncomingIds.length > 0) {
+      await client.query(
+        `DELETE FROM assignments WHERE id != ALL($1::text[])`,
+        [validIncomingIds]
+      );
+    }
+    // NOTE: if validIncomingIds.length === 0 we already returned 400 above (guard #1),
+    // so we never reach a state where we'd delete everything unintentionally here.
+
     await client.query("COMMIT");
-    res.json({ ok: true });
+    res.json({ ok: true, upserted: ids.length, currentCount, incomingCount: assignments.length });
   } catch (e) {
     await client.query("ROLLBACK");
     console.error("setAssignments error", e);
@@ -573,6 +686,22 @@ app.post("/api/setAssignments", async (req, res) => {
     client.release();
   }
 });
+
+// Explicit, deliberate "wipe everything" endpoint — separate from the sync endpoint above,
+// so it can never be triggered by accident via a stray/empty payload.
+app.post("/api/clearAssignments", async (req, res) => {
+  if (req.body?.confirm !== true) {
+    return res.status(400).json({ ok: false, error: "Must pass { confirm: true } to clear all assignments." });
+  }
+  try {
+    const { rows } = await pool.query("SELECT COUNT(*) FROM assignments");
+    await pool.query("DELETE FROM assignments");
+    res.json({ ok: true, deleted: Number(rows[0].count) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 
 /* ----------------------------------------------------------------
    POST /api/appendAudit   body: full audit entry
@@ -651,6 +780,61 @@ app.get("/api/memberStats", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+
+app.get("/api/allMemberStats", async (req, res) => {
+  const { division } = req.query;
+  if (!division) return res.status(400).json({ ok: false, error: "division required" });
+  try {
+    const { rows } = await pool.query(`
+      WITH target_assignments AS (
+        SELECT DISTINCT a.member_id, p.id AS product_id, a.stage AS assigned_stage
+        FROM assignments a
+        JOIN products p ON p.sku = a.sku AND p.division = a.division
+        WHERE a.division = $1
+      ),
+      card_level AS (
+        SELECT
+          ta.member_id,
+          ta.product_id,
+          COUNT(*) AS stages_owned,
+          COUNT(*) FILTER (WHERE se.status = 'Completed') AS stages_completed
+        FROM target_assignments ta
+        JOIN stage_entries se
+          ON se.product_id = ta.product_id
+          AND se.stage_key = ta.assigned_stage
+        GROUP BY ta.member_id, ta.product_id
+      )
+      SELECT
+        u.id AS member_id,
+        u.name AS member_name,
+        COUNT(cl.product_id) AS total_assigned,
+        COUNT(*) FILTER (WHERE cl.stages_completed = cl.stages_owned) AS completed,
+        COUNT(*) FILTER (WHERE cl.stages_completed < cl.stages_owned) AS pending
+      FROM card_level cl
+      JOIN users u ON u.id = cl.member_id
+      GROUP BY u.id, u.name
+      ORDER BY u.name
+    `, [division]);
+
+    res.json({
+      ok: true,
+      members: rows.map(r => ({
+        memberId: r.member_id,
+        memberName: r.member_name,
+        total: Number(r.total_assigned),
+        completed: Number(r.completed),
+        pending: Number(r.pending),
+      }))
+    });
+  } catch (e) {
+    console.error("allMemberStats error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+
+
 
 
 
