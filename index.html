@@ -1345,7 +1345,6 @@
     { k: "images", n: "Video Uploaded" },
     { k: "backend", n: "Backend Listing (App)" },
     { k: "website", n: "Website Listing (Shopify)" },
-    { k: "scan", n: "Scan Before Dispatch" },
     { k: "qc", n: "QC Check" },
     { k: "finalqc", n: "Final QC / Audit" },
   ];
@@ -2224,6 +2223,10 @@
     const [fVendor, setFVendor] = useState("");
     const [fSetNo, setFSetNo] = useState("");
     const [fMember, setFMember] = useState("");
+    const [dashFromDate, setDashFromDate] = useState("");
+    const [dashToDate, setDashToDate] = useState("");  
+    const todayStr = new Date().toISOString().split("T")[0];   
+
     // const [pipelineStats, setPipelineStats] = useState(null);
     const myMemberId = useMemo(() => {
       const me = teamMembers.find(m => m.email && auth?.email && m.email.toLowerCase() === auth.email.toLowerCase());
@@ -2316,6 +2319,42 @@
       return (allDivProducts || products).filter(p => mySkus.has(p.sku.trim().toLowerCase()));
     }, [allDivProducts, products, assignments, division, isMasterOrAdminView, myMemberId]);
     const filterPool = myFullPool;
+
+    //date wise filter
+    const dashboardActivity = useMemo(() => {
+  if (!dashFromDate && !dashToDate) return [];
+  const myName = (auth?.name || "").trim().toLowerCase();
+  const myEmail = (auth?.email || "").trim().toLowerCase();
+
+  return (audit || [])
+    .filter(a => {
+      const d = new Date(a.at);
+      if (isNaN(d.getTime())) return false;
+      if (dashFromDate && d < new Date(dashFromDate + "T00:00:00")) return false;
+      if (dashToDate && d > new Date(dashToDate + "T23:59:59.999")) return false;
+      if (a.division && a.division !== division) return false;
+
+      if (!isMasterOrAdminView) {
+        const actor = (a.actor || "").trim().toLowerCase();
+        if (actor !== myName && actor !== myEmail) return false;
+      }
+
+      return true;
+    })
+    .sort((x, y) => new Date(y.at) - new Date(x.at));
+}, [audit, dashFromDate, dashToDate, division, isMasterOrAdminView, auth]);
+
+const recentActivityScoped = useMemo(() => {
+  const myName = (auth?.name || "").trim().toLowerCase();
+  const myEmail = (auth?.email || "").trim().toLowerCase();
+  return (audit || []).filter(a => {
+    if (isMasterOrAdminView) return true;
+    const actor = (a.actor || "").trim().toLowerCase();
+    return actor === myName || actor === myEmail;
+  });
+}, [audit, isMasterOrAdminView, auth]);
+
+   
 
     // Pending/Complete KPIs now reflect the Website Listing (Shopify) stage
     // specifically, across the full platform pool for this scope.
@@ -2604,6 +2643,7 @@
 
     return (
       <div>
+       
         <div className="grid kpis">
           {kpis.map((k, i) => (<div className="card kpi" key={i}><div className="kico">{k.ic({})}</div><div className="lab">{k.lab}</div><div className="val" style={{ color: k.color || "var(--ink)" }}>{k.val}</div><div className="sub">{k.sub}</div></div>))}
         </div>
@@ -2634,6 +2674,41 @@
               <b>{total}</b>
             </span>
           </div>
+        </div>
+         {/* UI PANEL */}
+        <div className="card pad" style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
+          <b style={{ fontSize: 13 }}>Activity by date</b>
+          <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>From</label>
+          <input type="date" value={dashFromDate} onChange={e => setDashFromDate(e.target.value)} max={todayStr}
+            style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "7px 10px", background: "var(--card)", fontSize: 13 }} />
+          <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>To</label>
+          <input type="date" value={dashToDate} onChange={e => setDashToDate(e.target.value)}
+            style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "7px 10px", background: "var(--card)", fontSize: 13 }} />
+          {(dashFromDate || dashToDate) && (
+            <button onClick={() => { setDashFromDate(""); setDashToDate(""); }}
+              style={{ fontSize: 11, fontWeight: 600, color: "var(--rose-ink)", border: "1px solid var(--rose)", background: "var(--rose-bg)", borderRadius: 8, padding: "5px 10px" }}>
+              ✕ Clear
+            </button>
+          )}
+          <span style={{ fontSize: 12, color: "var(--muted)" }}>{dashboardActivity.length} action(s) in range</span>
+        </div>
+
+      {(dashFromDate && dashToDate) && (
+        dashboardActivity.length === 0
+          ? <div style={{ fontSize: 12, color: "var(--faint)" }}>No activity in this range.</div>
+          : <div style={{ maxHeight: 240, overflowY: "auto" }}>
+              {dashboardActivity.map(a => (
+                <div key={a.id} style={{ display: "flex", gap: 10, fontSize: 12, padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
+                  <span style={{ color: "var(--faint)", whiteSpace: "nowrap" }}>{fmt(a.at)}</span>
+                  <span style={{ fontWeight: 600 }}>{a.actor || "—"}</span>
+                  <span>{a.action}</span>
+                  <span style={{ color: "var(--muted)" }}>{a.entity}</span>
+                  <span style={{ color: "var(--muted)" }}>{a.detail}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {(issues.length > 0 || (isMasterOrAdminView
@@ -2850,13 +2925,14 @@
           )}
           <div className="card pad">
             <div className="sec-h" style={{ marginBottom: 6 }}><h3>Recent activity</h3></div>
-            {audit.length === 0 ? <div className="tag" style={{ padding: "14px 0" }}>No activity yet.</div> :
-              <div className="feed">{audit.slice(0, 9).map(a => (<div className="fi" key={a.id}><span className="fdot" /><div><div className="fmain"><b>{a.action}</b> — {a.entity}</div><div className="fmeta">{a.actor} · {fmt(a.at)}</div></div></div>))}</div>}
+            {recentActivityScoped.length === 0 ? <div className="tag" style={{ padding: "14px 0" }}>No activity yet.</div> :
+            <div className="feed">{recentActivityScoped.slice(0, 9).map(a => (<div className="fi" key={a.id}><span className="fdot" /><div><div className="fmain"><b>{a.action}</b> — {a.entity}</div><div className="fmeta">{a.actor} · {fmt(a.at)}</div></div></div>))}</div>}
           </div>
         </div>
       </div>
     );
   }
+
 
 
 
@@ -3013,7 +3089,8 @@
     }, [assignments, teamMembers, division, hasAssignAccess, isMasterOrAdmin, myMemberId]);
 
     const [assignTab, setAssignTab] = useState("notassigned");
-    const [filterMember, setFilterMember] = useState(""); // NEW
+    const [filterMember, setFilterMember] = useState("");
+    const [fSetNo, setFSetNo] = useState(""); 
     // Member filter stats — per member: assigned / completed / pending counts
     // Member filter stats — calculated from actual stage statuses in products (Google Sheet data)
     const memberStats = useMemo(() => {
@@ -3156,6 +3233,7 @@
 
     useEffect(() => { window.__openAdd = () => { if (isFullAccess) setModal(true); }; return () => { delete window.__openAdd; }; }, [isFullAccess]);
 
+    const setNoOptions = useMemo(() => [...new Set(products.map(p => p.set_no).filter(Boolean))].sort(), [products]);
     const sourceProducts = (hasAssignAccess && (assignTab === "assigned" || assignTab === "completed" || assignTab === "pending"))
       ? (allDivProducts || products)
       : products;
@@ -3163,7 +3241,8 @@
 
     const filtered = sourceProducts.filter(p => {
       const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase();
-      if (!t.includes(q.toLowerCase())) return false;
+      if (!t.includes(q.toLowerCase())) return false; 
+      if (fSetNo && (p.set_no || "").trim().toLowerCase() !== fSetNo.trim().toLowerCase()) return false;
       if (hasAssignAccess) {
         const isAssigned = !!skuAssignedTo[p.sku.trim().toLowerCase()];
         if (assignTab === "notassigned" && isAssigned) return false;
@@ -3364,6 +3443,23 @@
           </div>
         )}
         <div className="toolbar">
+        {setNoOptions.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+            <select
+              value={fSetNo}
+              onChange={e => { setFSetNo(e.target.value); setPage(1); }}
+              style={{ border: "1px solid var(--line2)", borderRadius: 10, padding: "9px 12px", background: "var(--card)", fontSize: 13, fontWeight: 500, minWidth: 180 }}
+            >
+              <option value="">— all set no. —</option>
+              {setNoOptions.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            {fSetNo && (
+              <button className="ghost" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => { setFSetNo(""); setPage(1); }}>
+                Clear
+              </button>
+            )}
+          </div>
+        )}
           <div className="search" style={{ position: "relative" }}>
             {I.search({})}
             <input placeholder="Search SKU, product or vendor…" value={q}
@@ -3534,8 +3630,6 @@
           <div className="spacer" />
           {hasIssue && <Chip status="Issue" />}
           {p.verdict === "Approved" && <span className="chip c-done"><span className="dot" />QC Approved</span>}
-          <Pipe p={p} />
-          <span className="pct">{pct}%</span>
         </div>
         {open && (
           <div className="pbody">
