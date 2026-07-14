@@ -1482,8 +1482,8 @@
 
 
 
-  const API = " https://cardtracker.ddns.net"
-  // const API = "http://localhost:8080"
+  // const API = " https://cardtracker.ddns.net"
+  const API = "http://localhost:8080"
 
   async function gsGetUsers() {
     try {
@@ -2011,19 +2011,21 @@
     const assignmentSaveLockRef = useRef(false);
 
     const saveAssignments = useCallback(async (next) => {
-      // Prevent two simultaneous assignment saves from racing
       if (assignmentSaveLockRef.current) {
         alert("Another assignment save is in progress — please wait a moment and try again.");
-        return;
+        return { ok: false };
       }
       assignmentSaveLockRef.current = true;
-      setAssignments(next);
       try {
         const res = await gsPost("setAssignments", next);
         if (!res || res.ok === false) {
-          alert("Could not save this assignment to the server — re-syncing.");
+          alert("Could not save this assignment to the server: " + (res?.error || "unknown error") + " — re-syncing.");
           await load();
+          return { ok: false, error: res?.error };
         }
+        // Only update local state once the server has confirmed the write.
+        setAssignments(next);
+        return { ok: true };
       } finally {
         assignmentSaveLockRef.current = false;
       }
@@ -2203,7 +2205,7 @@
             </div>
           </header>
           <div className="content">
-            {tab === "overview" && <Overview division={division} products={divProducts} allDivProducts={products.filter(p => p.division === division)} issues={openIssues} audit={audit.filter(a => a.division === division)} go={setTab} vendors={vendors[division] || []} allowedStages={allowedStages} auth={auth} teamMembers={teamMembers} assignments={assignments} />}
+            {tab === "overview" && <Overview division={division} products={divProducts} allDivProducts={products.filter(p => p.division === division)} issues={openIssues} audit={audit.filter(a => a.division === division)} go={setTab} vendors={vendors[division] || []} allowedStages={allowedStages} auth={auth} teamMembers={teamMembers} assignments={assignments} qcAuditLog={qcAuditLog} />}
             {tab === "products" && <Products division={division} products={divProducts} allDivProducts={products.filter(p => p.division === division)} vendors={vendors[division] || []} onUpsert={upsertProduct} onStage={patchStage} onStageBulk={patchStageBulk} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} allowedStages={allowedStages} operator={operator} auth={auth} assignments={assignments} teamMembers={teamMembers} />}
             {tab === "dispatch" && <Dispatch products={divProducts} onStore={patchStore} onStage={patchStage} operator={operator} />}
             {tab === "bulk" && <Bulk division={division} products={products} divProducts={divProducts} bulkProducts={bulkProducts} bulkStores={bulkStores} />}
@@ -2218,7 +2220,7 @@
   }
 
   /* ---------------- OVERVIEW ---------------- */
-  function Overview({ division, products, allDivProducts, issues, audit, go, vendors = [], allowedStages = null, auth, teamMembers = [], assignments =    [] }) {
+  function Overview({ division, products, allDivProducts, issues, audit, go, vendors = [], allowedStages = null, auth, teamMembers = [], assignments = [], qcAuditLog = [] }) {
     const [fVendor, setFVendor] = useState("");
     const [fSetNo, setFSetNo] = useState("");
     const [fMember, setFMember] = useState("");
@@ -2417,6 +2419,30 @@
       });
     }, [assignments, division, isMasterOrAdminView, myMemberId]);
 
+    // Only the person actually assigned to a QC-flagged stage should see it as
+// "their" notification — not the whole team just because the SKU is shared.
+  const myFlaggedIssues = useMemo(() => {
+    if (isMasterOrAdminView || !myMemberId) return [];
+    const mySkuStageSet = new Set(
+      assignments
+        .filter(a => a.division === division && a.memberId === myMemberId && a.stage && a.stage !== "all")
+        .map(a => a.sku.trim().toLowerCase() + "|" + a.stage)
+    );
+    const list = [];
+    myFullPool.forEach(p => {
+      STAGES.filter(s => s.k !== "finalqc").forEach(s => {
+        const stg = p.stages[s.k];
+        const isFlagged = stg.status === "In Progress" && String(stg.comments || "").startsWith("QC flagged:");
+        if (!isFlagged) return;
+        const key = p.sku.trim().toLowerCase() + "|" + s.k;
+        if (mySkuStageSet.has(key)) {
+          list.push({ p, stageKey: s.k, stageName: s.n, comment: stg.comments.replace(/^QC flagged:\s*/, "") });
+        }
+      });
+    });
+    return list;
+  }, [isMasterOrAdminView, myMemberId, assignments, division, myFullPool]);
+
     // Pushed-to-team SKU set, reused by both "Distributed" and "Pending" calcs below.
     const pushedToTeamSkuSet = useMemo(() => {
       return new Set(
@@ -2580,28 +2606,6 @@
       <div>
         <div className="grid kpis">
           {kpis.map((k, i) => (<div className="card kpi" key={i}><div className="kico">{k.ic({})}</div><div className="lab">{k.lab}</div><div className="val" style={{ color: k.color || "var(--ink)" }}>{k.val}</div><div className="sub">{k.sub}</div></div>))}
-          {/* Distributed to Team — standalone card with dropdown */}
-          <div className="card kpi" style={{ position: "relative" }}>
-            <div className="kico">{I.gear({})}</div>
-            <div className="lab">Distributed to Team</div>
-            <div className="val" style={{ color: "var(--sky-ink)" }}>{distributedVal}</div>
-            <div className="sub" style={{ display: "flex", alignItems: "center", gap: 6, cursor: distributionBreakdown?.length > 0 ? "pointer" : "default" }}
-              onClick={() => distributionBreakdown?.length > 0 && setShowDistBreakdown(s => !s)}>
-              {distributionBreakdown?.length > 0
-                ? <><span>{distributionBreakdown.length} member{distributionBreakdown.length !== 1 ? "s" : ""}</span><span style={{ fontSize: 10, color: "var(--faint)" }}>{showDistBreakdown ? "▲" : "▼"}</span></>
-                : <span>{teamMembers.filter(m => m.division === division).length} members</span>}
-            </div>
-            {showDistBreakdown && distributionBreakdown?.length > 0 && (
-              <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 12, boxShadow: "var(--shadow-lg)", zIndex: 30, padding: "8px 0", minWidth: 180 }}>
-                {distributionBreakdown.map((x, i) => (
-                  <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 14px", borderBottom: i < distributionBreakdown.length - 1 ? "1px solid var(--line)" : "none" }}>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)" }}>{x.name}</span>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: "var(--sky-ink)", background: "var(--sky-bg)", borderRadius: 999, padding: "2px 10px" }}>{x.count}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
 
         <div className="card pad" style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
@@ -2632,7 +2636,9 @@
           </div>
         </div>
 
-        {(issues.length > 0 || products.filter(p => p.verdict === "Issues Found" && STAGES.filter(s => s.k !== "finalqc").some(s => p.stages[s.k].status === "In Progress")).length > 0) && (
+        {(issues.length > 0 || (isMasterOrAdminView
+          ? products.filter(p => p.verdict === "Issues Found" && STAGES.filter(s => s.k !== "finalqc").some(s => p.stages[s.k].status === "In Progress")).length > 0
+          : myFlaggedIssues.length > 0)) && (
               <div className="sec">
                 <div className="sec-h"><h3>Live alerts · missing, damaged & QC issues</h3><span className="hint">store reports + QC flags</span></div>
                 {issues.slice(0, 6).map((x, i) => (
@@ -2642,18 +2648,27 @@
                   </div>
                 ))}
                 {issues.length > 6 && <div className="tag" style={{ marginTop: 4 }}>+{issues.length - 6} more in Dispatch & Stores</div>}
-                {products.filter(p => 
-                    p.verdict === "Issues Found" && 
-                    STAGES.filter(s => s.k !== "finalqc").some(s => p.stages[s.k].status === "In Progress")
-                ).map((p, i) => (
+                {(isMasterOrAdminView
+                  ? products.filter(p => 
+                      p.verdict === "Issues Found" && 
+                      STAGES.filter(s => s.k !== "finalqc").some(s => p.stages[s.k].status === "In Progress")
+                    ).map(p => ({ p, stageNames: STAGES.filter(s => s.k !== "finalqc" && p.stages[s.k].status === "In Progress").map(s => s.n), comment: p.issues }))
+                  : myFlaggedIssues.reduce((acc, x) => {
+                      const existing = acc.find(a => a.p.id === x.p.id);
+                      if (existing) existing.stageNames.push(x.stageName);
+                      else acc.push({ p: x.p, stageNames: [x.stageName], comment: x.comment });
+                      return acc;
+                    }, [])
+                ).map((x, i) => (
                   <div className="alert" key={"qc-" + i} style={{ borderColor: "var(--rose)", background: "var(--rose-bg)" }}>
                     <div className="ic" style={{ background: "var(--rose-ink)" }}>QC</div>
                     <div className="tx">
-                      <b>QC Issues Found</b> — <b>{p.name || p.sku || "product"}</b> ({p.vendor || "—"})
-                      {p.issues ? ` · "${p.issues}"` : ""}
-                      <span className="tag"> · SKU: {p.sku}</span>
+                      <b>{isMasterOrAdminView ? "QC Issues Found" : "Fix needed on your stage"}</b> — <b>{x.p.name || x.p.sku || "product"}</b> ({x.p.vendor || "—"})
+                      {" · "}<span style={{ fontWeight: 600 }}>{x.stageNames.join(", ")}</span>
+                      {x.comment ? ` · "${x.comment}"` : ""}
+                      <span className="tag"> · SKU: {x.p.sku}</span>
                     </div>
-                    <button className="ghost" onClick={() => go("qcaudit")}>Review</button>
+                    {isMasterOrAdminView && <button className="ghost" onClick={() => go("qcaudit")}>Review</button>}
                   </div>
                 ))}
               </div>
@@ -2821,16 +2836,18 @@
           </div>
         </div>
 
-        <div className="sec ov-grid">
-          <div>
-            <div className="sec-h"><h3>Store receipt status</h3><span className="hint">{STORES.length} stores</span></div>
-            <div className="tbl-wrap">
-              <table>
-                <thead><tr><th>Store</th><th className="num">Disp.</th><th className="num">Recv ✓</th><th className="num">Pending</th><th className="num">Miss</th><th className="num">Dmg</th><th>Status</th></tr></thead>
-                <tbody>{storeStats.map(r => (<tr key={r.st}><td><b>{r.st}</b></td><td className="num">{r.d}</td><td className="num">{r.r}</td><td className="num">{r.pending}</td><td className="num" style={{ color: r.m ? "var(--rose-ink)" : "inherit" }}>{r.m}</td><td className="num" style={{ color: r.dm ? "var(--rose-ink)" : "inherit" }}>{r.dm}</td><td>{(r.m || r.dm) ? <Chip status="Issue" /> : r.pending === 0 && r.d > 0 ? <Chip status="Completed" /> : r.d > 0 ? <Chip status="In Progress" /> : <Chip status="Not Started" />}</td></tr>))}</tbody>
-              </table>
+      <div className="sec ov-grid" style={!isMasterOrAdminView ? { gridTemplateColumns: "1fr" } : undefined}>
+          {isMasterOrAdminView && (
+            <div>
+              <div className="sec-h"><h3>Store receipt status</h3><span className="hint">{STORES.length} stores</span></div>
+              <div className="tbl-wrap">
+                <table>
+                  <thead><tr><th>Store</th><th className="num">Disp.</th><th className="num">Recv ✓</th><th className="num">Pending</th><th className="num">Miss</th><th className="num">Dmg</th><th>Status</th></tr></thead>
+                  <tbody>{storeStats.map(r => (<tr key={r.st}><td><b>{r.st}</b></td><td className="num">{r.d}</td><td className="num">{r.r}</td><td className="num">{r.pending}</td><td className="num" style={{ color: r.m ? "var(--rose-ink)" : "inherit" }}>{r.m}</td><td className="num" style={{ color: r.dm ? "var(--rose-ink)" : "inherit" }}>{r.dm}</td><td>{(r.m || r.dm) ? <Chip status="Issue" /> : r.pending === 0 && r.d > 0 ? <Chip status="Completed" /> : r.d > 0 ? <Chip status="In Progress" /> : <Chip status="Not Started" />}</td></tr>))}</tbody>
+                </table>
+              </div>
             </div>
-          </div>
+          )}
           <div className="card pad">
             <div className="sec-h" style={{ marginBottom: 6 }}><h3>Recent activity</h3></div>
             {audit.length === 0 ? <div className="tag" style={{ padding: "14px 0" }}>No activity yet.</div> :
@@ -4350,7 +4367,7 @@
 
     // const [selStages, setSelStages] = useState([]);
 
-    const assignSku = () => {
+    const assignSku = async () => {
       if (!selMember || selSkus.length === 0 || selStages.length === 0) {
         setAssErr("Select a member, at least one SKU, and at least one stage.");
         return;
@@ -4360,20 +4377,13 @@
 
       let updatedAssignments = [...assignments];
       const memberStageKeys = (member?.stages || "").split(",").map(s => s.trim()).filter(s => s && !["assign", "qcaudit", "bulk"].includes(s));
-      // Expand "all" into this member's real, permitted pipeline stages — never
-      // write a literal "all" row, so every assignment is always checkable
-      // stage-by-stage and never silently depends on unrelated stages elsewhere.
       const effectiveStages = selStages.includes("all") ? memberStageKeys : selStages;
 
       selSkus.forEach(sku => {
         const skuLower = sku.trim().toLowerCase();
-
-        // Always clear any leftover "all" row for this member+sku first —
-        // it should never coexist with specific-stage rows.
         updatedAssignments = updatedAssignments.filter(a =>
           !(a.division === division && a.memberId === selMember && a.sku.trim().toLowerCase() === skuLower && a.stage === "all")
         );
-
         effectiveStages.forEach(stageKey => {
           updatedAssignments = updatedAssignments.filter(a =>
             !(a.division === division && a.memberId === selMember && a.sku.trim().toLowerCase() === skuLower && a.stage === stageKey)
@@ -4389,26 +4399,26 @@
           });
         });
       });
-      onSaveAssignments(updatedAssignments);
+
+      setAssErr(""); setAssMsg("");
+      const result = await onSaveAssignments(updatedAssignments);
+      if (!result || result.ok === false) {
+        setAssErr(`Could not save this assignment${result?.error ? ": " + result.error : ""} — nothing was written, please retry.`);
+        return;
+      }
+
       selSkus.forEach(sku => {
         effectiveStages.forEach(stageKey => {
           gsPost("appendAssignmentHistory", {
-            id: uid(),
-            action: "assigned",
-            sku,
-            division,
-            fromMemberId: null,
-            toMemberId: selMember,
+            id: uid(), action: "assigned", sku, division,
+            fromMemberId: null, toMemberId: selMember,
             managerId: isMasterOrAdmin ? "master" : myMemberId,
-            stage: stageKey,
-            note: "",
-            at: now()
+            stage: stageKey, note: "", at: now()
           });
         });
       });
       setSelSkus([]);
       setSelStages([]);
-      setAssErr("");
       setAssMsg(`✓ Assigned ${selSkus.length} SKU(s) × ${selStages.length} stage(s) to ${member.name}.`);
     };
 
@@ -5353,20 +5363,39 @@
       setTimeout(() => setBulkDone(false), 2000);
     };
 
-    const eligibleStages = STAGES.filter(s => s.k !== "finalqc");
+    const QC_GATE_EXCLUDED = ["scan", "qc", "finalqc"];
+    const eligibleStages = STAGES.filter(s => !QC_GATE_EXCLUDED.includes(s.k));
+
+
+    const wasFlaggedBefore = (p) => {
+      const flaggedInLog = qcAuditLog.some(r => r.productId === p.id && r.verdict === "Issues Found");
+      const flaggedOnStage = STAGES.filter(s => s.k !== "finalqc")
+        .some(s => String(p.stages[s.k]?.comments || "").includes("QC flagged:"));
+      return flaggedInLog || flaggedOnStage;
+    };
 
     const filtered = useMemo(() => {
       return products.filter(p => {
         const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase();
         if (q && !t.includes(q.toLowerCase())) return false;
-        if (filter === "pending") return !p.verdict;
+        // A card only enters the QC queue once every pipeline stage (excluding
+        // finalqc itself) is Completed — no partial-pipeline QC.
+        const allStagesDone = eligibleStages.every(s => p.stages[s.k].status === "Completed");
+        const previouslyFlagged = wasFlaggedBefore(p);
+        if (filter === "pending") return !p.verdict && allStagesDone && !previouslyFlagged;
+        if (filter === "resolved") return !p.verdict && allStagesDone && previouslyFlagged;
         if (filter === "approved") return p.verdict === "Approved";
         if (filter === "issues") return p.verdict === "Issues Found";
         return true;
       });
-    }, [products, q, filter]);
+    }, [products, q, filter, qcAuditLog]);
 
-    const pendingCount = products.filter(p => !p.verdict).length;
+    const resolvedCount = products.filter(p =>
+      !p.verdict &&
+      eligibleStages.every(s => p.stages[s.k].status === "Completed") &&
+      wasFlaggedBefore(p)
+    ).length;
+    const pendingCount = products.filter(p => !p.verdict).length - resolvedCount;
     const approvedCount = products.filter(p => p.verdict === "Approved").length;
     const issuesCount = products.filter(p => p.verdict === "Issues Found").length;
 
@@ -5389,6 +5418,7 @@
         <div className="grid kpis" style={{ marginBottom: 16 }}>
           {[
             { lab: "Pending QC", val: pendingCount, bg: "var(--peach-bg)", border: "var(--peach)", color: "var(--peach-ink)" },
+            { lab: "Issue Resolved", val: resolvedCount, bg: "var(--sky-bg)", border: "var(--sky)", color: "var(--sky-ink)" },
             { lab: "Approved", val: approvedCount, bg: "var(--sage-bg)", border: "var(--sage)", color: "var(--sage-ink)" },
             { lab: "Issues Found", val: issuesCount, bg: "var(--rose-bg)", border: "var(--rose)", color: "var(--rose-ink)" },
             { lab: "Total Products", val: products.length, bg: "var(--card)", border: "var(--line2)", color: "var(--ink)" },
@@ -5444,6 +5474,7 @@
           </div>
           {[
             ["pending", `Pending (${pendingCount})`],
+            ["resolved", `Issue Resolved (${resolvedCount})`],
             ["approved", `Approved (${approvedCount})`],
             ["issues", `Issues (${issuesCount})`],
             ["all", "All"],
@@ -5535,7 +5566,10 @@
                     <div className="spacer" />
                     {p.verdict === "Approved" && <span className="chip c-done"><span className="dot" />Approved</span>}
                     {p.verdict === "Issues Found" && <span className="chip c-issue"><span className="dot" />Issues Found</span>}
-                    {!p.verdict && allStagesDone && <span className="chip c-prog"><span className="dot" />Ready for QC</span>}
+                    {!p.verdict && allStagesDone && qcAuditLog.some(r => r.productId === p.id && r.verdict === "Issues Found") &&
+                      <span className="chip" style={{ background: "var(--sky-bg)", color: "var(--sky-ink)", border: "1px solid var(--sky)" }}><span className="dot" style={{ background: "var(--sky)" }} />↻ Issue Resolved — Re-review</span>}
+                    {!p.verdict && allStagesDone && !qcAuditLog.some(r => r.productId === p.id && r.verdict === "Issues Found") &&
+                      <span className="chip c-prog"><span className="dot" />Ready for QC</span>}
                     {!p.verdict && !allStagesDone && <span className="chip c-app"><span className="dot" />Pipeline incomplete</span>}
                     <Pipe p={p} />
                   </div>
@@ -5650,14 +5684,14 @@
                           <div style={{ flex: 1 }} />
                           <button
                             onClick={() => handleSubmit(p)}
-                            disabled={!st.verdict || saving[p.id] || (st.verdict === "Issues Found" && !st.comments?.trim())}
+                            disabled={!allStagesDone || !st.verdict || saving[p.id] || (st.verdict === "Issues Found" && !st.comments?.trim())}
                             style={{
                               padding: "10px 24px", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer", border: 0, transition: ".15s",
                               background: saved[p.id] ? "var(--sage)" : st.verdict === "Approved" ? "var(--sage-deep)" : st.verdict === "Issues Found" ? "var(--rose-ink)" : "var(--faint)",
                               color: "#fff",
                               opacity: (!st.verdict || saving[p.id] || (st.verdict === "Issues Found" && !st.comments?.trim())) ? 0.45 : 1,
                             }}>
-                            {saving[p.id] ? "Saving…" : saved[p.id] ? "✓ Saved" : st.verdict === "Approved" ? "Confirm Approval" : st.verdict === "Issues Found" ? "Submit & Send Back" : "Select a verdict first"}
+                            {!allStagesDone ? "Pipeline incomplete — finish all stages first" : saving[p.id] ? "Saving…" : saved[p.id] ? "✓ Saved" : st.verdict === "Approved" ? "Confirm Approval" : st.verdict === "Issues Found" ? "Submit & Send Back" : "Select a verdict first"}
                           </button>
                         </div>
                       </div>

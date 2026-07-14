@@ -220,12 +220,6 @@ app.post("/api/batchUpsertProducts", async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    if (row.vendor && String(row.vendor).trim()) {
-      await client.query(
-        `INSERT INTO vendors (division, vendor_name) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-        [division, String(row.vendor).trim()]
-      );
-    }
     for (const p of products) {
       await client.query(
         `INSERT INTO products (id, division, sku, name, vendor, inward, qty, note, set_no, verdict, issues, created_at, updated_at)
@@ -577,45 +571,45 @@ app.post("/api/saveUsers", async (req, res) => {
 
 app.post("/api/setAssignments", async (req, res) => {
   const assignments = req.body;
-
   if (!Array.isArray(assignments)) {
     return res.status(400).json({ ok: false, error: "expected array" });
   }
 
-  // ---- Safety guard #1: refuse to touch anything on a suspiciously empty/small payload ----
-  // A legitimate "clear everything" action should be explicit, not implied by an empty array.
-  const { rows: countRows } = await pool.query("SELECT COUNT(*) FROM assignments");
-  const currentCount = Number(countRows[0].count);
-
-  if (assignments.length === 0 && currentCount > 0) {
-    return res.status(400).json({
-      ok: false,
-      error: `Refusing to clear ${currentCount} existing assignments via empty array. ` +
-             `If you really want to delete all assignments, call POST /api/clearAssignments with {"confirm": true}.`
-    });
-  }
-
-  // ---- Safety guard #2: refuse a payload that would wipe out a large chunk of existing data ----
-  // e.g. if we currently have 500 rows and the incoming payload only resolves to 20,
-  // that's very likely a bug (partial fetch, wrong division filter, etc.), not intent.
-  const SHRINK_THRESHOLD = 0.5; // refuse if new count would be <50% of current, when current is non-trivial
-  if (currentCount > 20 && assignments.length < currentCount * SHRINK_THRESHOLD) {
-    return res.status(400).json({
-      ok: false,
-      error: `Payload has ${assignments.length} rows but ${currentCount} currently exist — ` +
-             `this looks like a partial/incorrect payload, not an intentional bulk edit. ` +
-             `Pass {"force": true} in the body alongside the array if this is intentional.`,
-      currentCount,
-      incomingCount: assignments.length
-    });
-  }
+  const divisionsInPayload = [...new Set(assignments.map(a => a.division))];
 
   const client = await pool.connect();
   try {
     await client.query("SET LOCAL statement_timeout = '120s'");
     await client.query("BEGIN");
 
-    // ---- Resolve product ids up front (unchanged) ----
+    // ---- Per-division safety guards (fixes: a small Bombay Cards batch no longer
+    // gets compared against KOC Cards' much larger row count) ----
+    for (const div of divisionsInPayload) {
+      const { rows: cr } = await client.query(
+        "SELECT COUNT(*) FROM assignments WHERE division = $1", [div]
+      );
+      const currentCount = Number(cr[0].count);
+      const incomingCountForDiv = assignments.filter(a => a.division === div).length;
+
+      if (incomingCountForDiv === 0 && currentCount > 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          ok: false,
+          error: `Refusing to clear ${currentCount} existing assignments for "${div}" via empty payload.`
+        });
+      }
+      const SHRINK_THRESHOLD = 0.5;
+      if (currentCount > 20 && incomingCountForDiv < currentCount * SHRINK_THRESHOLD) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          ok: false,
+          error: `Payload has ${incomingCountForDiv} rows for "${div}" but ${currentCount} currently exist — looks like a stale/partial payload.`,
+          division: div, currentCount, incomingCount: incomingCountForDiv
+        });
+      }
+    }
+
+    // ---- Resolve product ids (unchanged) ----
     let prodMap = {};
     if (assignments.length > 0) {
       const skus = assignments.map(a => a.sku);
@@ -632,10 +626,10 @@ app.post("/api/setAssignments", async (req, res) => {
     }
 
     const ids = [], memberIds = [], managerIds = [], productIds = [], outSkus = [], outDivisions = [], stages = [], assignedAts = [];
-    const validIncomingIds = [];
+    const validIdsByDivision = {};
     assignments.forEach(a => {
       const pid = prodMap[a.division + "||" + a.sku.toLowerCase()];
-      if (!pid) return; // skip orphaned rows
+      if (!pid) return;
       ids.push(a.id);
       memberIds.push(a.memberId);
       managerIds.push(a.managerId);
@@ -644,10 +638,9 @@ app.post("/api/setAssignments", async (req, res) => {
       outDivisions.push(a.division);
       stages.push(a.stage);
       assignedAts.push(a.assignedAt || new Date().toISOString());
-      validIncomingIds.push(a.id);
+      (validIdsByDivision[a.division] ||= []).push(a.id);
     });
 
-    // ---- Upsert everything in the payload ----
     if (ids.length > 0) {
       await client.query(
         `INSERT INTO assignments (id, member_id, manager_id, product_id, sku, division, stage, assigned_at)
@@ -664,20 +657,22 @@ app.post("/api/setAssignments", async (req, res) => {
       );
     }
 
-    // ---- Delete only rows NOT present in the incoming payload ----
-    // This replaces the blanket DELETE FROM assignments. An empty/bad payload
-    // now deletes nothing (validIncomingIds is empty -> NOT IN () is a no-op guard below).
-    if (validIncomingIds.length > 0) {
-      await client.query(
-        `DELETE FROM assignments WHERE id != ALL($1::text[])`,
-        [validIncomingIds]
-      );
+    // ---- Delete only rows NOT present in payload, scoped PER DIVISION ----
+    // This is the critical fix: previously this deleted globally, so any
+    // omission for one division (e.g. Bombay) risked corrupting another
+    // (e.g. KOC). Now a Bombay-only save can never touch KOC rows.
+    for (const div of divisionsInPayload) {
+      const keepIds = validIdsByDivision[div] || [];
+      if (keepIds.length > 0) {
+        await client.query(
+          `DELETE FROM assignments WHERE division = $1 AND id != ALL($2::text[])`,
+          [div, keepIds]
+        );
+      }
     }
-    // NOTE: if validIncomingIds.length === 0 we already returned 400 above (guard #1),
-    // so we never reach a state where we'd delete everything unintentionally here.
 
     await client.query("COMMIT");
-    res.json({ ok: true, upserted: ids.length, currentCount, incomingCount: assignments.length });
+    res.json({ ok: true, upserted: ids.length });
   } catch (e) {
     await client.query("ROLLBACK");
     console.error("setAssignments error", e);
