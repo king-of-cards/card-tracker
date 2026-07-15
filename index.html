@@ -5427,6 +5427,8 @@ const recentActivityScoped = useMemo(() => {
   function QCAuditTab({ division, products, qcAuditLog, onSubmit, operator, auth }) {
     const [q, setQ] = useState("");
     const [filter, setFilter] = useState("pending");
+    const [fSetNo, setFSetNo] = useState(""); // set-wise filter (master/admin only)
+    const isMasterOrAdmin = auth?.role === "master" || auth?.role === "admin";
     const [expanded, setExpanded] = useState({});
     const [verdicts, setVerdicts] = useState({});
     const [saving, setSaving] = useState({});
@@ -5459,6 +5461,8 @@ const recentActivityScoped = useMemo(() => {
 
     const QC_GATE_EXCLUDED = ["scan", "qc", "finalqc"];
     const eligibleStages = STAGES.filter(s => !QC_GATE_EXCLUDED.includes(s.k));
+    const setNoOptions = useMemo(() => [...new Set(products.map(p => p.set_no).filter(Boolean))].sort(), [products]);
+
 
 
     const wasFlaggedBefore = (p) => {
@@ -5474,6 +5478,7 @@ const recentActivityScoped = useMemo(() => {
         if (q && !t.includes(q.toLowerCase())) return false;
         // A card only enters the QC queue once every pipeline stage (excluding
         // finalqc itself) is Completed — no partial-pipeline QC.
+        if (isMasterOrAdmin && fSetNo && (p.set_no || "").trim().toLowerCase() !== fSetNo.trim().toLowerCase()) return false;
         const allStagesDone = eligibleStages.every(s => p.stages[s.k].status === "Completed");
         const previouslyFlagged = wasFlaggedBefore(p);
         if (filter === "pending") return !p.verdict && allStagesDone && !previouslyFlagged;
@@ -5482,7 +5487,7 @@ const recentActivityScoped = useMemo(() => {
         if (filter === "issues") return p.verdict === "Issues Found";
         return true;
       });
-    }, [products, q, filter, qcAuditLog]);
+    }, [products, q, filter, qcAuditLog, fSetNo, isMasterOrAdmin]);
 
     const resolvedCount = products.filter(p =>
       !p.verdict &&
@@ -5525,6 +5530,23 @@ const recentActivityScoped = useMemo(() => {
         </div>
 
         {/* Toolbar */}
+        {isMasterOrAdmin && setNoOptions.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+            <select
+              value={fSetNo}
+              onChange={e => setFSetNo(e.target.value)}
+              style={{ border: "1px solid var(--line2)", borderRadius: 10, padding: "9px 12px", background: "var(--card)", fontSize: 13, fontWeight: 500, minWidth: 180 }}
+            >
+              <option value="">— all set no. —</option>
+              {setNoOptions.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            {fSetNo && (
+              <button className="ghost" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setFSetNo("")}>
+                Clear
+              </button>
+            )}
+          </div>
+        )}
         <div className="toolbar">
           <div className="search" style={{ position: "relative" }}>
             {I.search({})}
