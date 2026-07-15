@@ -2626,11 +2626,41 @@ const recentActivityScoped = useMemo(() => {
       : (dbStats ? Number(dbStats.kept_by_manager) : myPersonalPool.length);
 
     const kpis = [
-      { lab: "Total Products", val: totalVal, sub: division, ic: I.box },
-      { lab: "Pending", val: pendingVal, sub: isMasterOrAdminView ? "not yet assigned" : "with me, not done", ic: I.layers, color: pendingVal > 0 ? "var(--peach-ink)" : "var(--sage-ink)" },
-      { lab: "Complete", val: completeVal, sub: isMasterOrAdminView ? "fully done" : "done by me personally", ic: I.check, color: "var(--sage-ink)" },
-      { lab: "Issues", val: products.filter(p => p.verdict === "Issues Found").length, sub: `${products.filter(p => p.verdict === "Issues Found").length} QC flags`, ic: I.alert, color: products.filter(p => p.verdict === "Issues Found").length ? "var(--rose-ink)" : "var(--ink)" },
+      { lab: "Total Products", val: totalVal, sub: division, ic: I.box, scope: "all" },
+      { lab: "Pending", val: pendingVal, sub: isMasterOrAdminView ? "not yet assigned" : "with me, not done", ic: I.layers, color: pendingVal > 0 ? "var(--peach-ink)" : "var(--sage-ink)", scope: "pending" },
+      { lab: "Complete", val: completeVal, sub: isMasterOrAdminView ? "fully done" : "done by me personally", ic: I.check, color: "var(--sage-ink)", scope: "completed" },
+      { lab: "Issues", val: products.filter(p => p.verdict === "Issues Found").length, sub: `${products.filter(p => p.verdict === "Issues Found").length} QC flags`, ic: I.alert, color: products.filter(p => p.verdict === "Issues Found").length ? "var(--rose-ink)" : "var(--ink)", scope: "issues" },
     ];
+
+    const [exporting, setExporting] = useState("");
+
+    const downloadKpiExcel = async (scope, label) => {
+      setExporting(scope);
+      try {
+        const params = new URLSearchParams({ division, scope });
+        if (!isMasterOrAdminView && myMemberId) params.set("memberId", myMemberId);
+
+        const res = await fetch(`${API}/api/exportProducts?${params.toString()}`);
+        const data = await res.json();
+        if (!data.ok) { alert("Export failed: " + (data.error || "unknown error")); return; }
+
+        const headers = ["SKU", "Name", "Vendor", "Qty", "Verdict", "Next Pending Stage", "Last Updated"];
+        const rows = data.rows.map(r => [
+          r.sku, r.name || "", r.vendor || "", r.qty || 0,
+          r.verdict || "", r.next_pending_stage || "", r.updated_at ? fmt(r.updated_at) : ""
+        ]);
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+        ws["!cols"] = headers.map(h => ({ wch: Math.max(14, h.length + 4) }));
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, label);
+        XLSX.writeFile(wb, `${division}_${label}_${scope}.xlsx`);
+      } catch (e) {
+        console.error("downloadKpiExcel error", e);
+        alert("Export failed — check console.");
+      } finally {
+        setExporting("");
+      }
+    };
 
 
     useEffect(() => {
@@ -2645,7 +2675,27 @@ const recentActivityScoped = useMemo(() => {
       <div>
        
         <div className="grid kpis">
-          {kpis.map((k, i) => (<div className="card kpi" key={i}><div className="kico">{k.ic({})}</div><div className="lab">{k.lab}</div><div className="val" style={{ color: k.color || "var(--ink)" }}>{k.val}</div><div className="sub">{k.sub}</div></div>))}
+          {kpis.map((k, i) => (
+            <div className="card kpi" key={i}>
+              <div className="kico">{k.ic({})}</div>
+              <div className="lab">{k.lab}</div>
+              <div className="val" style={{ color: k.color || "var(--ink)" }}>{k.val}</div>
+              <div className="sub">{k.sub}</div>
+              <button
+                onClick={() => downloadKpiExcel(k.scope, k.lab.replace(/\s+/g, "_"))}
+                disabled={exporting === k.scope}
+                title={`Download ${k.lab} as Excel`}
+                style={{
+                  position: "absolute", bottom: 12, right: 12,
+                  fontSize: 10.5, fontWeight: 700, padding: "4px 9px", borderRadius: 7,
+                  border: "1px solid var(--line2)", background: "var(--card-2)", color: "var(--sage-ink)",
+                  display: "inline-flex", alignItems: "center", gap: 4
+                }}
+              >
+                {exporting === k.scope ? "…" : "⬇ Excel"}
+              </button>
+            </div>
+          ))}
         </div>
 
         <div className="card pad" style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>

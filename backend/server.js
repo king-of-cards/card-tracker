@@ -32,6 +32,7 @@ const STORES = [
   "Chamrajpet", "HSR Layout", "Sahakar Nagar", "Hoodi", "Jayanagar",
   "Bommasandra", "Hyderabad", "Mysore", "Vizag", "Hubli", "Chitradurga",
 ];
+const PIPELINE_STAGE_COUNT = STAGE_KEYS.filter(k => k !== "finalqc").length; // 11
 
 app.get("/", (req, res) => res.json({ message: "Card Tracker API is running!" }));
 
@@ -878,8 +879,69 @@ app.get("/api/pipelineStats", async (req, res) => {
   }
 });
 
+/* ----------------------------------------------------------------
+   Helpers for /api/exportProducts
+---------------------------------------------------------------- */
+async function getExportRowsForDivision(client, division, scope) {
+  const { rows } = await client.query(`
+    WITH stage_counts AS (
+      SELECT
+        p.id AS product_id,
+        COUNT(*) FILTER (WHERE se.status = 'Completed') AS completed_stages,
+        COUNT(*) FILTER (WHERE se.status = 'Issue') AS issue_stages,
+        MIN(CASE WHEN se.status IS DISTINCT FROM 'Completed' THEN se.stage_key END) AS next_pending_stage
+      FROM products p
+      LEFT JOIN stage_entries se
+        ON se.product_id = p.id AND se.stage_key != 'finalqc'
+      WHERE p.division = $1
+      GROUP BY p.id
+    )
+    SELECT p.sku, p.name, p.vendor, p.division, p.qty, p.verdict, p.updated_at,
+           sc.completed_stages, sc.issue_stages, sc.next_pending_stage
+    FROM products p
+    JOIN stage_counts sc ON sc.product_id = p.id
+    WHERE p.division = $1
+      AND (
+        $2 = 'all'
+        OR ($2 = 'completed' AND sc.completed_stages = $3)
+        OR ($2 = 'pending'   AND sc.completed_stages < $3)
+        OR ($2 = 'issues'    AND (p.verdict = 'Issues Found' OR sc.issue_stages > 0))
+      )
+    ORDER BY p.sku
+  `, [division, scope, PIPELINE_STAGE_COUNT]);
+  return rows;
+}
 
-
+async function getExportRowsForMember(client, division, memberId, scope) {
+  const { rows } = await client.query(`
+    WITH my_assignments AS (
+      SELECT DISTINCT a.sku, a.stage
+      FROM assignments a
+      WHERE a.member_id = $1 AND a.division = $2
+    ),
+    card_level AS (
+      SELECT
+        p.id AS product_id,
+        p.sku, p.name, p.vendor, p.division, p.qty, p.verdict, p.updated_at,
+        COUNT(*) AS stages_owned,
+        COUNT(*) FILTER (WHERE se.status = 'Completed') AS stages_completed,
+        COUNT(*) FILTER (WHERE se.status = 'Issue') AS stages_issue,
+        MIN(CASE WHEN se.status IS DISTINCT FROM 'Completed' THEN ma.stage END) AS next_pending_stage
+      FROM my_assignments ma
+      JOIN products p ON p.sku = ma.sku AND p.division = $2
+      LEFT JOIN stage_entries se ON se.product_id = p.id AND se.stage_key = ma.stage
+      GROUP BY p.id, p.sku, p.name, p.vendor, p.division, p.qty, p.verdict, p.updated_at
+    )
+    SELECT * FROM card_level
+    WHERE
+      $3 = 'all'
+      OR ($3 = 'completed' AND stages_completed = stages_owned)
+      OR ($3 = 'pending'   AND stages_completed < stages_owned)
+      OR ($3 = 'issues'    AND (verdict = 'Issues Found' OR stages_issue > 0))
+    ORDER BY sku
+  `, [memberId, division, scope]);
+  return rows;
+}
 
 function normStatusServer(v) {
   if (!v) return null;
@@ -1037,6 +1099,32 @@ app.post("/api/bulkImportProducts", async (req, res) => {
 
 
 
+
+/* ----------------------------------------------------------------
+   GET /api/exportProducts?division=KOC Cards&scope=pending&memberId=chitra
+   scope: "pending" | "completed" | "issues" | "all"
+   memberId optional — omit for master/admin (whole division)
+---------------------------------------------------------------- */
+app.get("/api/exportProducts", async (req, res) => {
+  const { division, scope, memberId } = req.query;
+  if (!division) return res.status(400).json({ ok: false, error: "division required" });
+  if (!["pending", "completed", "issues", "all"].includes(scope)) {
+    return res.status(400).json({ ok: false, error: "invalid scope" });
+  }
+  const client = await pool.connect();
+  try {
+    const rows = memberId
+      ? await getExportRowsForMember(client, division, memberId, scope)
+      : await getExportRowsForDivision(client, division, scope);
+
+    res.json({ ok: true, scope, count: rows.length, rows });
+  } catch (e) {
+    console.error("exportProducts error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    client.release();
+  }
+});
 
 app.listen(process.env.PORT, () => {
   console.log(`Server running on http://localhost:${process.env.PORT}`);
