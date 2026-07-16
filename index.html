@@ -1345,7 +1345,6 @@
     { k: "images", n: "Video Uploaded" },
     { k: "backend", n: "Backend Listing (App)" },
     { k: "website", n: "Website Listing (Shopify)" },
-    { k: "qc", n: "QC Check" },
     { k: "finalqc", n: "Final QC / Audit" },
   ];
   const STATUSES = ["Not Started", "In Progress", "Completed", "Issue"];
@@ -2218,6 +2217,66 @@
     );
   }
 
+
+
+  function ActiveWork({ products, allowedStages, onJump }) {
+    const rows = useMemo(() => {
+      const visible = allowedStages ? STAGES.filter(s => allowedStages.includes(s.k)) : STAGES;
+      const list = [];
+      products.forEach(p => {
+        visible.forEach(s => {
+          if (s.k === "finalqc") return;
+          const st = p.stages[s.k];
+          if (st.status === "In Progress") {
+            list.push({ p, stageKey: s.k, stageName: s.n, person: st.person || "Unassigned", comments: st.comments, at: st.at });
+          }
+        });
+      });
+      return list.sort((a, b) => new Date(b.at) - new Date(a.at));
+    }, [products, allowedStages]);
+
+    const byPerson = useMemo(() => {
+      const m = {};
+      rows.forEach(r => { (m[r.person] ||= []).push(r); });
+      return Object.entries(m).sort((a, b) => b[1].length - a[1].length);
+    }, [rows]);
+
+    if (rows.length === 0) return null;
+
+    return (
+      <div className="sec">
+        <div className="sec-h">
+          <h3>Currently in progress</h3>
+          <span className="hint">{rows.length} active task{rows.length !== 1 ? "s" : ""} · {byPerson.length} people working</span>
+        </div>
+        <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
+          {byPerson.map(([person, tasks]) => (
+            <div className="card pad" key={person}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                <div style={{ width: 30, height: 30, borderRadius: 8, background: "var(--sky-bg)", color: "var(--sky-ink)", display: "grid", placeItems: "center", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
+                  {person[0]?.toUpperCase() || "?"}
+                </div>
+                <b style={{ fontSize: 13 }}>{person}</b>
+                <span className="tag" style={{ marginLeft: "auto" }}>{tasks.length} task{tasks.length !== 1 ? "s" : ""}</span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {tasks.map((t, i) => (
+                  <div key={i} onClick={() => onJump && onJump(t.p.id)}
+                    style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, padding: "6px 8px", borderRadius: 8, background: "var(--sky-bg)", cursor: onJump ? "pointer" : "default" }}>
+                    <span className="psku" style={{ flexShrink: 0 }}>{t.p.sku}</span>
+                    <span style={{ fontWeight: 600, color: "var(--sky-ink)" }}>{t.stageName}</span>
+                    <span className="tag" style={{ marginLeft: "auto", flexShrink: 0 }}>{fmt(t.at)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  
   /* ---------------- OVERVIEW ---------------- */
   function Overview({ division, products, allDivProducts, issues, audit, go, vendors = [], allowedStages = null, auth, teamMembers = [], assignments = [], qcAuditLog = [] }) {
     const [fVendor, setFVendor] = useState("");
@@ -2799,6 +2858,8 @@ const recentActivityScoped = useMemo(() => {
               </div>
             )}
 
+        <ActiveWork products={products} allowedStages={allowedStages} />
+
         <div className="sec ov-grid">
           <div className="card pad">
             <div className="sec-h" style={{ marginBottom: 6, alignItems: "center", flexWrap: "wrap", gap: 8 }}>
@@ -3109,6 +3170,7 @@ const recentActivityScoped = useMemo(() => {
     const [q, setQ] = useState(""); const [open, setOpen] = useState({}); const [modal, setModal] = useState(false); const [showSug, setShowSug] = useState(false); const [page, setPage] = useState(1);
 
     const [selected, setSelected] = useState({}); const [bulkStage, setBulkStage] = useState(""); const [bulkStatus, setBulkStatus] = useState("Completed");
+    const [traceManagerId, setTraceManagerId] = useState("");
     const [bulkBusy, setBulkBusy] = useState(false);
     const [bulkErr, setBulkErr] = useState("");
     const isFullAccess = allowedStages === null;
@@ -3118,13 +3180,16 @@ const recentActivityScoped = useMemo(() => {
     const hasAssignAccess = isMasterOrAdmin || (auth?.stages || "").split(",").map(s => s.trim()).includes("assign");
     const myMemberId = useMemo(() => {
       const me = teamMembers?.find(m => m.email && auth?.email && m.email.trim().toLowerCase() === auth.email.trim().toLowerCase());
-      return me?.id || (auth?.name ? auth.name.toLowerCase().replace(/\s+/g, "_") : null);
+      const resolved = me?.id || (auth?.name ? auth.name.toLowerCase().replace(/\s+/g, "_") : null);
+      console.log("[DEBUG] myMemberId resolved to:", resolved, "| auth:", auth, "| matched teamMember:", me);
+      return resolved;
     }, [teamMembers, auth]);
 
     // sku -> [{ memberId, memberName, stage }] for whoever it's been pushed to by THIS manager
     const skuAssignedTo = useMemo(() => {
       if (!hasAssignAccess) return {};
       const managerIdForRows = isMasterOrAdmin ? "master" : myMemberId;
+      console.log("[DEBUG] Looking for assignments where memberId or managerId ===", myMemberId, "| sample assignment memberIds:", [...new Set(assignments.slice(0,10).map(a => a.memberId))]);
       const map = {};
       assignments
         .filter(a => a.division === division &&
@@ -3140,7 +3205,24 @@ const recentActivityScoped = useMemo(() => {
 
     const [assignTab, setAssignTab] = useState("notassigned");
     const [filterMember, setFilterMember] = useState("");
-    const [fSetNo, setFSetNo] = useState(""); 
+    const [fSetNo, setFSetNo] = useState("");
+    const [showFilters, setShowFilters] = useState(false);
+    const [fStatus, setFStatus] = useState("");
+    const [fVendor, setFVendor] = useState("");
+    const [fStage, setFStage] = useState("");
+    const [fStageStatus, setFStageStatus] = useState("");
+    const [fHasIssue, setFHasIssue] = useState(false);
+    const [fStalledDays, setFStalledDays] = useState("");
+    const [fQcVerdict, setFQcVerdict] = useState("");
+    const [sortBy, setSortBy] = useState("recent");
+    const filterableStages = STAGES.filter(s => s.k !== "finalqc");
+    const activeFilterCount = [fStatus, fVendor, fStage && fStageStatus, fHasIssue, fStalledDays, fQcVerdict, fSetNo, filterMember].filter(Boolean).length;
+    const clearAllFilters = () => {
+      setFStatus(""); setFVendor(""); setFStage(""); setFStageStatus(""); setFHasIssue(false);
+      setFStalledDays(""); setFQcVerdict(""); setFSetNo(""); setFilterMember("");
+      setSortBy("recent"); setPage(1);
+    };
+    // const [showFilters, setShowFilters] = useState(false);
     // Member filter stats — per member: assigned / completed / pending counts
     // Member filter stats — calculated from actual stage statuses in products (Google Sheet data)
     const memberStats = useMemo(() => {
@@ -3225,6 +3307,78 @@ const recentActivityScoped = useMemo(() => {
       }).sort((a, b) => a.name.localeCompare(b.name));
      }, [assignments, division, hasAssignAccess, isMasterOrAdmin, myMemberId, teamMembers, products]);
 
+    // Anyone who has at least one direct report — these are the "manager" options
+    // in the trace panel. Master/admin sees every manager in the org. A regular
+    // manager (assign access, non-master) never sees this list at all — their
+    // own team loads automatically below, so there is no path for them to
+    // select or view another manager's team.
+    // Anyone who HAS assign access — i.e. anyone capable of building a team,
+    // whether or not they've added a single report yet. Master/admin sees
+    // every such manager in the org so a brand-new manager with zero reports
+    // still shows up (as "0 reports" rather than being invisible). A regular
+    // manager (assign access, non-master) never sees this list at all — their
+    // own team loads automatically below, so there is no path for them to
+    // select or view another manager's team.
+    const managersWithReports = useMemo(() => {
+      if (!isMasterOrAdmin) return [];
+      return teamMembers.filter(m => {
+        const stages = (m.stages || "").split(",").map(s => s.trim());
+        return stages.includes("assign");
+      });
+    }, [teamMembers, isMasterOrAdmin]);
+
+    // Master picks who to trace via the dropdown. A regular manager is locked
+    // to their own id — this is the actual access boundary, not just a UI hint.
+    const effectiveTraceId = isMasterOrAdmin ? traceManagerId : myMemberId;
+
+    // Full hierarchy trace for whichever manager is selected: their own totals,
+    // plus a per-report breakdown of assigned / completed / pending — regardless
+    // of whether the person viewing this is that manager or someone above them.
+    const traceStats = useMemo(() => {
+      if (!effectiveTraceId) return null;
+      const manager = teamMembers.find(m => m.id === effectiveTraceId);
+      if (!manager) return null;
+      const pool = allDivProducts || products;
+
+      const isDone = (prod, rows) => {
+        const specific = rows.filter(a => a.stage && a.stage !== "all");
+        const toCheck = specific.length ? specific : rows;
+        return toCheck.every(a => (!a.stage || a.stage === "all")
+          ? productState(prod) === "done"
+          : prod.stages?.[a.stage]?.status === "Completed");
+      };
+
+      // Everything ever handed TO this manager (from master or anyone above)
+      const managerRows = assignments.filter(a => a.division === division && a.memberId === effectiveTraceId);
+      const managerSkuMap = {};
+      managerRows.forEach(a => { (managerSkuMap[a.sku.trim().toLowerCase()] ||= []).push(a); });
+      let managerCompleted = 0, managerPending = 0;
+      Object.entries(managerSkuMap).forEach(([sku, rows]) => {
+        const prod = pool.find(p => p.sku.trim().toLowerCase() === sku);
+        if (!prod) return;
+        isDone(prod, rows) ? managerCompleted++ : managerPending++;
+      });
+
+      // Direct reports under this manager, with their own assigned/completed/pending
+      const reports = teamMembers.filter(m => m.managerId === effectiveTraceId).map(rep => {
+        const repRows = assignments.filter(a => a.division === division && a.memberId === rep.id && a.managerId === effectiveTraceId);
+        const skuMap = {};
+        repRows.forEach(a => { (skuMap[a.sku.trim().toLowerCase()] ||= []).push(a); });
+        let completed = 0, pending = 0;
+        Object.entries(skuMap).forEach(([sku, rows]) => {
+          const prod = pool.find(p => p.sku.trim().toLowerCase() === sku);
+          if (!prod) return;
+          isDone(prod, rows) ? completed++ : pending++;
+        });
+        return { id: rep.id, name: rep.name, assigned: Object.keys(skuMap).length, completed, pending };
+      }).sort((a, b) => b.assigned - a.assigned);
+
+      const pushedTotal = reports.reduce((s, r) => s + r.assigned, 0);
+      const keptByManager = Math.max(Object.keys(managerSkuMap).length - pushedTotal, 0);
+
+      return { managerName: manager.name, totalAssigned: Object.keys(managerSkuMap).length, completed: managerCompleted, pending: managerPending, pushedTotal, keptByManager, reports };
+    }, [effectiveTraceId, teamMembers, assignments, division, allDivProducts, products]);
+
     // "My own work" — cards assigned directly TO this manager, regardless of
     // who assigned them (master, or themselves). Separate from team stats above,
     // which only count work this manager has pushed to their own reports.
@@ -3249,7 +3403,7 @@ const recentActivityScoped = useMemo(() => {
         });
         allDone ? completedCount++ : pendingCount++;
       });
-      return { assigned: Object.keys(skuMap).length, completed: completedCount, pending: pendingCount };
+      return { assigned: Object.keys(skuMap).length, completed: completedCount, pending: pendingCount, skus: new Set(Object.keys(skuMap)) };
     }, [assignments, division, hasAssignAccess, myMemberId, allDivProducts, products]);
 
     const selectedIds = Object.keys(selected).filter(id => selected[id]);
@@ -3284,6 +3438,13 @@ const recentActivityScoped = useMemo(() => {
     useEffect(() => { window.__openAdd = () => { if (isFullAccess) setModal(true); }; return () => { delete window.__openAdd; }; }, [isFullAccess]);
 
     const setNoOptions = useMemo(() => [...new Set(products.map(p => p.set_no).filter(Boolean))].sort(), [products]);
+    const vendorOptionsList = useMemo(() => [...new Set(products.map(p => (p.vendor || "").trim()).filter(Boolean))].sort(), [products]);
+    // Only stages this user is actually allowed to see/work on — a photography-only
+    // member shouldn't be able to filter by "Backend Listing" they can't touch.
+    const stageFilterOptions = useMemo(() => {
+      const base = STAGES.filter(s => s.k !== "finalqc");
+      return allowedStages ? base.filter(s => allowedStages.includes(s.k)) : base;
+    }, [allowedStages]);
     const sourceProducts = (hasAssignAccess && (assignTab === "assigned" || assignTab === "completed" || assignTab === "pending"))
       ? (allDivProducts || products)
       : products;
@@ -3292,7 +3453,50 @@ const recentActivityScoped = useMemo(() => {
     const filtered = sourceProducts.filter(p => {
       const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase();
       if (!t.includes(q.toLowerCase())) return false; 
+      if (fStatus && productState(p) !== fStatus) return false;
       if (fSetNo && (p.set_no || "").trim().toLowerCase() !== fSetNo.trim().toLowerCase()) return false;
+      if (fVendor && (p.vendor || "").trim() !== fVendor) return false;
+      if (fStage && fStageStatus) {
+        const stageStatus = p.stages?.[fStage]?.status || "Not Started";
+        if (stageStatus !== fStageStatus) return false;
+      }
+      if (fHasIssue && !STAGES.some(s => s.k !== "finalqc" && p.stages[s.k]?.status === "Issue")) return false;
+      if (fStalledDays) {
+        const cutoff = Date.now() - Number(fStalledDays) * 86400000;
+        const updated = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
+        if (productState(p) === "done" || updated >= cutoff) return false;
+      }
+      if (fQcVerdict === "pending" && p.verdict) return false;
+      if (fQcVerdict === "approved" && p.verdict !== "Approved") return false;
+      if (fQcVerdict === "issues" && p.verdict !== "Issues Found") return false;
+      if (fVendor && (p.vendor || "").trim() !== fVendor) return false;
+      if (fStage && fStageStatus) {
+        const stageStatus = p.stages?.[fStage]?.status || "Not Started";
+        if (stageStatus !== fStageStatus) return false;
+      }
+      if (fHasIssue && !STAGES.some(s => s.k !== "finalqc" && p.stages[s.k]?.status === "Issue")) return false;
+      if (fStalledDays) {
+        const cutoff = Date.now() - Number(fStalledDays) * 86400000;
+        const updated = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
+        if (productState(p) === "done" || updated >= cutoff) return false;
+      }
+      if (fQcVerdict === "pending" && p.verdict) return false;
+      if (fQcVerdict === "approved" && p.verdict !== "Approved") return false;
+      if (fQcVerdict === "issues" && p.verdict !== "Issues Found") return false;
+      if (fVendor && (p.vendor || "").trim() !== fVendor) return false;
+      if (fStage && fStageStatus) {
+        const stageStatus = p.stages?.[fStage]?.status || "Not Started";
+        if (stageStatus !== fStageStatus) return false;
+      }
+      if (fHasIssue && !STAGES.some(s => s.k !== "finalqc" && p.stages[s.k]?.status === "Issue")) return false;
+      if (fStalledDays) {
+        const cutoff = Date.now() - Number(fStalledDays) * 86400000;
+        const updated = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
+        if (productState(p) === "done" || updated >= cutoff) return false;
+      }
+      if (fQcVerdict === "pending" && p.verdict) return false;
+      if (fQcVerdict === "approved" && p.verdict !== "Approved") return false;
+      if (fQcVerdict === "issues" && p.verdict !== "Issues Found") return false;
       if (hasAssignAccess) {
         const isAssigned = !!skuAssignedTo[p.sku.trim().toLowerCase()];
         if (assignTab === "notassigned" && isAssigned) return false;
@@ -3324,10 +3528,21 @@ const recentActivityScoped = useMemo(() => {
         }
       }
        if (filterMember && assignTab !== "completed" && assignTab !== "pending") {
-        const ms = memberStats.find(m => m.id === filterMember);
-        if (!ms || !ms.skus.has(p.sku.trim().toLowerCase())) return false;
+        if (filterMember === myMemberId) {
+          if (!myOwnStats.skus || !myOwnStats.skus.has(p.sku.trim().toLowerCase())) return false;
+        } else {
+          const ms = memberStats.find(m => m.id === filterMember);
+          if (!ms || !ms.skus.has(p.sku.trim().toLowerCase())) return false;
+        }
       }
       return true;
+    }).sort((a, b) => {
+      if (sortBy === "recent") return new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
+      if (sortBy === "oldest") return new Date(a.updatedAt || 0) - new Date(b.updatedAt || 0);
+      if (sortBy === "pct_high") return productPct(b) - productPct(a);
+      if (sortBy === "pct_low") return productPct(a) - productPct(b);
+      if (sortBy === "sku") return (a.sku || "").localeCompare(b.sku || "");
+      return 0;
     });
     const totalPages = Math.max(1, Math.ceil(filtered.length / 20));
     return (
@@ -3352,7 +3567,96 @@ const recentActivityScoped = useMemo(() => {
             </button>
           </div>
         )}
-        {hasAssignAccess && (
+        {isMasterOrAdmin && managersWithReports.length > 0 && (
+          <div style={{ background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 12, padding: 14, marginBottom: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".5px" }}>Trace a manager's team</span>
+              <select value={traceManagerId} onChange={e => setTraceManagerId(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "8px 12px", background: "var(--card-2)", fontSize: 13, minWidth: 180 }}>
+                <option value="">— select manager —</option>
+                {managersWithReports.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+              {traceManagerId && <button className="ghost" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setTraceManagerId("")}>Clear</button>}
+            </div>
+
+            {traceStats && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+                  <span style={{ background: "var(--sky-bg)", color: "var(--sky-ink)", border: "1px solid var(--sky)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>{traceStats.totalAssigned} total given to {traceStats.managerName}</span>
+                  <span style={{ background: "var(--sage-bg)", color: "var(--sage-ink)", border: "1px solid var(--sage)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>✓ {traceStats.completed} completed</span>
+                  <span style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>⏳ {traceStats.pending} pending</span>
+                  <span style={{ background: "var(--lav-bg)", color: "var(--lav-ink)", border: "1px solid var(--lav)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>↳ {traceStats.pushedTotal} pushed to team</span>
+                  <span style={{ background: "var(--card-2)", color: "var(--muted)", border: "1px solid var(--line2)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>◦ {traceStats.keptByManager} kept personally</span>
+                </div>
+                {traceStats.reports.length === 0 ? (
+                  <div style={{ fontSize: 12.5, color: "var(--faint)" }}>{traceStats.managerName} has no one reporting to them yet.</div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {traceStats.reports.map(r => (
+                      <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "var(--card-2)", border: "1px solid var(--line)", borderRadius: 9 }}>
+                        <b style={{ fontSize: 13, minWidth: 110 }}>{r.name}</b>
+                        <span style={{ fontSize: 12, color: "var(--muted)" }}>{r.assigned} assigned</span>
+                        <span style={{ fontSize: 12, color: "var(--sage-ink)", fontWeight: 700 }}>✓ {r.completed}</span>
+                        <span style={{ fontSize: 12, color: "var(--peach-ink)", fontWeight: 700 }}>⏳ {r.pending}</span>
+                        <div style={{ flex: 1, height: 6, borderRadius: 4, background: "var(--line2)", overflow: "hidden", maxWidth: 160 }}>
+                          <div style={{ width: `${r.assigned ? (r.completed / r.assigned) * 100 : 0}%`, height: "100%", background: "var(--sage)" }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {!isMasterOrAdmin && hasAssignAccess && traceStats && (
+          <div style={{ background: "var(--card)", border: "1px solid var(--sky)", borderRadius: 12, padding: 14, marginBottom: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--sky-ink)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 12 }}>
+              Your team's work
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+              <span style={{ background: "var(--sky-bg)", color: "var(--sky-ink)", border: "1px solid var(--sky)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>{traceStats.totalAssigned} total assigned to you</span>
+              <span style={{ background: "var(--sage-bg)", color: "var(--sage-ink)", border: "1px solid var(--sage)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>✓ {traceStats.completed} completed</span>
+              <span style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>⏳ {traceStats.pending} pending</span>
+              <span style={{ background: "var(--lav-bg)", color: "var(--lav-ink)", border: "1px solid var(--lav)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>↳ {traceStats.pushedTotal} pushed to your team</span>
+              <span style={{ background: "var(--card-2)", color: "var(--muted)", border: "1px solid var(--line2)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>◦ {traceStats.keptByManager} kept personally</span>
+            </div>
+            {traceStats.reports.length === 0 ? (
+              <div style={{ fontSize: 12.5, color: "var(--faint)" }}>You have no one reporting to you yet — everything above is your own work.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {traceStats.reports.map(r => (
+                  <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "var(--card-2)", border: "1px solid var(--line)", borderRadius: 9 }}>
+                    <b style={{ fontSize: 13, minWidth: 110 }}>{r.name}</b>
+                    <span style={{ fontSize: 12, color: "var(--muted)" }}>{r.assigned} assigned</span>
+                    <span style={{ fontSize: 12, color: "var(--sage-ink)", fontWeight: 700 }}>✓ {r.completed}</span>
+                    <span style={{ fontSize: 12, color: "var(--peach-ink)", fontWeight: 700 }}>⏳ {r.pending}</span>
+                    <div style={{ flex: 1, height: 6, borderRadius: 4, background: "var(--line2)", overflow: "hidden", maxWidth: 160 }}>
+                      <div style={{ width: `${r.assigned ? (r.completed / r.assigned) * 100 : 0}%`, height: "100%", background: "var(--sage)" }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <button onClick={() => setShowFilters(s => !s)} style={{
+          display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 14,
+          padding: "9px 16px", borderRadius: 10, border: "1px solid var(--line2)",
+          background: showFilters ? "var(--ink)" : "var(--card)",
+          color: showFilters ? "#fff" : "var(--ink)", fontWeight: 600, fontSize: 13, cursor: "pointer"
+        }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h16M7 12h10M10 18h4" /></svg>
+          Filters
+          {(assignTab !== "notassigned" || filterMember || fSetNo) && (
+            <span style={{ background: "var(--rose)", color: "#fff", borderRadius: 999, fontSize: 10.5, fontWeight: 700, padding: "1px 7px" }}>
+              {[assignTab !== "notassigned", !!filterMember, !!fSetNo].filter(Boolean).length}
+            </span>
+          )}
+          <span style={{ fontSize: 11, opacity: 0.7 }}>{showFilters ? "▲" : "▼"}</span>
+        </button>
+        {hasAssignAccess && showFilters && (
           <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
             {[
               ["notassigned", "Not Assigned"],
@@ -3365,7 +3669,9 @@ const recentActivityScoped = useMemo(() => {
               let count;
               if (k === "notassigned") count = products.filter(p => !skuAssignedTo[p.sku.trim().toLowerCase()]).length;
               else if (k === "assigned") {
-                  if (filterMember) {
+                  if (filterMember === myMemberId) {
+                    count = myOwnStats.assigned;
+                  } else if (filterMember) {
                     const ms = memberStats.find(m => m.id === filterMember);
                     count = ms ? ms.assigned : 0;
                   } else {
@@ -3451,7 +3757,7 @@ const recentActivityScoped = useMemo(() => {
             })}
           </div>
         )}
-        {hasAssignAccess && memberStats.length > 0 && (
+        {hasAssignAccess && showFilters && memberStats.length > 0 && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
             <select
               value={filterMember}
@@ -3492,24 +3798,119 @@ const recentActivityScoped = useMemo(() => {
             })()}
           </div>
         )}
-        <div className="toolbar">
-        {setNoOptions.length > 0 && (
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-            <select
-              value={fSetNo}
-              onChange={e => { setFSetNo(e.target.value); setPage(1); }}
-              style={{ border: "1px solid var(--line2)", borderRadius: 10, padding: "9px 12px", background: "var(--card)", fontSize: 13, fontWeight: 500, minWidth: 180 }}
-            >
-              <option value="">— all set no. —</option>
-              {setNoOptions.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-            {fSetNo && (
-              <button className="ghost" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => { setFSetNo(""); setPage(1); }}>
-                Clear
-              </button>
-            )}
+        {showFilters && (
+          <div style={{ background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 12, padding: 14, marginBottom: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+
+            {/* Card status quick chips */}
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 6 }}>Card status</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {[
+                  ["", "All"],
+                  ["issue", "⚠ With issues"],
+                  ["prog", "… In production"],
+                  ["none", "○ Not started"],
+                ].map(([k, label]) => (
+                  <button key={k || "all"} onClick={() => { setFStatus(k); setPage(1); }} style={{
+                    padding: "7px 14px", borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                    background: fStatus === k ? "var(--ink)" : "var(--card-2)",
+                    color: fStatus === k ? "#fff" : "var(--ink)",
+                    border: `1px solid ${fStatus === k ? "var(--ink)" : "var(--line2)"}`,
+                  }}>{label}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* Stage-specific filter — "how many cards are Photography: Pending" etc. */}
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 6 }}>Filter by a specific stage</div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <select value={fStage} onChange={e => { setFStage(e.target.value); if (!e.target.value) setFStageStatus(""); setPage(1); }}
+                  style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "9px 11px", background: "var(--card)", fontSize: 13, minWidth: 190 }}>
+                  <option value="">— pick a stage —</option>
+                  {stageFilterOptions.map(s => <option key={s.k} value={s.k}>{s.n}</option>)}
+                </select>
+                <select value={fStageStatus} onChange={e => { setFStageStatus(e.target.value); setPage(1); }} disabled={!fStage}
+                  style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "9px 11px", background: fStage ? "var(--card)" : "var(--card-2)", fontSize: 13, minWidth: 160, opacity: fStage ? 1 : 0.5 }}>
+                  <option value="">— any status —</option>
+                  {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                {fStage && (
+                  <span style={{ fontSize: 11.5, color: "var(--muted)" }}>
+                    {STATUSES.map(s => {
+                      const n = sourceProducts.filter(p => p.stages?.[fStage]?.status === s).length;
+                      return n > 0 ? `${s}: ${n}` : null;
+                    }).filter(Boolean).join(" · ")}
+                  </span>
+                )}
+                {fStage && (
+                  <button className="ghost" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => { setFStage(""); setFStageStatus(""); setPage(1); }}>
+                    ✕ Clear stage filter
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Vendor / Set No. / QC verdict / Stalled / Sort */}
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+              <label className="fld" style={{ minWidth: 170 }}>Vendor
+                <select value={fVendor} onChange={e => { setFVendor(e.target.value); setPage(1); }}>
+                  <option value="">— all vendors —</option>
+                  {vendorOptionsList.map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </label>
+
+              <label className="fld" style={{ minWidth: 170 }}>Set No.
+                <select value={fSetNo} onChange={e => { setFSetNo(e.target.value); setPage(1); }}>
+                  <option value="">— all set no. —</option>
+                  {setNoOptions.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </label>
+
+              <label className="fld" style={{ minWidth: 170 }}>QC verdict
+                <select value={fQcVerdict} onChange={e => { setFQcVerdict(e.target.value); setPage(1); }}>
+                  <option value="">— any verdict —</option>
+                  <option value="pending">Pending review</option>
+                  <option value="approved">Approved</option>
+                  <option value="issues">Issues found</option>
+                </select>
+              </label>
+
+              <label className="fld" style={{ minWidth: 170 }}>Stalled for
+                <select value={fStalledDays} onChange={e => { setFStalledDays(e.target.value); setPage(1); }}>
+                  <option value="">— any time —</option>
+                  <option value="3">3+ days no update</option>
+                  <option value="7">7+ days no update</option>
+                  <option value="14">14+ days no update</option>
+                  <option value="30">30+ days no update</option>
+                </select>
+              </label>
+
+              <label className="fld" style={{ minWidth: 170 }}>Sort by
+                <select value={sortBy} onChange={e => setSortBy(e.target.value)}>
+                  <option value="recent">Recently updated</option>
+                  <option value="oldest">Oldest updated</option>
+                  <option value="pct_high">% complete: high → low</option>
+                  <option value="pct_low">% complete: low → high</option>
+                  <option value="sku">SKU (A–Z)</option>
+                </select>
+              </label>
+
+              <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, fontWeight: 600, color: "var(--rose-ink)", cursor: "pointer", paddingBottom: 9 }}>
+                <input type="checkbox" checked={fHasIssue} onChange={e => { setFHasIssue(e.target.checked); setPage(1); }}
+                  style={{ width: 14, height: 14, accentColor: "var(--rose-ink)" }} />
+                Only cards with a stage issue
+              </label>
+
+              {activeFilterCount > 0 && (
+                <button className="ghost" style={{ padding: "9px 14px", fontSize: 12.5 }} onClick={clearAllFilters}>
+                  ✕ Clear all filters
+                </button>
+              )}
+            </div>
           </div>
         )}
+        <div className="toolbar">
           <div className="search" style={{ position: "relative" }}>
             {I.search({})}
             <input placeholder="Search SKU, product or vendor…" value={q}
