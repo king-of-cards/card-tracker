@@ -3208,6 +3208,10 @@ const recentActivityScoped = useMemo(() => {
     const [fSetNo, setFSetNo] = useState("");
     const [showFilters, setShowFilters] = useState(false);
     const [fStatus, setFStatus] = useState("");
+    const [fAssignee, setFAssignee] = useState("");
+    const [fEventType, setFEventType] = useState(""); 
+    const [fEventFrom, setFEventFrom] = useState("");
+    const [fEventTo, setFEventTo] = useState("");
     const [fVendor, setFVendor] = useState("");
     const [fStage, setFStage] = useState("");
     const [fStageStatus, setFStageStatus] = useState("");
@@ -3216,10 +3220,11 @@ const recentActivityScoped = useMemo(() => {
     const [fQcVerdict, setFQcVerdict] = useState("");
     const [sortBy, setSortBy] = useState("recent");
     const filterableStages = STAGES.filter(s => s.k !== "finalqc");
-    const activeFilterCount = [fStatus, fVendor, fStage && fStageStatus, fHasIssue, fStalledDays, fQcVerdict, fSetNo, filterMember].filter(Boolean).length;
+    const activeFilterCount = [fStatus, fVendor, fStage && fStageStatus, fHasIssue, fStalledDays, fQcVerdict, fSetNo, filterMember, fAssignee, fEventType && (fEventFrom || fEventTo)].filter(Boolean).length;
     const clearAllFilters = () => {
       setFStatus(""); setFVendor(""); setFStage(""); setFStageStatus(""); setFHasIssue(false);
-      setFStalledDays(""); setFQcVerdict(""); setFSetNo(""); setFilterMember("");
+      setFStalledDays(""); setFQcVerdict(""); setFSetNo(""); setFilterMember(""); setFAssignee("");
+      setFEventType(""); setFEventFrom(""); setFEventTo("");
       setSortBy("recent"); setPage(1);
     };
     // const [showFilters, setShowFilters] = useState(false);
@@ -3439,12 +3444,29 @@ const recentActivityScoped = useMemo(() => {
 
     const setNoOptions = useMemo(() => [...new Set(products.map(p => p.set_no).filter(Boolean))].sort(), [products]);
     const vendorOptionsList = useMemo(() => [...new Set(products.map(p => (p.vendor || "").trim()).filter(Boolean))].sort(), [products]);
+    // sku -> [{ stage, assignedAt }] so "assigned on date X" can be checked
+    // per-stage, independent of skuAssignedTo (which only tracks who, not when).
+    const skuAssignDates = useMemo(() => {
+      const map = {};
+      (assignments || []).filter(a => a.division === division).forEach(a => {
+        const key = a.sku.trim().toLowerCase();
+        (map[key] ||= []).push({ stage: a.stage, assignedAt: a.assignedAt });
+      });
+      return map;
+    }, [assignments, division]);
     // Only stages this user is actually allowed to see/work on — a photography-only
     // member shouldn't be able to filter by "Backend Listing" they can't touch.
     const stageFilterOptions = useMemo(() => {
       const base = STAGES.filter(s => s.k !== "finalqc");
       return allowedStages ? base.filter(s => allowedStages.includes(s.k)) : base;
     }, [allowedStages]);
+    // Every distinct person shown in the blue "→ Name" chips, so the dropdown
+    // always matches exactly who's visible on screen — no separate data source.
+    const assigneeOptions = useMemo(() => {
+      const names = new Set();
+      Object.values(skuAssignedTo).forEach(rows => rows.forEach(r => { if (r.memberName && r.memberName !== "—") names.add(r.memberName); }));
+      return [...names].sort();
+    }, [skuAssignedTo]);
     const sourceProducts = (hasAssignAccess && (assignTab === "assigned" || assignTab === "completed" || assignTab === "pending"))
       ? (allDivProducts || products)
       : products;
@@ -3454,6 +3476,52 @@ const recentActivityScoped = useMemo(() => {
       const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase();
       if (!t.includes(q.toLowerCase())) return false; 
       if (fStatus && productState(p) !== fStatus) return false;
+      if (fEventType && (fEventFrom || fEventTo)) {
+        const inRange = (iso) => {
+          if (!iso) return false;
+          const d = new Date(iso);
+          if (isNaN(d.getTime())) return false;
+          if (fEventFrom && d < new Date(fEventFrom + "T00:00:00")) return false;
+          if (fEventTo && d > new Date(fEventTo + "T23:59:59.999")) return false;
+          return true;
+        };
+        // Which stages to check: the one picked in "Filter by a specific stage"
+        // if set, otherwise every stage the user can see — so "completed
+        // between these dates" without a stage picked means "any stage of mine
+        // was completed in that window".
+        const stagesToCheck = fStage ? [fStage] : stageFilterOptions.map(s => s.k);
+
+        if (fEventType === "assigned") {
+          const rows = skuAssignDates[p.sku.trim().toLowerCase()] || [];
+          const match = rows.some(r => (!fStage || r.stage === fStage || r.stage === "all") && inRange(r.assignedAt));
+          if (!match) return false;
+        } else {
+          const statusMap = { inprogress: "In Progress", completed: "Completed", issue: "Issue" };
+          const targetStatus = statusMap[fEventType];
+          const match = stagesToCheck.some(stageKey => {
+            const st = p.stages?.[stageKey];
+            return st && st.status === targetStatus && inRange(st.at);
+          });
+          if (!match) return false;
+        }
+      }
+      if (fAssignee) {
+        const rows = skuAssignedTo[p.sku.trim().toLowerCase()] || [];
+        const isSelfSelected = auth?.name && fAssignee === auth.name;
+        if (isSelfSelected) {
+          // Selecting your OWN name means "strictly mine" — cards you're still
+          // personally holding, not ones you've since pushed to a teammate.
+          // A pushed card carries both your original chip AND the teammate's
+          // chip, so require every row on this SKU to be yours with none else.
+          const keptStrictly = rows.length > 0 && rows.every(r => r.memberName === fAssignee);
+          if (!keptStrictly) return false;
+        } else {
+          // Selecting a teammate's name behaves as before — show any card
+          // that carries their chip, even if your own chip is also present
+          // for context (that's expected and correct).
+          if (!rows.some(r => r.memberName === fAssignee)) return false;
+        }
+      }
       if (fSetNo && (p.set_no || "").trim().toLowerCase() !== fSetNo.trim().toLowerCase()) return false;
       if (fVendor && (p.vendor || "").trim() !== fVendor) return false;
       if (fStage && fStageStatus) {
@@ -3851,6 +3919,41 @@ const recentActivityScoped = useMemo(() => {
               </div>
             </div>
 
+            {/* Date-based activity filter — when a card was assigned / moved
+                to a status / flagged, so managers can pull e.g. "everything
+                completed this week" or "issues raised in the last 3 days". */}
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 6 }}>Filter by when it happened</div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <select value={fEventType} onChange={e => { setFEventType(e.target.value); setPage(1); }}
+                  style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "9px 11px", background: "var(--card)", fontSize: 13, minWidth: 190 }}>
+                  <option value="">— pick an event —</option>
+                  <option value="assigned">Assigned</option>
+                  <option value="inprogress">Moved to In Progress</option>
+                  <option value="completed">Completed</option>
+                  <option value="issue">Issue raised</option>
+                </select>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--muted)" }}>
+                  From
+                  <input type="date" value={fEventFrom} onChange={e => { setFEventFrom(e.target.value); setPage(1); }} disabled={!fEventType}
+                    style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "7px 9px", background: fEventType ? "var(--card)" : "var(--card-2)", fontSize: 13 }} />
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--muted)" }}>
+                  To
+                  <input type="date" value={fEventTo} onChange={e => { setFEventTo(e.target.value); setPage(1); }} disabled={!fEventType}
+                    style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "7px 9px", background: fEventType ? "var(--card)" : "var(--card-2)", fontSize: 13 }} />
+                </label>
+                {fEventType && !fStage && (
+                  <span style={{ fontSize: 11, color: "var(--faint)" }}>across any of your visible stages{fEventType === "assigned" ? " (or pick a stage above to narrow it)" : ""}</span>
+                )}
+                {fEventType && (fEventFrom || fEventTo) && (
+                  <button className="ghost" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => { setFEventType(""); setFEventFrom(""); setFEventTo(""); setPage(1); }}>
+                    ✕ Clear date filter
+                  </button>
+                )}
+              </div>
+            </div>
+
             {/* Vendor / Set No. / QC verdict / Stalled / Sort */}
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
               <label className="fld" style={{ minWidth: 170 }}>Vendor
@@ -3866,6 +3969,15 @@ const recentActivityScoped = useMemo(() => {
                   {setNoOptions.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </label>
+
+              {assigneeOptions.length > 0 && (
+                <label className="fld" style={{ minWidth: 170 }}>Assigned to
+                  <select value={fAssignee} onChange={e => { setFAssignee(e.target.value); setPage(1); }}>
+                    <option value="">— everyone —</option>
+                    {assigneeOptions.map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+              )}
 
               <label className="fld" style={{ minWidth: 170 }}>QC verdict
                 <select value={fQcVerdict} onChange={e => { setFQcVerdict(e.target.value); setPage(1); }}>
