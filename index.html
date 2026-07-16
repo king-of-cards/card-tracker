@@ -1702,6 +1702,12 @@
     const [teamMembers, setTeamMembers] = useState([]);
     const [assignments, setAssignments] = useState([]);
     const [qcAuditLog, setQcAuditLog] = useState([]);
+    const [qcAuditFilter, setQcAuditFilter] = useState(null); // deep-link target for QC Audit tab
+
+    const goToQcAuditIssues = () => {
+      setQcAuditFilter("issues");
+      setTab("qcaudit");
+    };
     const [navOpen, setNavOpen] = useState(false);
     const [auth, setAuth] = useState(() => {
       try {
@@ -2203,82 +2209,22 @@
             </div>
           </header>
           <div className="content">
-            {tab === "overview" && <Overview division={division} products={divProducts} allDivProducts={products.filter(p => p.division === division)} issues={openIssues} audit={audit.filter(a => a.division === division)} go={setTab} vendors={vendors[division] || []} allowedStages={allowedStages} auth={auth} teamMembers={teamMembers} assignments={assignments} qcAuditLog={qcAuditLog} />}
+            {tab === "overview" && <Overview division={division} products={divProducts} allDivProducts={products.filter(p => p.division === division)} issues={openIssues} audit={audit.filter(a => a.division === division)} go={setTab} goIssues={goToQcAuditIssues} vendors={vendors[division] || []} allowedStages={allowedStages} auth={auth} teamMembers={teamMembers} assignments={assignments} qcAuditLog={qcAuditLog} />}
             {tab === "products" && <Products division={division} products={divProducts} allDivProducts={products.filter(p => p.division === division)} vendors={vendors[division] || []} onUpsert={upsertProduct} onStage={patchStage} onStageBulk={patchStageBulk} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} allowedStages={allowedStages} operator={operator} auth={auth} assignments={assignments} teamMembers={teamMembers} />}
             {tab === "dispatch" && <Dispatch products={divProducts} onStore={patchStore} onStage={patchStage} operator={operator} />}
             {tab === "bulk" && <Bulk division={division} products={products} divProducts={divProducts} bulkProducts={bulkProducts} bulkStores={bulkStores} />}
             {tab === "audit" && <AuditLog audit={audit.filter(a => a.division === division)} products={products} onStage={patchStage} />}
             {tab === "assign" && (canAssign(auth) || (auth.stages || "").split(",").map(s => s.trim()).includes("assign")) && <AssignWork division={division} products={divProducts} allProducts={products} teamMembers={teamMembers} assignments={assignments} onSaveTeam={saveTeamMembers} onSaveAssignments={saveAssignments} auth={auth} vendors={vendors[division] || []} />}
-            {tab === "qcaudit" && <QCAuditTab division={division} products={divProducts} qcAuditLog={qcAuditLog} onSubmit={submitQCAudit} operator={operator} auth={auth} />}
+            {tab === "qcaudit" && <QCAuditTab division={division} products={divProducts} qcAuditLog={qcAuditLog} onSubmit={submitQCAudit} operator={operator} auth={auth} initialFilter={qcAuditFilter} onFilterConsumed={() => setQcAuditFilter(null)} />}
             {tab === "process" && <Process division={division} products={products} teamMembers={teamMembers} assignments={assignments} audit={audit} />}
           </div>
         </main>
       </div>
     );
   }
-
-
-
-  function ActiveWork({ products, allowedStages, onJump }) {
-    const rows = useMemo(() => {
-      const visible = allowedStages ? STAGES.filter(s => allowedStages.includes(s.k)) : STAGES;
-      const list = [];
-      products.forEach(p => {
-        visible.forEach(s => {
-          if (s.k === "finalqc") return;
-          const st = p.stages[s.k];
-          if (st.status === "In Progress") {
-            list.push({ p, stageKey: s.k, stageName: s.n, person: st.person || "Unassigned", comments: st.comments, at: st.at });
-          }
-        });
-      });
-      return list.sort((a, b) => new Date(b.at) - new Date(a.at));
-    }, [products, allowedStages]);
-
-    const byPerson = useMemo(() => {
-      const m = {};
-      rows.forEach(r => { (m[r.person] ||= []).push(r); });
-      return Object.entries(m).sort((a, b) => b[1].length - a[1].length);
-    }, [rows]);
-
-    if (rows.length === 0) return null;
-
-    return (
-      <div className="sec">
-        <div className="sec-h">
-          <h3>Currently in progress</h3>
-          <span className="hint">{rows.length} active task{rows.length !== 1 ? "s" : ""} · {byPerson.length} people working</span>
-        </div>
-        <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}>
-          {byPerson.map(([person, tasks]) => (
-            <div className="card pad" key={person}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                <div style={{ width: 30, height: 30, borderRadius: 8, background: "var(--sky-bg)", color: "var(--sky-ink)", display: "grid", placeItems: "center", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
-                  {person[0]?.toUpperCase() || "?"}
-                </div>
-                <b style={{ fontSize: 13 }}>{person}</b>
-                <span className="tag" style={{ marginLeft: "auto" }}>{tasks.length} task{tasks.length !== 1 ? "s" : ""}</span>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {tasks.map((t, i) => (
-                  <div key={i} onClick={() => onJump && onJump(t.p.id)}
-                    style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, padding: "6px 8px", borderRadius: 8, background: "var(--sky-bg)", cursor: onJump ? "pointer" : "default" }}>
-                    <span className="psku" style={{ flexShrink: 0 }}>{t.p.sku}</span>
-                    <span style={{ fontWeight: 600, color: "var(--sky-ink)" }}>{t.stageName}</span>
-                    <span className="tag" style={{ marginLeft: "auto", flexShrink: 0 }}>{fmt(t.at)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
   
   /* ---------------- OVERVIEW ---------------- */
-  function Overview({ division, products, allDivProducts, issues, audit, go, vendors = [], allowedStages = null, auth, teamMembers = [], assignments = [], qcAuditLog = [] }) {
+  function Overview({ division, products, allDivProducts, issues, audit, go, goIssues, vendors = [], allowedStages = null, auth, teamMembers = [], assignments = [], qcAuditLog = [] }) {
     const [fVendor, setFVendor] = useState("");
     const [fSetNo, setFSetNo] = useState("");
     const [fMember, setFMember] = useState("");
@@ -2735,13 +2681,19 @@ const recentActivityScoped = useMemo(() => {
        
         <div className="grid kpis">
           {kpis.map((k, i) => (
-            <div className="card kpi" key={i}>
+            <div
+              className="card kpi"
+              key={i}
+              onClick={() => { if (k.scope === "issues") goIssues && goIssues(); }}
+              style={{ cursor: k.scope === "issues" ? "pointer" : "default" }}
+            >
+                        
               <div className="kico">{k.ic({})}</div>
               <div className="lab">{k.lab}</div>
               <div className="val" style={{ color: k.color || "var(--ink)" }}>{k.val}</div>
               <div className="sub">{k.sub}</div>
               <button
-                onClick={() => downloadKpiExcel(k.scope, k.lab.replace(/\s+/g, "_"))}
+                onClick={(e) => { e.stopPropagation(); downloadKpiExcel(k.scope, k.lab.replace(/\s+/g, "_")); }}
                 disabled={exporting === k.scope}
                 title={`Download ${k.lab} as Excel`}
                 style={{
@@ -2857,8 +2809,6 @@ const recentActivityScoped = useMemo(() => {
                 ))}
               </div>
             )}
-
-        <ActiveWork products={products} allowedStages={allowedStages} />
 
         <div className="sec ov-grid">
           <div className="card pad">
@@ -5987,9 +5937,16 @@ const recentActivityScoped = useMemo(() => {
     );
   }
 
-  function QCAuditTab({ division, products, qcAuditLog, onSubmit, operator, auth }) {
+  function QCAuditTab({ division, products, qcAuditLog, onSubmit, operator, auth, initialFilter = null, onFilterConsumed }) {
     const [q, setQ] = useState("");
-    const [filter, setFilter] = useState("pending");
+    const [filter, setFilter] = useState(initialFilter || "pending");
+
+    useEffect(() => {
+      if (initialFilter) {
+        setFilter(initialFilter);
+        onFilterConsumed && onFilterConsumed();
+      }
+    }, [initialFilter]);
     const [fSetNo, setFSetNo] = useState(""); // set-wise filter (master/admin only)
     const isMasterOrAdmin = auth?.role === "master" || auth?.role === "admin";
     const [expanded, setExpanded] = useState({});
