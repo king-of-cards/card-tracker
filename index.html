@@ -4400,7 +4400,7 @@ const recentActivityScoped = useMemo(() => {
           <span className="stnum" style={{ flex: "0 0 22px" }}>{idx}</span>
           <span style={{ fontWeight: 600, fontSize: 13, width: 150, flexShrink: 0 }}>{stage.n}</span>
           <select value={status} onChange={e => setStatus(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 9px", background: "var(--bg)", fontSize: 12, width: 130, flexShrink: 0 }}>
-            {STATUSES.map(s => <option key={s}>{s}</option>)}
+            {STATUSES.filter(s => s !== "Issue").map(s => <option key={s}>{s}</option>)}
           </select>
           <span className="tag" style={{ width: 110, flexShrink: 0, fontSize: 12, fontWeight: 600, color: "var(--sage-ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={effectivePerson || "no name set"}>
             {effectivePerson || "—"}
