@@ -1701,9 +1701,14 @@
     const [vendors, setVendors] = useState(DEFAULT_VENDORS);
     const [teamMembers, setTeamMembers] = useState([]);
     const [assignments, setAssignments] = useState([]);
-    const [qcAuditLog, setQcAuditLog] = useState([]);
-    const [qcAuditFilter, setQcAuditFilter] = useState(null); // deep-link target for QC Audit tab
+    const [qcAuditLog, setQcAuditLog] = useState([]); // deep-link target for QC Audit tab
+    const [productsFilter, setProductsFilter] = useState(null);
 
+    const goToProductsFilter = (filter) => {
+      setProductsFilter(filter);
+      setTab("products");
+    };
+    const [qcAuditFilter, setQcAuditFilter] = useState(null); // deep-link target for QC Audit tab
     const goToQcAuditIssues = () => {
       setQcAuditFilter("issues");
       setTab("qcaudit");
@@ -2209,8 +2214,8 @@
             </div>
           </header>
           <div className="content">
-            {tab === "overview" && <Overview division={division} products={divProducts} allDivProducts={products.filter(p => p.division === division)} issues={openIssues} audit={audit.filter(a => a.division === division)} go={setTab} goIssues={goToQcAuditIssues} vendors={vendors[division] || []} allowedStages={allowedStages} auth={auth} teamMembers={teamMembers} assignments={assignments} qcAuditLog={qcAuditLog} />}
-            {tab === "products" && <Products division={division} products={divProducts} allDivProducts={products.filter(p => p.division === division)} vendors={vendors[division] || []} onUpsert={upsertProduct} onStage={patchStage} onStageBulk={patchStageBulk} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} allowedStages={allowedStages} operator={operator} auth={auth} assignments={assignments} teamMembers={teamMembers} />}
+            {tab === "overview" && <Overview division={division} products={divProducts} allDivProducts={products.filter(p => p.division === division)} issues={openIssues} audit={audit.filter(a => a.division === division)} go={setTab} goIssues={goToQcAuditIssues} goProducts={goToProductsFilter} vendors={vendors[division] || []} allowedStages={allowedStages} auth={auth} teamMembers={teamMembers} assignments={assignments} qcAuditLog={qcAuditLog} />}
+            {tab === "products" && <Products division={division} products={divProducts} allDivProducts={products.filter(p => p.division === division)} vendors={vendors[division] || []} onUpsert={upsertProduct} onStage={patchStage} onStageBulk={patchStageBulk} onQC={patchQC} onRemove={removeProduct} addVendor={addVendor} allowedStages={allowedStages} operator={operator} auth={auth} assignments={assignments} teamMembers={teamMembers} initialFilter={productsFilter} onFilterConsumed={() => setProductsFilter(null)} />}
             {tab === "dispatch" && <Dispatch products={divProducts} onStore={patchStore} onStage={patchStage} operator={operator} />}
             {tab === "bulk" && <Bulk division={division} products={products} divProducts={divProducts} bulkProducts={bulkProducts} bulkStores={bulkStores} />}
             {tab === "audit" && <AuditLog audit={audit.filter(a => a.division === division)} products={products} onStage={patchStage} />}
@@ -2224,7 +2229,7 @@
   }
   
   /* ---------------- OVERVIEW ---------------- */
-  function Overview({ division, products, allDivProducts, issues, audit, go, goIssues, vendors = [], allowedStages = null, auth, teamMembers = [], assignments = [], qcAuditLog = [] }) {
+  function Overview({ division, products, allDivProducts, issues, audit, go, goIssues, goProducts, vendors = [], allowedStages = null, auth, teamMembers = [], assignments = [], qcAuditLog = [] }) {
     const [fVendor, setFVendor] = useState("");
     const [fSetNo, setFSetNo] = useState("");
     const [fMember, setFMember] = useState("");
@@ -2891,8 +2896,22 @@ const recentActivityScoped = useMemo(() => {
             <div
               className="card kpi"
               key={i}
-              onClick={() => { if (k.scope === "issues") goIssues && goIssues(); }}
-              style={{ cursor: k.scope === "issues" ? "pointer" : "default" }}
+              onClick={() => {
+                if (k.scope === "all") {
+                  goProducts && goProducts({ assignTab: "assigned" });
+                } else if (k.scope === "pending") {
+                  goProducts && goProducts({ assignTab: "pending" });
+                } else if (k.scope === "completed") {
+                  goProducts && goProducts({ assignTab: "completed" });
+                } else if (k.scope === "issues") {
+                  if (isMasterOrAdminView) {
+                    goIssues && goIssues();
+                  } else {
+                    goProducts && goProducts({ assignTab: "assigned", fQcVerdict: "issues" });
+                  }
+                }
+              }}
+              style={{ cursor: "pointer" }}
             >
                         
               <div className="kico">{k.ic({})}</div>
@@ -3238,7 +3257,7 @@ const recentActivityScoped = useMemo(() => {
   // }
 
 
-  function Products({ division, products, vendors, onUpsert, onStage, onStageBulk, onQC, onRemove, addVendor, allowedStages, operator, auth, assignments, teamMembers, allDivProducts }) {
+  function Products({ division, products, vendors, onUpsert, onStage, onStageBulk, onQC, onRemove, addVendor, allowedStages, operator, auth, assignments, teamMembers, allDivProducts, initialFilter, onFilterConsumed }) {
 
     // Build a map: sku → [stageKeys] that THIS member was specifically assigned
     const myAssignedStagesPerSku = useMemo(() => {
@@ -3307,6 +3326,15 @@ const recentActivityScoped = useMemo(() => {
     const [fStalledDays, setFStalledDays] = useState("");
     const [fQcVerdict, setFQcVerdict] = useState("");
     const [sortBy, setSortBy] = useState("recent");
+ 
+    useEffect(() => {
+    if (!initialFilter) return;
+    if (initialFilter.assignTab) { setAssignTab(initialFilter.assignTab); setShowFilters(true); }
+    setFHasIssue(!!initialFilter.fHasIssue);
+    setFQcVerdict(initialFilter.fQcVerdict || "");
+    setPage(1);
+    onFilterConsumed && onFilterConsumed();
+  }, [initialFilter]);
     const filterableStages = STAGES.filter(s => s.k !== "finalqc");
     const activeFilterCount = [fStatus, fVendor, fStage && fStageStatus, fHasIssue, fStalledDays, fQcVerdict, fSetNo, filterMember, fAssignee, fEventType && (fEventFrom || fEventTo)].filter(Boolean).length;
     const clearAllFilters = () => {
@@ -3684,11 +3712,30 @@ const recentActivityScoped = useMemo(() => {
             return p.stages?.[stageKey]?.status === "Completed";
           });
           // QC gate only applies to master's overall (no-member-filter) view.
-          const useQcGate = isMasterOrAdmin && !filterMember;
+        const useQcGate = isMasterOrAdmin && !filterMember;
           const isFullyApproved = stagesDone && (!useQcGate || p.verdict === "Approved");
 
           if (assignTab === "completed" && !isFullyApproved) return false;
           if (assignTab === "pending" && isFullyApproved) return false;
+        }
+      } else if (myMemberId) {
+        const cardAssignments = assignments.filter(a =>
+          a.division === division &&
+          a.memberId === myMemberId &&
+          a.sku.trim().toLowerCase() === p.sku.trim().toLowerCase()
+        );
+        const isAssigned = cardAssignments.length > 0;
+        if (assignTab === "notassigned" && isAssigned) return false;
+        if (assignTab === "assigned" && !isAssigned) return false;
+        if (assignTab === "completed" || assignTab === "pending") {
+          if (cardAssignments.length === 0) return false;
+          const specificStages = cardAssignments.filter(a => a.stage && a.stage !== "all");
+          const stagesToCheck = specificStages.length > 0 ? specificStages : cardAssignments;
+          const stagesDone = stagesToCheck.every(a =>
+            (!a.stage || a.stage === "all") ? productState(p) === "done" : p.stages?.[a.stage]?.status === "Completed"
+          );
+          if (assignTab === "completed" && !stagesDone) return false;
+          if (assignTab === "pending" && stagesDone) return false;
         }
       }
        if (filterMember && assignTab !== "completed" && assignTab !== "pending") {
@@ -3820,17 +3867,53 @@ const recentActivityScoped = useMemo(() => {
           )}
           <span style={{ fontSize: 11, opacity: 0.7 }}>{showFilters ? "▲" : "▼"}</span>
         </button>
-        {hasAssignAccess && showFilters && (
-          <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-            {[
-              ["notassigned", "Not Assigned"],
-              ["assigned", "Assigned"],
-              ["completed", "Completed"],
-              ["pending", "Pending"],
-            ].map(([k, n]) => {
-              
-              const assignedProducts = (allDivProducts || products).filter(p => !!skuAssignedTo[p.sku.trim().toLowerCase()]);
+    
+          {showFilters && (
+                <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+                  {[
+                    ["notassigned", "Not Assigned"],
+                    ["assigned", "Assigned"],
+                    ["completed", "Completed"],
+                    ["pending", "Pending"],
+                  ].map(([k, n]) => {
+
+              // const assignedProducts = (allDivProducts || products).filter(p => !!skuAssignedTo[p.sku.trim().toLowerCase()]);
+              // let count;
+              // if (k === "notassigned") count = products.filter(p => !skuAssignedTo[p.sku.trim().toLowerCase()]).length;
+              const myCardAssignments = (sku) => assignments.filter(a =>
+                a.division === division && a.memberId === myMemberId &&
+                a.sku.trim().toLowerCase() === sku.trim().toLowerCase()
+              );
               let count;
+              if (!hasAssignAccess && myMemberId) {
+                if (k === "notassigned") {
+                  count = products.filter(p => myCardAssignments(p.sku).length === 0).length;
+                } else if (k === "assigned") {
+                  count = products.filter(p => myCardAssignments(p.sku).length > 0).length;
+                } else if (k === "completed" || k === "pending") {
+                  count = products.filter(p => {
+                    const rows = myCardAssignments(p.sku);
+                    if (rows.length === 0) return false;
+                    const specificStages = rows.filter(a => a.stage && a.stage !== "all");
+                    const stagesToCheck = specificStages.length > 0 ? specificStages : rows;
+                    const stagesDone = stagesToCheck.every(a =>
+                      (!a.stage || a.stage === "all") ? productState(p) === "done" : p.stages?.[a.stage]?.status === "Completed"
+                    );
+                    return k === "completed" ? stagesDone : !stagesDone;
+                  }).length;
+                }
+                return (
+                  <button key={k} onClick={() => { setAssignTab(k); setPage(1); }} style={{
+                    padding: "8px 16px", borderRadius: 10, border: "1px solid var(--line2)",
+                    background: assignTab === k ? "var(--ink)" : "var(--card)",
+                    color: assignTab === k ? "#fff" : "var(--ink)",
+                    fontWeight: 600, fontSize: 13
+                  }}>
+                    {n} <span style={{ opacity: .7, marginLeft: 4 }}>{count}</span>
+                  </button>
+                );
+              }
+              const assignedProducts = (allDivProducts || products).filter(p => !!skuAssignedTo[p.sku.trim().toLowerCase()]);
               if (k === "notassigned") count = products.filter(p => !skuAssignedTo[p.sku.trim().toLowerCase()]).length;
               else if (k === "assigned") {
                   if (filterMember === myMemberId) {
