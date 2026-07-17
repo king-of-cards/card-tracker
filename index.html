@@ -2240,6 +2240,7 @@
     const [dbStats, setDbStats] = useState(null);
     const [pipelineStats, setPipelineStats] = useState(null);
     const [allMemberStats, setAllMemberStats] = useState([]);
+    const [stageIssueStats, setStageIssueStats] = useState({});
 
     useEffect(() => {
       if (!auth || !myMemberId) return;
@@ -2255,6 +2256,31 @@
         .catch(e => console.error("pipelineStats fetch failed", e));
 
     }, [myMemberId, division, auth]);
+
+    useEffect(() => {
+      if (!auth) return;
+      fetch(`${API}/api/stageIssueStats?division=${encodeURIComponent(division)}`)
+        .then(r => r.json())
+        .then(data => { if (data.ok) setStageIssueStats(data.stages); })
+        .catch(e => console.error("stageIssueStats fetch failed", e));
+    }, [division, auth]);
+
+    const [breakdownStats, setBreakdownStats] = useState({});
+    useEffect(() => {
+      if (!auth) return;
+      const params = new URLSearchParams({ division });
+      const scopedMemberId = fMember || (!isMasterOrAdminView ? myMemberId : "");
+      if (scopedMemberId) params.set("memberId", scopedMemberId);
+      if (fVendor) params.set("vendor", fVendor);
+      if (fSetNo) params.set("setNo", fSetNo);
+
+      fetch(`${API}/api/pipelineBreakdown?${params.toString()}`)
+        .then(r => r.json())
+        .then(data => { if (data.ok) setBreakdownStats(data.stages); })
+        .catch(e => console.error("pipelineBreakdown fetch failed", e));
+    }, [division, myMemberId, isMasterOrAdminView, fVendor, fSetNo, fMember, auth]);
+
+
 
     useEffect(() => {
       if (!auth) return;
@@ -2366,7 +2392,11 @@ const recentActivityScoped = useMemo(() => {
     const WEBSITE_STAGE_KEY = "website";
     const websiteStats = useMemo(() => {
       const pool = isMasterOrAdminView ? (allDivProducts || products) : myFullPool;
-      const completed = pool.filter(p => p.stages[WEBSITE_STAGE_KEY]?.status === "Completed").length;
+      // "Complete" means QC-approved — not just that the Website Listing stage
+      // happens to read Completed. A card can sit with website already done
+      // while still awaiting (re-)approval, e.g. after a flagged stage gets
+      // fixed and the verdict resets to pending review.
+      const completed = pool.filter(p => p.verdict === "Approved").length;
       const pending = pool.length - completed;
       return { completed, pending, total: pool.length };
     }, [isMasterOrAdminView, allDivProducts, products, myFullPool]);
@@ -2447,8 +2477,12 @@ const recentActivityScoped = useMemo(() => {
     // A card counts as complete only when every stage THIS manager was specifically
     // assigned on it is Completed — not the whole pipeline (other teams' stages
     // shouldn't block a manager's own completion count).
-    const isCardCompleteForMe = useCallback((p) => {
-      if (isMasterOrAdminView) return productState(p) === "done";
+     const isCardCompleteForMe = useCallback((p) => {
+      // Master/admin (overall view): "Complete" means QC-approved — stages
+      // done but not yet approved still counts as pending.
+      if (isMasterOrAdminView) return p.verdict === "Approved";
+      // Manager/member own view: "Complete" means THEY finished their
+      // assigned stages — QC approval status doesn't gate this level.
       const myStagesOnCard = assignments.filter(
         a => a.division === division &&
           a.memberId === myMemberId &&
@@ -2465,27 +2499,67 @@ const recentActivityScoped = useMemo(() => {
 
     // Only the person actually assigned to a QC-flagged stage should see it as
 // "their" notification — not the whole team just because the SKU is shared.
-  const myFlaggedIssues = useMemo(() => {
-    if (isMasterOrAdminView || !myMemberId) return [];
-    const mySkuStageSet = new Set(
-      assignments
-        .filter(a => a.division === division && a.memberId === myMemberId && a.stage && a.stage !== "all")
-        .map(a => a.sku.trim().toLowerCase() + "|" + a.stage)
-    );
-    const list = [];
-    myFullPool.forEach(p => {
-      STAGES.filter(s => s.k !== "finalqc").forEach(s => {
-        const stg = p.stages[s.k];
-        const isFlagged = stg.status === "In Progress" && String(stg.comments || "").startsWith("QC flagged:");
-        if (!isFlagged) return;
-        const key = p.sku.trim().toLowerCase() + "|" + s.k;
-        if (mySkuStageSet.has(key)) {
-          list.push({ p, stageKey: s.k, stageName: s.n, comment: stg.comments.replace(/^QC flagged:\s*/, "") });
-        }
+
+
+    // Master's version of myFlaggedIssues — same two issue types
+// (isQcFlagged from QC send-back, isIssueStatus from a raw stage flag),
+// but scoped to the whole division instead of one member's stages.
+    const divisionIssuesList = useMemo(() => {
+      if (!isMasterOrAdminView) return [];
+      const pool = allDivProducts || products;
+      const list = [];
+      pool.forEach(p => {
+        STAGES.forEach(s => {
+          if (s.k === "finalqc") return;
+          const stg = p.stages[s.k];
+          if (!stg) return;
+          const isQcFlagged = stg.status === "In Progress" && String(stg.comments || "").startsWith("QC flagged:");
+          const isIssueStatus = stg.status === "Issue";
+          if (isQcFlagged || isIssueStatus) {
+            list.push({
+              p, stageKey: s.k, stageName: s.n,
+              type: isQcFlagged ? "qc_flagged" : "issue_status",
+              comment: String(stg.comments || "").replace(/^QC flagged:\s*/, "")
+            });
+          }
+        });
       });
-    });
-    return list;
-  }, [isMasterOrAdminView, myMemberId, assignments, division, myFullPool]);
+      return list;
+    }, [isMasterOrAdminView, allDivProducts, products]);
+
+    const divisionIssueCardIds = useMemo(
+      () => new Set(divisionIssuesList.map(x => x.p.id)),
+      [divisionIssuesList]
+    );
+    const myFlaggedIssues = useMemo(() => {
+      if (isMasterOrAdminView || !myMemberId) return [];
+      const mySkuStageSet = new Set(
+        assignments
+          .filter(a => a.division === division && a.memberId === myMemberId && a.stage && a.stage !== "all")
+          .map(a => a.sku.trim().toLowerCase() + "|" + a.stage)
+      );
+      const list = [];
+      myFullPool.forEach(p => {
+        STAGES.filter(s => s.k !== "finalqc").forEach(s => {
+          const stg = p.stages[s.k];
+          // Two independent issue types can land on a stage:
+          // 1. QC sent it back (In Progress + "QC flagged:" comment)
+          // 2. Someone flagged the stage itself as Issue (e.g. store-reported missing image)
+          const isQcFlagged = stg.status === "In Progress" && String(stg.comments || "").startsWith("QC flagged:");
+          const isIssueStatus = stg.status === "Issue";
+          if (!isQcFlagged && !isIssueStatus) return;
+          const key = p.sku.trim().toLowerCase() + "|" + s.k;
+          if (mySkuStageSet.has(key)) {
+            list.push({
+              p, stageKey: s.k, stageName: s.n,
+              type: isQcFlagged ? "qc_flagged" : "issue_status",
+              comment: stg.comments.replace(/^QC flagged:\s*/, "")
+            });
+          }
+        });
+      });
+      return list;
+    }, [isMasterOrAdminView, myMemberId, assignments, division, myFullPool]);
 
     // Pushed-to-team SKU set, reused by both "Distributed" and "Pending" calcs below.
     const pushedToTeamSkuSet = useMemo(() => {
@@ -2528,9 +2602,70 @@ const recentActivityScoped = useMemo(() => {
     const visibleStages = allowedStages 
       ? STAGES.filter(s => allowedStages.includes(s.k) && !OVERVIEW_EXCLUDED.includes(s.k)) 
       : STAGES.filter(s => !OVERVIEW_EXCLUDED.includes(s.k));
+    const isStageIssue = (stg) => stg.status === "Issue" || (stg.status === "In Progress" && String(stg.comments || "").startsWith("QC flagged:"));
+    // const stageStats = (fMember && selectedMemberBreakdown
+    //   ? selectedMemberBreakdown.perStage.map(s => ({ k: s.key, n: s.name, done: s.completed, issue: s.issue }))
+    //   : visibleStages.map(s => ({ ...s, done: filteredProducts.filter(p => p.stages[s.k].status === "Completed").length, issue: filteredProducts.filter(p => p.stages[s.k].status === "Issue").length }))
+    // );
+    // Client-side fallback, scoped to whatever's currently filtered — only
+    // needed when a vendor/set-no filter narrows the pool away from the
+    // full-division scope that stageIssueStats (DB) represents. Without this,
+    // picking a vendor shrinks "Completed" counts but leaves "Issue" counts
+    // at the full-division total, which looks wrong/inconsistent on screen.
+  // Flat array of every open issue across the filtered pool — each entry knows
+// its product + stage, so it can be reused for tooltips/drill-downs later,
+// not just a count.
+    const issuesList = useMemo(() => {
+      const list = [];
+      filteredProducts.forEach(p => {
+        STAGES.forEach(s => {
+          if (s.k === "finalqc") return;
+          const stg = p.stages[s.k];
+          if (!stg) return;
+          const isQcFlagged = stg.status === "In Progress" && String(stg.comments || "").startsWith("QC flagged:");
+          const isIssueStatus = stg.status === "Issue";
+          if (isQcFlagged || isIssueStatus) {
+            list.push({
+              productId: p.id,
+              sku: p.sku,
+              stageKey: s.k,
+              stageName: s.n,
+              type: isIssueStatus ? "issue_status" : "qc_flagged",
+              comments: stg.comments || "",
+              at: stg.at || ""
+            });
+          }
+        });
+      });
+      return list;
+    }, [filteredProducts]);
+
+    // Derive per-stage counts from the array above.
+    const stageIssueMap = useMemo(() => {
+      const map = {};
+      issuesList.forEach(row => {
+        map[row.stageKey] = (map[row.stageKey] || 0) + 1;
+      });
+      return map;
+    }, [issuesList]);
+
+    const hasScopeFilter = !!(fVendor || fSetNo);
+
+
+
     const stageStats = (fMember && selectedMemberBreakdown
       ? selectedMemberBreakdown.perStage.map(s => ({ k: s.key, n: s.name, done: s.completed, issue: s.issue }))
-      : visibleStages.map(s => ({ ...s, done: filteredProducts.filter(p => p.stages[s.k].status === "Completed").length, issue: filteredProducts.filter(p => p.stages[s.k].status === "Issue").length }))
+      : visibleStages.map(s => ({
+          ...s,
+          done: filteredProducts.filter(p => p.stages[s.k].status === "Completed").length,
+          // Always derive from stageIssueMap — same verdict-based logic the
+          // "Issues" KPI card uses (p.verdict === "Issues Found"), so the two
+          // numbers can never disagree. The old DB path (stageIssueStats) also
+          // required the flagged stage to still be "In Progress", which drops
+          // cards the KPI still counts once that stage gets fixed but the
+          // verdict hasn't been re-approved yet — that's what caused the gap.
+          issue: stageIssueMap[s.k] || 0
+        }))
     );
     const storeStats = STORES.map(st => { let d = 0, r = 0, m = 0, dm = 0, pending = 0; filteredProducts.forEach(p => { const s = p.stores[st]; d += s.dispatched || 0; if (s.received) r++; else if (s.dispatched > 0) pending++; m += s.missing || 0; dm += s.damaged || 0; }); return { st, d, r, m, dm, pending }; });
     const segs = [{ label: "Listing complete", value: done, color: "var(--sage)" }, { label: "In production", value: prog, color: "var(--sky)" }, { label: "Not started", value: none, color: "var(--line2)" }, { label: "With issues", value: withIssue, color: "var(--rose)" }];
@@ -2630,11 +2765,23 @@ const recentActivityScoped = useMemo(() => {
     const withManagerVal = isMasterOrAdminView ? remainingWithManager 
       : (dbStats ? Number(dbStats.kept_by_manager) : myPersonalPool.length);
 
+    // Master sees every flagged card across the division. A member/manager
+    // only sees issues that live on a stage actually assigned to them —
+    // never a flag that landed on a teammate's stage of the same card.
+    const myIssueCardIds = useMemo(
+      () => new Set(myFlaggedIssues.map(x => x.p.id)),
+      [myFlaggedIssues]
+    );
+    const issuesVal = isMasterOrAdminView
+      ? divisionIssueCardIds.size
+      : myIssueCardIds.size;
+
     const kpis = [
       { lab: "Total Products", val: totalVal, sub: division, ic: I.box, scope: "all" },
       { lab: "Pending", val: pendingVal, sub: isMasterOrAdminView ? "not yet assigned" : "with me, not done", ic: I.layers, color: pendingVal > 0 ? "var(--peach-ink)" : "var(--sage-ink)", scope: "pending" },
       { lab: "Complete", val: completeVal, sub: isMasterOrAdminView ? "fully done" : "done by me personally", ic: I.check, color: "var(--sage-ink)", scope: "completed" },
-      { lab: "Issues", val: products.filter(p => p.verdict === "Issues Found").length, sub: `${products.filter(p => p.verdict === "Issues Found").length} QC flags`, ic: I.alert, color: products.filter(p => p.verdict === "Issues Found").length ? "var(--rose-ink)" : "var(--ink)", scope: "issues" },
+            { lab: "Issues", val: issuesVal, sub: isMasterOrAdminView ? `${divisionIssuesList.length} flagged stage(s)` : `${issuesVal} on your stage(s)`, ic: I.alert, color: issuesVal ? "var(--rose-ink)" : "var(--ink)", scope: "issues" },
+
     ];
 
     const [exporting, setExporting] = useState("");
@@ -2668,13 +2815,13 @@ const recentActivityScoped = useMemo(() => {
     };
 
 
-    useEffect(() => {
-      if (!auth || !myMemberId) return;
-      fetch(`${API}/api/pipelineStats?memberId=${encodeURIComponent(myMemberId)}&division=${encodeURIComponent(division)}`)
-        .then(r => r.json())
-        .then(data => { if (data.ok) setPipelineStats(data.stages); })
-        .catch(e => console.error("pipelineStats fetch failed", e));
-    }, [myMemberId, division, auth]);
+    // useEffect(() => {
+    //   if (!auth || !myMemberId) return;
+    //   fetch(`${API}/api/pipelineStats?memberId=${encodeURIComponent(myMemberId)}&division=${encodeURIComponent(division)}`)
+    //     .then(r => r.json())
+    //     .then(data => { if (data.ok) setPipelineStats(data.stages); })
+    //     .catch(e => console.error("pipelineStats fetch failed", e));
+    // }, [myMemberId, division, auth]);
 
     return (
       <div>
@@ -2772,9 +2919,8 @@ const recentActivityScoped = useMemo(() => {
           )}
         </div>
 
-        {(issues.length > 0 || (isMasterOrAdminView
-          ? products.filter(p => p.verdict === "Issues Found" && STAGES.filter(s => s.k !== "finalqc").some(s => p.stages[s.k].status === "In Progress")).length > 0
-          : myFlaggedIssues.length > 0)) && (
+          {(issues.length > 0 || (isMasterOrAdminView ? divisionIssuesList.length > 0 : myFlaggedIssues.length > 0)) && (
+
               <div className="sec">
                 <div className="sec-h"><h3>Live alerts · missing, damaged & QC issues</h3><span className="hint">store reports + QC flags</span></div>
                 {issues.slice(0, 6).map((x, i) => (
@@ -2784,27 +2930,21 @@ const recentActivityScoped = useMemo(() => {
                   </div>
                 ))}
                 {issues.length > 6 && <div className="tag" style={{ marginTop: 4 }}>+{issues.length - 6} more in Dispatch & Stores</div>}
-                {(isMasterOrAdminView
-                  ? products.filter(p => 
-                      p.verdict === "Issues Found" && 
-                      STAGES.filter(s => s.k !== "finalqc").some(s => p.stages[s.k].status === "In Progress")
-                    ).map(p => ({ p, stageNames: STAGES.filter(s => s.k !== "finalqc" && p.stages[s.k].status === "In Progress").map(s => s.n), comment: p.issues }))
-                  : myFlaggedIssues.reduce((acc, x) => {
-                      const existing = acc.find(a => a.p.id === x.p.id);
-                      if (existing) existing.stageNames.push(x.stageName);
-                      else acc.push({ p: x.p, stageNames: [x.stageName], comment: x.comment });
-                      return acc;
-                    }, [])
-                ).map((x, i) => (
+                {(isMasterOrAdminView ? divisionIssuesList : myFlaggedIssues).reduce((acc, x) => {
+                  const existing = acc.find(a => a.p.id === x.p.id);
+                  if (existing) { existing.stageNames.push(x.stageName); if (x.type === "qc_flagged") existing.hasQc = true; }
+                  else acc.push({ p: x.p, stageNames: [x.stageName], comment: x.comment, hasQc: x.type === "qc_flagged" });
+                  return acc;
+                }, []).map((x, i) => (
                   <div className="alert" key={"qc-" + i} style={{ borderColor: "var(--rose)", background: "var(--rose-bg)" }}>
-                    <div className="ic" style={{ background: "var(--rose-ink)" }}>QC</div>
+                    <div className="ic" style={{ background: "var(--rose-ink)" }}>{x.hasQc ? "QC" : "!"}</div>
                     <div className="tx">
-                      <b>{isMasterOrAdminView ? "QC Issues Found" : "Fix needed on your stage"}</b> — <b>{x.p.name || x.p.sku || "product"}</b> ({x.p.vendor || "—"})
+                      <b>{x.hasQc ? "QC Issues Found" : "Issue reported on stage"}</b> — <b>{x.p.name || x.p.sku || "product"}</b> ({x.p.vendor || "—"})
                       {" · "}<span style={{ fontWeight: 600 }}>{x.stageNames.join(", ")}</span>
                       {x.comment ? ` · "${x.comment}"` : ""}
                       <span className="tag"> · SKU: {x.p.sku}</span>
                     </div>
-                    {isMasterOrAdminView && <button className="ghost" onClick={() => go("qcaudit")}>Review</button>}
+                    {isMasterOrAdminView && x.hasQc && <button className="ghost" onClick={() => go("qcaudit")}>Review</button>}
                   </div>
                 ))}
               </div>
@@ -2904,13 +3044,14 @@ const recentActivityScoped = useMemo(() => {
                     const memberStage = fMember && selectedMemberBreakdown
                       ? selectedMemberBreakdown.perStage.find(x => x.key === s.k)
                       : null;
-                    // Use DB pipeline stats when no filter is active — most accurate
-                    // Fall back to JS-computed counts when a filter is applied
-                    const useDb = !memberStage && fMember === myMemberId && !fVendor && !fSetNo && !isMasterOrAdminView && pipelineStats && pipelineStats[s.k];
-                    const notStarted = memberStage ? memberStage.notStarted : useDb ? pipelineStats[s.k].notStarted : filteredProducts.filter(p => p.stages[s.k].status === "Not Started").length;
-                    const inProgress = memberStage ? memberStage.inProgress : useDb ? pipelineStats[s.k].inProgress : filteredProducts.filter(p => p.stages[s.k].status === "In Progress").length;
-                    const completed = memberStage ? memberStage.completed : useDb ? pipelineStats[s.k].completed : filteredProducts.filter(p => p.stages[s.k].status === "Completed").length;
-                    const issue = memberStage ? memberStage.issue : useDb ? pipelineStats[s.k].issue : filteredProducts.filter(p => p.stages[s.k].status === "Issue").length;
+                    // DB-reconciled counts from /api/pipelineBreakdown — covers whole
+                    // division, member-scoped, and vendor/set-no filtered cases alike.
+                    // Falls back to client-computed counts until the fetch resolves.
+                    const db = breakdownStats[s.k];
+                    const notStarted = memberStage ? memberStage.notStarted : db ? db.notStarted : filteredProducts.filter(p => p.stages[s.k].status === "Not Started").length;
+                    const inProgress = memberStage ? memberStage.inProgress : db ? db.inProgress : filteredProducts.filter(p => p.stages[s.k].status === "In Progress").length;
+                    const completed = memberStage ? memberStage.completed : db ? db.completed : filteredProducts.filter(p => p.stages[s.k].status === "Completed").length;
+                    const issue = memberStage ? memberStage.issue : db ? db.issue : (s.issue || 0);
                     return (
                       <tr key={s.k} style={{ borderBottom: "1px solid var(--line)" }}>
                         <td style={{ padding: "10px 10px", fontWeight: 600, fontSize: 13 }}>{s.n}</td>
@@ -2952,9 +3093,7 @@ const recentActivityScoped = useMemo(() => {
                         : <span style={{ color: "var(--faint)" }}>—</span>}
                     </td>
                     <td style={{ textAlign: "center", padding: "10px 10px" }}>
-                      {filteredProducts.filter(p => p.verdict === "Issues Found").length > 0
-                        ? <span style={{ background: "var(--rose-bg)", color: "var(--rose-ink)", borderRadius: 999, padding: "3px 12px", fontWeight: 700, fontSize: 12 }}>{filteredProducts.filter(p => p.verdict === "Issues Found").length}</span>
-                        : <span style={{ color: "var(--faint)" }}>—</span>}
+                      <span style={{ color: "var(--faint)" }}>—</span>
                     </td>
                   </tr>
                 </tbody>
@@ -3241,7 +3380,7 @@ const recentActivityScoped = useMemo(() => {
           // assigned stages on it reads "Completed" in the live product data
           const allDone = tasksForCard.every(({ stageKey }) =>
             skuProdMap[sku]?.stages?.[stageKey]?.status === "Completed"
-          );
+          ) && prod?.verdict === "Approved";
           if (allDone) cardsDone++;
           else cardsPending++;
         });
@@ -3298,9 +3437,10 @@ const recentActivityScoped = useMemo(() => {
       const isDone = (prod, rows) => {
         const specific = rows.filter(a => a.stage && a.stage !== "all");
         const toCheck = specific.length ? specific : rows;
-        return toCheck.every(a => (!a.stage || a.stage === "all")
+        const stagesDone = toCheck.every(a => (!a.stage || a.stage === "all")
           ? productState(prod) === "done"
           : prod.stages?.[a.stage]?.status === "Completed");
+        return stagesDone && prod.verdict === "Approved";
       };
 
       // Everything ever handed TO this manager (from master or anyone above)
@@ -3355,7 +3495,7 @@ const recentActivityScoped = useMemo(() => {
         const allDone = stagesToCheck.every(a => {
           if (!a.stage || a.stage === "all") return productState(prod) === "done";
           return prod.stages?.[a.stage]?.status === "Completed";
-        });
+        }) && prod.verdict === "Approved";
         allDone ? completedCount++ : pendingCount++;
       });
       return { assigned: Object.keys(skuMap).length, completed: completedCount, pending: pendingCount, skus: new Set(Object.keys(skuMap)) };
@@ -3521,11 +3661,15 @@ const recentActivityScoped = useMemo(() => {
         if (assignTab === "assigned" && !isAssigned) return false;
          if (assignTab === "completed" || assignTab === "pending") {
           // When a specific member is picked, scope to just them.
-          // When no member is picked, scope to assignments under THIS manager
-          // (anyone they've pushed work to) instead of a single null-matching id.
+          // When no member is picked, scope to the SAME pool Overview and
+          // the "Your team's work" panel use — cards actually assigned to
+          // ME (memberId === myMemberId), not just what I've pushed further
+          // down to my team. Master keeps its own "assigned by master" scope.
           const relevantAssignments = filterMember
             ? assignments.filter(a => a.memberId === filterMember)
-            : assignments.filter(a => a.managerId === (isMasterOrAdmin ? "master" : myMemberId));
+            : (isMasterOrAdmin
+                ? assignments.filter(a => a.managerId === "master")
+                : assignments.filter(a => a.memberId === myMemberId));
 
           const cardAssignments = relevantAssignments.filter(
             a => a.division === division &&
@@ -3535,14 +3679,17 @@ const recentActivityScoped = useMemo(() => {
 
           const specificStages = cardAssignments.filter(a => a.stage && a.stage !== "all");
           const stagesToCheck = specificStages.length > 0 ? specificStages : cardAssignments;
-          const allStageDone = stagesToCheck.every(a => {
+          const stagesDone = stagesToCheck.every(a => {
             const stageKey = a.stage;
             if (!stageKey || stageKey === "all") return productState(p) === "done";
             return p.stages?.[stageKey]?.status === "Completed";
           });
+          // QC gate only applies to master's overall (no-member-filter) view.
+          const useQcGate = isMasterOrAdmin && !filterMember;
+          const isFullyApproved = stagesDone && (!useQcGate || p.verdict === "Approved");
 
-          if (assignTab === "completed" && !allStageDone) return false;
-          if (assignTab === "pending" && allStageDone) return false;
+          if (assignTab === "completed" && !isFullyApproved) return false;
+          if (assignTab === "pending" && isFullyApproved) return false;
         }
       }
        if (filterMember && assignTab !== "completed" && assignTab !== "pending") {
@@ -3699,7 +3846,9 @@ const recentActivityScoped = useMemo(() => {
               else if (k === "completed") {
                 const relevantAssignments = filterMember
                   ? assignments.filter(a => a.memberId === filterMember)
-                  : assignments.filter(a => a.managerId === (isMasterOrAdmin ? "master" : myMemberId));
+                  : (isMasterOrAdmin
+                      ? assignments.filter(a => a.managerId === "master")
+                      : assignments.filter(a => a.memberId === myMemberId));
                 const scopedSkus = new Set(
                   relevantAssignments
                     .filter(a => a.division === division)
@@ -3708,6 +3857,7 @@ const recentActivityScoped = useMemo(() => {
                 const scopedPool = (allDivProducts || products).filter(p =>
                   scopedSkus.has(p.sku.trim().toLowerCase())
                 );
+                const useQcGateCompleted = isMasterOrAdmin && !filterMember;
                 count = scopedPool.filter(p => {
                   const cardAssignments = relevantAssignments.filter(
                     a => a.division === division &&
@@ -3716,16 +3866,19 @@ const recentActivityScoped = useMemo(() => {
                   if (cardAssignments.length === 0) return false;
                   const specificStages = cardAssignments.filter(a => a.stage && a.stage !== "all");
                   const stagesToCheck = specificStages.length > 0 ? specificStages : cardAssignments;
-                  return stagesToCheck.every(a => {
+                  const stagesDone = stagesToCheck.every(a => {
                     if (!a.stage || a.stage === "all") return productState(p) === "done";
                     return p.stages?.[a.stage]?.status === "Completed";
                   });
+                  return stagesDone && (!useQcGateCompleted || p.verdict === "Approved");
                 }).length;
               }
               else if (k === "pending") {
                 const relevantAssignments = filterMember
                   ? assignments.filter(a => a.memberId === filterMember)
-                  : assignments.filter(a => a.managerId === (isMasterOrAdmin ? "master" : myMemberId));
+                  : (isMasterOrAdmin
+                      ? assignments.filter(a => a.managerId === "master")
+                      : assignments.filter(a => a.memberId === myMemberId));
                 const scopedSkus = new Set(
                   relevantAssignments
                     .filter(a => a.division === division)
@@ -3734,6 +3887,7 @@ const recentActivityScoped = useMemo(() => {
                 const scopedPool = (allDivProducts || products).filter(p =>
                   scopedSkus.has(p.sku.trim().toLowerCase())
                 );
+                const useQcGatePending = isMasterOrAdmin && !filterMember;
                 count = scopedPool.filter(p => {
                   const cardAssignments = relevantAssignments.filter(
                     a => a.division === division &&
@@ -3742,10 +3896,11 @@ const recentActivityScoped = useMemo(() => {
                   if (cardAssignments.length === 0) return false;
                   const specificStages = cardAssignments.filter(a => a.stage && a.stage !== "all");
                   const stagesToCheck = specificStages.length > 0 ? specificStages : cardAssignments;
-                  return !stagesToCheck.every(a => {
+                  const stagesDone = stagesToCheck.every(a => {
                     if (!a.stage || a.stage === "all") return productState(p) === "done";
                     return p.stages?.[a.stage]?.status === "Completed";
                   });
+                  return !(stagesDone && (!useQcGatePending || p.verdict === "Approved"));
                 }).length;
               }
               // else if (k === "pending") {
@@ -4070,6 +4225,13 @@ const recentActivityScoped = useMemo(() => {
                 ? (allowedStages ? allowedStages.filter(s => cardStages.has(s)) : [...cardStages])
                 : allowedStages;
               const assignedTo = skuAssignedTo[p.sku.trim().toLowerCase()];
+              // Member/profile-level completion: ONLY the stages assigned to
+              // THIS logged-in person on THIS card, no QC gate. null means
+              // "not applicable" (master/admin, or no specific assignment
+              // recorded for this SKU — falls back to showing nothing).
+              const memberComplete = (cardStages && cardStages.size > 0)
+                ? [...cardStages].every(sk => p.stages?.[sk]?.status === "Completed")
+                : null;
 
               // When viewing a specific member's cards, show THEIR stage assignments
               const memberSpecificStages = filterMember
@@ -4083,7 +4245,8 @@ const recentActivityScoped = useMemo(() => {
                       return { stage: a.stage, stageName, stageStatus, memberId: a.memberId };
                     })
                 : [];
-              return <ProductRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))} onStage={onStage} onQC={onQC} onRemove={onRemove} allowedStages={effectiveAllowedStages} selected={!!selected[p.id]} onSelect={() => toggleSelect(p.id)} operator={operator} assignedTo={assignedTo} memberStages={memberSpecificStages} />;
+                return <ProductRow key={p.id} p={p} open={!!open[p.id]} toggle={() => setOpen(o => ({ ...o, [p.id]: !o[p.id] }))} onStage={onStage} onQC={onQC} onRemove={onRemove} allowedStages={effectiveAllowedStages} selected={!!selected[p.id]} onSelect={() => toggleSelect(p.id)} operator={operator} assignedTo={assignedTo} memberStages={memberSpecificStages} memberComplete={memberComplete} />;
+
             })}</div>
             {totalPages > 1 && (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 16, flexWrap: "wrap" }}>
@@ -4102,7 +4265,8 @@ const recentActivityScoped = useMemo(() => {
     );
   }
 
-  function ProductRow({ p, open, toggle, onStage, onQC, onRemove, allowedStages, selected, onSelect, operator, assignedTo, memberStages }) {
+  function ProductRow({ p, open, toggle, onStage, onQC, onRemove, allowedStages, selected, onSelect, operator, assignedTo, memberStages, memberComplete }) {
+
 
     const pct = productPct(p); const hasIssue = STAGES.some(s => p.stages[s.k].status === "Issue");
     const isFullAccess = allowedStages === null;
@@ -4141,6 +4305,11 @@ const recentActivityScoped = useMemo(() => {
               </span>
             )}
           <div className="spacer" />
+          {memberComplete !== null && memberComplete !== undefined && (
+            memberComplete
+              ? <span className="chip c-done"><span className="dot" />Completed</span>
+              : <span className="chip c-prog"><span className="dot" />Pending</span>
+          )}
           {hasIssue && <Chip status="Issue" />}
           {p.verdict === "Approved" && <span className="chip c-done"><span className="dot" />QC Approved</span>}
         </div>

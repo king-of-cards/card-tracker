@@ -431,12 +431,23 @@ app.get("/api/assignmentHistory", async (req, res) => {
    POST /api/deleteProduct   body: { id }
 ---------------------------------------------------------------- */
 app.post("/api/deleteProduct", async (req, res) => {
+  const { id } = req.body;
+  const client = await pool.connect();
   try {
-    await pool.query("DELETE FROM products WHERE id = $1", [req.body.id]);
+    await client.query("BEGIN");
+    await client.query("DELETE FROM stage_entries WHERE product_id = $1", [id]);
+    await client.query("DELETE FROM stores WHERE product_id = $1", [id]);
+    await client.query("DELETE FROM assignments WHERE product_id = $1", [id]);
+    await client.query("DELETE FROM qc_audit WHERE product_id = $1", [id]);
+    await client.query("DELETE FROM products WHERE id = $1", [id]);
+    await client.query("COMMIT");
     res.json({ ok: true });
   } catch (e) {
+    await client.query("ROLLBACK");
     console.error("deleteProduct error", e);
     res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -1125,6 +1136,120 @@ app.get("/api/exportProducts", async (req, res) => {
     client.release();
   }
 });
+
+
+/* ----------------------------------------------------------------
+   GET /api/stageIssueStats?division=KOC Cards
+   Returns issue counts per stage, based on each product's LATEST
+   qc_audit entry — only counted while verdict is still "Issues Found".
+---------------------------------------------------------------- */
+app.get("/api/stageIssueStats", async (req, res) => {
+  const { division } = req.query;
+  if (!division) return res.status(400).json({ ok: false, error: "division required" });
+  try {
+    const { rows } = await pool.query(`
+      SELECT se.stage_key, COUNT(*) AS issue_count
+      FROM stage_entries se
+      JOIN products p ON p.id = se.product_id
+      WHERE p.division = $1
+        AND se.status = 'In Progress'
+        AND se.comments LIKE 'QC flagged:%'
+      GROUP BY se.stage_key
+    `, [division]);
+
+    const stages = {};
+    rows.forEach(r => { stages[r.stage_key] = Number(r.issue_count); });
+    res.json({ ok: true, stages });
+  } catch (e) {
+    console.error("stageIssueStats error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/* ----------------------------------------------------------------
+   GET /api/pipelineBreakdown?division=KOC Cards&memberId=chitra&vendor=X&setNo=Y
+   Unified stage-by-stage counts for the Overview "Pipeline progress" table.
+   - memberId omitted  -> whole division (master/admin / "all my team" view)
+   - memberId present  -> only that member's assigned stages on their SKUs
+   - vendor / setNo     -> optional narrowing, applied identically either way
+   "issue" = status = 'Issue' OR (status = 'In Progress' AND QC-flagged comment)
+---------------------------------------------------------------- */
+app.get("/api/pipelineBreakdown", async (req, res) => {
+  const { division, memberId, vendor, setNo } = req.query;
+  if (!division) return res.status(400).json({ ok: false, error: "division required" });
+
+  try {
+    let rows;
+    if (memberId) {
+      // Scoped to one member's specific assigned stages on their assigned SKUs
+      const { rows: r } = await pool.query(`
+        WITH member_scope AS (
+          SELECT DISTINCT p.id AS product_id, a.stage AS stage_key
+          FROM assignments a
+          JOIN products p
+            ON p.sku = a.sku AND p.division = a.division
+          WHERE a.member_id = $1
+            AND a.division = $2
+            AND ($3::text IS NULL OR p.vendor = $3)
+            AND ($4::text IS NULL OR p.set_no = $4)
+        )
+        SELECT
+          se.stage_key,
+          COUNT(*) FILTER (WHERE se.status = 'Not Started') AS not_started,
+          COUNT(*) FILTER (WHERE se.status = 'In Progress' AND se.comments NOT LIKE 'QC flagged:%') AS in_progress,
+          COUNT(*) FILTER (WHERE se.status = 'Completed') AS completed,
+          COUNT(*) FILTER (
+            WHERE se.status = 'Issue'
+               OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
+          ) AS issue
+        FROM member_scope ms
+        JOIN stage_entries se
+          ON se.product_id = ms.product_id AND se.stage_key = ms.stage_key
+        GROUP BY se.stage_key
+      `, [memberId, division, vendor || null, setNo || null]);
+      rows = r;
+    } else {
+      // Whole division (or vendor/setNo-narrowed), every stage on every product
+      const { rows: r } = await pool.query(`
+        SELECT
+          se.stage_key,
+          COUNT(*) FILTER (WHERE se.status = 'Not Started') AS not_started,
+          COUNT(*) FILTER (WHERE se.status = 'In Progress' AND se.comments NOT LIKE 'QC flagged:%') AS in_progress,
+          COUNT(*) FILTER (WHERE se.status = 'Completed') AS completed,
+          COUNT(*) FILTER (
+            WHERE se.status = 'Issue'
+               OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
+          ) AS issue
+        FROM stage_entries se
+        JOIN products p ON p.id = se.product_id
+        WHERE p.division = $1
+          AND se.stage_key != 'finalqc'
+          AND ($2::text IS NULL OR p.vendor = $2)
+          AND ($3::text IS NULL OR p.set_no = $3)
+        GROUP BY se.stage_key
+      `, [division, vendor || null, setNo || null]);
+      rows = r;
+    }
+
+    const stages = {};
+    rows.forEach(r => {
+      stages[r.stage_key] = {
+        notStarted: Number(r.not_started),
+        inProgress: Number(r.in_progress),
+        completed: Number(r.completed),
+        issue: Number(r.issue),
+      };
+    });
+    res.json({ ok: true, stages });
+  } catch (e) {
+    console.error("pipelineBreakdown error", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+
+
+
 
 app.listen(process.env.PORT, () => {
   console.log(`Server running on http://localhost:${process.env.PORT}`);
