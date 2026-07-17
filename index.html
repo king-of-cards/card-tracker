@@ -2785,6 +2785,7 @@ const recentActivityScoped = useMemo(() => {
     ];
 
     const [exporting, setExporting] = useState("");
+    const [showDateFilter, setShowDateFilter] = useState(false);
 
     const downloadKpiExcel = async (scope, label) => {
       setExporting(scope);
@@ -2823,9 +2824,68 @@ const recentActivityScoped = useMemo(() => {
     //     .catch(e => console.error("pipelineStats fetch failed", e));
     // }, [myMemberId, division, auth]);
 
-    return (
-      <div>
+    // return (
+    //   <div>
        
+    //     <div className="grid kpis">
+        return (
+      <div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10, position: "relative" }}>
+          <button
+            onClick={() => setShowDateFilter(v => !v)}
+            style={{
+              display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600,
+              padding: "7px 12px", borderRadius: 9, cursor: "pointer",
+              border: `1px solid ${(dashFromDate || dashToDate) ? "var(--sky)" : "var(--line2)"}`,
+              background: (dashFromDate || dashToDate) ? "var(--sky-bg)" : "var(--card)",
+              color: (dashFromDate || dashToDate) ? "var(--sky-ink)" : "var(--muted)",
+            }}
+          >
+            📅 Activity by date{(dashFromDate || dashToDate) ? ` · ${dashboardActivity.length}` : ""}
+          </button>
+
+          {showDateFilter && (
+            <div className="card pad" style={{
+              position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 20,
+              display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", boxShadow: "var(--shadow-lg)",
+            }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>From</label>
+              <input type="date" value={dashFromDate} onChange={e => setDashFromDate(e.target.value)} max={todayStr}
+                style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "6px 9px", background: "var(--card)", fontSize: 12.5 }} />
+              <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>To</label>
+              <input type="date" value={dashToDate} onChange={e => setDashToDate(e.target.value)}
+                style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "6px 9px", background: "var(--card)", fontSize: 12.5 }} />
+              {(dashFromDate || dashToDate) && (
+                <button onClick={() => { setDashFromDate(""); setDashToDate(""); }}
+                  style={{ fontSize: 11, fontWeight: 600, color: "var(--rose-ink)", border: "1px solid var(--rose)", background: "var(--rose-bg)", borderRadius: 8, padding: "5px 10px" }}>
+                  ✕ Clear
+                </button>
+              )}
+              <span style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>{dashboardActivity.length} action(s) in range</span>
+            </div>
+          )}
+        </div>
+
+        {(dashFromDate && dashToDate) && (
+          <div className="card pad" style={{ marginBottom: 16 }}>
+            {dashboardActivity.length === 0
+              ? <div style={{ fontSize: 12, color: "var(--faint)" }}>No activity in this range.</div>
+              : <div style={{ maxHeight: 240, overflowY: "auto" }}>
+                  {dashboardActivity.map(a => (
+                    <div key={a.id} style={{ display: "flex", gap: 10, fontSize: 12, padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
+                      <span style={{ color: "var(--faint)", whiteSpace: "nowrap" }}>{fmt(a.at)}</span>
+                      <span style={{ fontWeight: 600 }}>{a.actor || "—"}</span>
+                      <span>{a.action}</span>
+                      <span style={{ color: "var(--muted)" }}>{a.entity}</span>
+                      <span style={{ color: "var(--muted)" }}>{a.detail}</span>
+                    </div>
+                  ))}
+                </div>
+            }
+          </div>
+        )}
+
         <div className="grid kpis">
           {kpis.map((k, i) => (
             <div
@@ -2856,68 +2916,7 @@ const recentActivityScoped = useMemo(() => {
           ))}
         </div>
 
-        <div className="card pad" style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
-          <div style={{ fontWeight: 700, fontSize: 13, color: "var(--ink)", whiteSpace: "nowrap" }}>SKU Distribution</div>
-          <div style={{ flex: 1, minWidth: 200 }}>
-            <div style={{ display: "flex", height: 10, borderRadius: 99, overflow: "hidden", background: "var(--line2)" }}>
-              {total > 0 && <>
-                <div style={{ width: `${(distributedVal / totalVal) * 100}%`, background: "var(--sky)", transition: "width .4s" }} title={`Distributed: ${distributedVal}`} />
-                <div style={{ flex: 1, background: "var(--peach)", transition: "width .4s" }} title={`With manager: ${remainingWithManager}`} />
-              </>}
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 18, flexShrink: 0, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ width: 10, height: 10, borderRadius: 3, background: "var(--sky)", display: "inline-block" }} />
-              <span style={{ color: "var(--muted)" }}>Distributed</span>
-              <b style={{ color: "var(--sky-ink)" }}>{distributedVal}</b>
-            </span>
-            <span style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ width: 10, height: 10, borderRadius: 3, background: "var(--peach)", display: "inline-block" }} />
-              <span style={{ color: "var(--muted)" }}>With manager</span>
-              <b style={{ color: "var(--peach-ink)" }}>{isMasterOrAdminView ? remainingWithManager : withManagerVal}</b>
-            </span>
-            <span style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ color: "var(--muted)" }}>Total</span>
-              <b>{total}</b>
-            </span>
-          </div>
-        </div>
-         {/* UI PANEL */}
-        <div className="card pad" style={{ marginBottom: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
-          <b style={{ fontSize: 13 }}>Activity by date</b>
-          <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>From</label>
-          <input type="date" value={dashFromDate} onChange={e => setDashFromDate(e.target.value)} max={todayStr}
-            style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "7px 10px", background: "var(--card)", fontSize: 13 }} />
-          <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>To</label>
-          <input type="date" value={dashToDate} onChange={e => setDashToDate(e.target.value)}
-            style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "7px 10px", background: "var(--card)", fontSize: 13 }} />
-          {(dashFromDate || dashToDate) && (
-            <button onClick={() => { setDashFromDate(""); setDashToDate(""); }}
-              style={{ fontSize: 11, fontWeight: 600, color: "var(--rose-ink)", border: "1px solid var(--rose)", background: "var(--rose-bg)", borderRadius: 8, padding: "5px 10px" }}>
-              ✕ Clear
-            </button>
-          )}
-          <span style={{ fontSize: 12, color: "var(--muted)" }}>{dashboardActivity.length} action(s) in range</span>
-        </div>
-
-      {(dashFromDate && dashToDate) && (
-        dashboardActivity.length === 0
-          ? <div style={{ fontSize: 12, color: "var(--faint)" }}>No activity in this range.</div>
-          : <div style={{ maxHeight: 240, overflowY: "auto" }}>
-              {dashboardActivity.map(a => (
-                <div key={a.id} style={{ display: "flex", gap: 10, fontSize: 12, padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
-                  <span style={{ color: "var(--faint)", whiteSpace: "nowrap" }}>{fmt(a.at)}</span>
-                  <span style={{ fontWeight: 600 }}>{a.actor || "—"}</span>
-                  <span>{a.action}</span>
-                  <span style={{ color: "var(--muted)" }}>{a.entity}</span>
-                  <span style={{ color: "var(--muted)" }}>{a.detail}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+      
 
           {(issues.length > 0 || (isMasterOrAdminView ? divisionIssuesList.length > 0 : myFlaggedIssues.length > 0)) && (
 
@@ -6205,13 +6204,22 @@ const recentActivityScoped = useMemo(() => {
         {/* KPI row */}
         <div className="grid kpis" style={{ marginBottom: 16 }}>
           {[
-            { lab: "Pending QC", val: pendingCount, bg: "var(--peach-bg)", border: "var(--peach)", color: "var(--peach-ink)" },
-            { lab: "Issue Resolved", val: resolvedCount, bg: "var(--sky-bg)", border: "var(--sky)", color: "var(--sky-ink)" },
-            { lab: "Approved", val: approvedCount, bg: "var(--sage-bg)", border: "var(--sage)", color: "var(--sage-ink)" },
-            { lab: "Issues Found", val: issuesCount, bg: "var(--rose-bg)", border: "var(--rose)", color: "var(--rose-ink)" },
-            { lab: "Total Products", val: products.length, bg: "var(--card)", border: "var(--line2)", color: "var(--ink)" },
+            { lab: "Pending QC", val: pendingCount, bg: "var(--peach-bg)", border: "var(--peach)", color: "var(--peach-ink)", key: "pending" },
+            { lab: "Issue Resolved", val: resolvedCount, bg: "var(--sky-bg)", border: "var(--sky)", color: "var(--sky-ink)", key: "resolved" },
+            { lab: "Approved", val: approvedCount, bg: "var(--sage-bg)", border: "var(--sage)", color: "var(--sage-ink)", key: "approved" },
+            { lab: "Issues Found", val: issuesCount, bg: "var(--rose-bg)", border: "var(--rose)", color: "var(--rose-ink)", key: "issues" },
+            { lab: "Total Products", val: products.length, bg: "var(--card)", border: "var(--line2)", color: "var(--ink)", key: "all" },
           ].map((k, i) => (
-            <div key={i} className="card kpi" style={{ background: k.bg, border: `1px solid ${k.border}` }}>
+            <div
+              key={i}
+              className="card kpi"
+              onClick={() => setFilter(k.key)}
+              style={{
+                background: k.bg,
+                border: filter === k.key ? `2px solid ${k.color}` : `1px solid ${k.border}`,
+                cursor: "pointer",
+              }}
+            >
               <div className="lab">{k.lab}</div>
               <div className="val" style={{ color: k.color }}>{k.val}</div>
             </div>
