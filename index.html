@@ -1918,7 +1918,7 @@
 
     const submitQCAudit = useCallback(async (pid, verdict, comments, stagesBack) => {
       const p = productsRef.current.find(x => x.id === pid);
-      if (!p) return;
+      if (!p) return { ok: true, failedStages: [] };
 
       // 1. Update verdict/issues on product locally + backend
       const next = productsRef.current.map(x =>
@@ -1928,14 +1928,26 @@
       setProducts(next);
       await gsPost("patchQCVerdict", { id: pid, verdict, issues: comments });
 
-      // 2. If issues found — push selected stages back to In Progress
+      // 2. Push EVERY selected stage back to In Progress. Retry each up to
+      // 3x, and only apply/trust a stage locally once the backend confirms
+      // it. Before, a slow or dropped call on just ONE of several selected
+      // stages still showed as changed in the UI, then quietly reverted on
+      // the next 90s sync — while the stages that happened to succeed stuck.
+      const failedStages = [];
       if (verdict === "Issues Found" && stagesBack.length > 0) {
         for (const stageKey of stagesBack) {
-          await gsPost("batchPatchStage", {
-            ids: [pid],
-            stageKey,
-            patch: { status: "In Progress", comments: `QC flagged: ${comments}` }
-          });
+          let res = null;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            res = await gsPost("batchPatchStage", {
+              ids: [pid],
+              stageKey,
+              patch: { status: "In Progress", comments: `QC flagged: ${comments}` }
+            });
+            if (res && res.ok !== false) break;
+            await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+          }
+          if (!res || res.ok === false) { failedStages.push(stageKey); continue; }
+
           productsRef.current = productsRef.current.map(x =>
             x.id !== pid ? x : {
               ...x,
@@ -1950,24 +1962,31 @@
               }
             }
           );
+          // Protect this stage from the 90s auto-sync overwriting it with a
+          // still-stale server read — same protection every single-stage
+          // save already gets via patchStage().
+          recentStagePatchRef.current[pid + "|" + stageKey] = Date.now();
         }
         setProducts([...productsRef.current]);
       }
 
-      // 3. Append to qcAudit sheet + local log
+      // 3. Only record stages that were actually confirmed as sent back.
+      const confirmedStagesBack = stagesBack.filter(k => !failedStages.includes(k));
       const entry = {
         id: uid(), at: now(), auditor: operator,
         sku: p.sku, division: p.division, productId: pid,
         verdict, comments: comments || "",
-        stagesSentBack: stagesBack.join(",")
+        stagesSentBack: confirmedStagesBack.join(",")
       };
       await gsPost("appendQCAudit", entry);
       setQcAuditLog(prev => [entry, ...prev]);
 
       logAudit(
         "QC Audit", p.sku || p.name,
-        `${verdict}${comments ? " · " + comments : ""}${stagesBack.length ? " · sent back: " + stagesBack.join(", ") : ""}`
+        `${verdict}${comments ? " · " + comments : ""}${confirmedStagesBack.length ? " · sent back: " + confirmedStagesBack.join(", ") : ""}`
       );
+
+      return { ok: failedStages.length === 0, failedStages };
     }, [operator, logAudit]);
 
 
@@ -2538,29 +2557,39 @@ const recentActivityScoped = useMemo(() => {
     );
     const myFlaggedIssues = useMemo(() => {
       if (isMasterOrAdminView || !myMemberId) return [];
-      const mySkuStageSet = new Set(
-        assignments
-          .filter(a => a.division === division && a.memberId === myMemberId && a.stage && a.stage !== "all")
-          .map(a => a.sku.trim().toLowerCase() + "|" + a.stage)
-      );
+      // sku -> Set of stage keys I'm responsible for. "all"/blank stage on an
+      // assignment means every stage on that card is mine — previously those
+      // rows were skipped entirely, silently hiding issues on cards assigned
+      // without a specific stage.
+      const myStageMap = {};
+      assignments
+        .filter(a => a.division === division && a.memberId === myMemberId)
+        .forEach(a => {
+          const key = a.sku.trim().toLowerCase();
+          if (!myStageMap[key]) myStageMap[key] = new Set();
+          if (!a.stage || a.stage === "all") {
+            STAGES.filter(s => s.k !== "finalqc").forEach(s => myStageMap[key].add(s.k));
+          } else {
+            myStageMap[key].add(a.stage);
+          }
+        });
+
       const list = [];
       myFullPool.forEach(p => {
+        const myStages = myStageMap[p.sku.trim().toLowerCase()];
+        if (!myStages || myStages.size === 0) return;
         STAGES.filter(s => s.k !== "finalqc").forEach(s => {
+          if (!myStages.has(s.k)) return;
           const stg = p.stages[s.k];
-          // Two independent issue types can land on a stage:
-          // 1. QC sent it back (In Progress + "QC flagged:" comment)
-          // 2. Someone flagged the stage itself as Issue (e.g. store-reported missing image)
+          if (!stg) return;
           const isQcFlagged = stg.status === "In Progress" && String(stg.comments || "").startsWith("QC flagged:");
           const isIssueStatus = stg.status === "Issue";
           if (!isQcFlagged && !isIssueStatus) return;
-          const key = p.sku.trim().toLowerCase() + "|" + s.k;
-          if (mySkuStageSet.has(key)) {
-            list.push({
-              p, stageKey: s.k, stageName: s.n,
-              type: isQcFlagged ? "qc_flagged" : "issue_status",
-              comment: stg.comments.replace(/^QC flagged:\s*/, "")
-            });
-          }
+          list.push({
+            p, stageKey: s.k, stageName: s.n,
+            type: isQcFlagged ? "qc_flagged" : "issue_status",
+            comment: stg.comments.replace(/^QC flagged:\s*/, "")
+          });
         });
       });
       return list;
@@ -2778,8 +2807,8 @@ const recentActivityScoped = useMemo(() => {
       [myFlaggedIssues]
     );
     const issuesVal = isMasterOrAdminView
-      ? divisionIssueCardIds.size
-      : myIssueCardIds.size;
+      ? divisionIssuesList.length
+      : myFlaggedIssues.length;
 
     const kpis = [
       { lab: "Total Products", val: totalVal, sub: division, ic: I.box, scope: "all" },
@@ -3069,7 +3098,7 @@ const recentActivityScoped = useMemo(() => {
                     const notStarted = memberStage ? memberStage.notStarted : db ? db.notStarted : filteredProducts.filter(p => p.stages[s.k].status === "Not Started").length;
                     const inProgress = memberStage ? memberStage.inProgress : db ? db.inProgress : filteredProducts.filter(p => p.stages[s.k].status === "In Progress").length;
                     const completed = memberStage ? memberStage.completed : db ? db.completed : filteredProducts.filter(p => p.stages[s.k].status === "Completed").length;
-                    const issue = memberStage ? memberStage.issue : db ? db.issue : (s.issue || 0);
+                    const issue = memberStage ? memberStage.issue : (s.issue || 0);
                     return (
                       <tr key={s.k} style={{ borderBottom: "1px solid var(--line)" }}>
                         <td style={{ padding: "10px 10px", fontWeight: 600, fontSize: 13 }}>{s.n}</td>
@@ -4349,12 +4378,73 @@ const recentActivityScoped = useMemo(() => {
 
   function ProductRow({ p, open, toggle, onStage, onQC, onRemove, allowedStages, selected, onSelect, operator, assignedTo, memberStages, memberComplete }) {
 
+        const pct = productPct(p); const hasIssue = STAGES.some(s => p.stages[s.k].status === "Issue");
+        const isFullAccess = allowedStages === null;
+        // Filter stages visible to this user
+        const visibleStages = allowedStages ? STAGES.filter(s => allowedStages.includes(s.k)) : STAGES;
 
-    const pct = productPct(p); const hasIssue = STAGES.some(s => p.stages[s.k].status === "Issue");
-    const isFullAccess = allowedStages === null;
-    // Filter stages visible to this user
-    const visibleStages = allowedStages ? STAGES.filter(s => allowedStages.includes(s.k)) : STAGES;
-    return (
+        // --- Multi-stage "mark as Issue" selection, scoped to this card ---
+        const [stageSel, setStageSel] = useState({});
+        const [issueNote, setIssueNote] = useState("");
+        const [bulkIssueBusy, setBulkIssueBusy] = useState(false);
+        const activeStages = visibleStages.filter(s => s.k !== "finalqc" && p.stages[s.k].status !== "Completed");
+        const activeStageKeySet = useMemo(() => new Set(activeStages.map(s => s.k)), [activeStages.map(s => s.k).join(",")]);
+        // Drop any selected stage that's no longer active (e.g. someone else just
+        // completed it via sync) — prevents stale keys silently riding along into
+        // the next "Mark as Issue" batch.
+        useEffect(() => {
+          setStageSel(prev => {
+            const next = {};
+            let changed = false;
+            Object.keys(prev).forEach(k => {
+              if (prev[k] && activeStageKeySet.has(k)) next[k] = true;
+              else changed = true;
+            });
+            return changed ? next : prev;
+          });
+        }, [activeStageKeySet]);
+        const selectedStageKeys = Object.keys(stageSel).filter(k => stageSel[k] && activeStageKeySet.has(k));
+        const toggleStageSel = (k) => setStageSel(s => ({ ...s, [k]: !s[k] }));
+        const clearStageSel = () => { setStageSel({}); setIssueNote(""); };
+
+        const [markIssueErr, setMarkIssueErr] = useState("");
+        const markSelectedAsIssue = async () => {
+          if (selectedStageKeys.length === 0) return;
+          setBulkIssueBusy(true);
+          setMarkIssueErr("");
+          const failed = [];
+          for (const k of selectedStageKeys) {
+            const cur = p.stages[k];
+            try {
+              await onStage(p.id, k, {
+                status: "Issue",
+                person: operator || cur.person,
+                comments: issueNote.trim() || cur.comments
+              });
+            } catch (e) {
+              console.error("markSelectedAsIssue failed for stage", k, e);
+              failed.push(STAGES.find(s => s.k === k)?.n || k);
+            }
+          }
+          setBulkIssueBusy(false);
+          if (failed.length > 0) {
+            setMarkIssueErr(`Could not mark: ${failed.join(", ")}. Please retry.`);
+            // Keep the failed stages selected so the user can just hit the button again.
+            setStageSel(prev => {
+              const next = {};
+              failed.forEach(name => {
+                const k = STAGES.find(s => s.n === name)?.k;
+                if (k) next[k] = true;
+              });
+              return next;
+            });
+            setIssueNote("");
+          } else {
+            clearStageSel();
+          }
+        };
+
+        return (
       <div className="prow">
         <div className="phead" style={{ background: selected ? "var(--sky-bg)" : "" }}>
           <input type="checkbox" checked={selected} onChange={e => { e.stopPropagation(); onSelect(); }} onClick={e => e.stopPropagation()} style={{ width: 15, height: 15, accentColor: "var(--sky-ink)", cursor: "pointer", flexShrink: 0 }} />
@@ -4397,10 +4487,59 @@ const recentActivityScoped = useMemo(() => {
         </div>
         {open && (
           <div className="pbody">
+            {/* Multi-select "mark as Issue" bar */}
+            {activeStages.length > 0 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px 0", flexWrap: "wrap" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, color: "var(--muted)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedStageKeys.length === activeStages.length && activeStages.length > 0}
+                    onChange={e => {
+                      if (e.target.checked) {
+                        const all = {}; activeStages.forEach(s => all[s.k] = true); setStageSel(all);
+                      } else clearStageSel();
+                    }}
+                    style={{ width: 13, height: 13, accentColor: "var(--rose-ink)" }}
+                  />
+                  Select stages
+                </label>
+                {selectedStageKeys.length > 0 && (
+                  <>
+                    <span style={{ fontSize: 11.5, fontWeight: 700, color: "var(--rose-ink)", background: "var(--rose-bg)", border: "1px solid var(--rose)", borderRadius: 999, padding: "2px 10px" }}>
+                      {selectedStageKeys.length} selected
+                    </span>
+                    <input
+                      className="txt"
+                      placeholder="Issue note (applies to all selected)…"
+                      value={issueNote}
+                      onChange={e => setIssueNote(e.target.value)}
+                      style={{ fontSize: 12, padding: "6px 9px", flex: 1, minWidth: 160, maxWidth: 320 }}
+                    />
+                    <button
+                      onClick={markSelectedAsIssue}
+                      disabled={bulkIssueBusy}
+                      style={{
+                        fontSize: 12, fontWeight: 700, padding: "7px 14px", borderRadius: 8, cursor: "pointer",
+                        background: "var(--rose-ink)", color: "#fff", border: 0, opacity: bulkIssueBusy ? .6 : 1
+                      }}>
+                      {bulkIssueBusy ? "Marking…" : `⚠ Mark ${selectedStageKeys.length} as Issue`}
+                    </button>
+                    <button className="ghost" style={{ padding: "6px 10px", fontSize: 12 }} onClick={clearStageSel}>Clear</button>
+                  </>
+                )}
+                {markIssueErr && (
+                  <div style={{ width: "100%", fontSize: 11.5, color: "var(--rose-ink)", fontWeight: 600 }}>{markIssueErr}</div>
+                )}
+              </div>
+            )}
             {/* Active stage cards grid */}
             <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "14px 16px" }}>
-              {visibleStages.filter(s => s.k !== "finalqc" && p.stages[s.k].status !== "Completed").map((s, i) => (
-                <StageEditor key={s.k} p={p} stage={s} idx={STAGES.findIndex(st => st.k === s.k) + 1} onStage={onStage} operator={operator} />
+              {activeStages.map((s, i) => (
+                <StageEditor
+                  key={s.k} p={p} stage={s} idx={STAGES.findIndex(st => st.k === s.k) + 1}
+                  onStage={onStage} operator={operator}
+                  selected={!!stageSel[s.k]} onToggleSelect={() => toggleStageSel(s.k)}
+                />
               ))}
             </div>
             {/* Completed stages — pill popup style */}
@@ -4439,7 +4578,7 @@ const recentActivityScoped = useMemo(() => {
     );
   }
 
-  function StageEditor({ p, stage, idx, onStage, operator }) {
+  function StageEditor({ p, stage, idx, onStage, operator, selected, onToggleSelect }) {
     const cur = p.stages[stage.k];
     const [status, setStatus] = useState(cur.status);
     const [comments, setComments] = useState(cur.comments);
@@ -4480,6 +4619,13 @@ const recentActivityScoped = useMemo(() => {
     return (
       <div style={{ background: "var(--card)", border: "1px solid var(--line)", borderRadius: 11, padding: "12px 14px", boxShadow: "var(--shadow)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <input
+            type="checkbox"
+            checked={!!selected}
+            onChange={onToggleSelect}
+            style={{ width: 14, height: 14, accentColor: "var(--rose-ink)", flexShrink: 0, cursor: "pointer" }}
+            title="Select this stage for bulk actions"
+          />
           <span className="stnum" style={{ flex: "0 0 22px" }}>{idx}</span>
           <span style={{ fontWeight: 600, fontSize: 13, width: 150, flexShrink: 0 }}>{stage.n}</span>
           <select value={status} onChange={e => setStatus(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 9px", background: "var(--bg)", fontSize: 12, width: 130, flexShrink: 0 }}>
@@ -6425,6 +6571,12 @@ const recentActivityScoped = useMemo(() => {
               const isOpen = !!expanded[p.id];
               const allStagesDone = eligibleStages.every(s => p.stages[s.k].status === "Completed");
               const hasVerdict = !!p.verdict;
+              // Once this card already has an open issue, let QC keep raising MORE
+              // issues — on whichever stages are still Completed — without waiting
+              // for the first flagged stage(s) to be fixed and re-completed.
+              // Approving still requires every stage to be done.
+              const canAddMoreIssues = p.verdict === "Issues Found";
+              const pipelineGateBlocks = !allStagesDone && !(canAddMoreIssues && st.verdict === "Issues Found");
 
               return (
                 <div key={p.id} className="prow">
@@ -6580,14 +6732,14 @@ const recentActivityScoped = useMemo(() => {
                           <div style={{ flex: 1 }} />
                           <button
                             onClick={() => handleSubmit(p)}
-                            disabled={!allStagesDone || !st.verdict || saving[p.id] || (st.verdict === "Issues Found" && !st.comments?.trim())}
+                            disabled={pipelineGateBlocks || !st.verdict || saving[p.id] || (st.verdict === "Issues Found" && !st.comments?.trim())}
                             style={{
                               padding: "10px 24px", borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: "pointer", border: 0, transition: ".15s",
                               background: saved[p.id] ? "var(--sage)" : st.verdict === "Approved" ? "var(--sage-deep)" : st.verdict === "Issues Found" ? "var(--rose-ink)" : "var(--faint)",
                               color: "#fff",
-                              opacity: (!st.verdict || saving[p.id] || (st.verdict === "Issues Found" && !st.comments?.trim())) ? 0.45 : 1,
+                              opacity: (pipelineGateBlocks || !st.verdict || saving[p.id] || (st.verdict === "Issues Found" && !st.comments?.trim())) ? 0.45 : 1,
                             }}>
-                            {!allStagesDone ? "Pipeline incomplete — finish all stages first" : saving[p.id] ? "Saving…" : saved[p.id] ? "✓ Saved" : st.verdict === "Approved" ? "Confirm Approval" : st.verdict === "Issues Found" ? "Submit & Send Back" : "Select a verdict first"}
+                            {pipelineGateBlocks ? "Pipeline incomplete — finish all stages first" : saving[p.id] ? "Saving…" : saved[p.id] ? "✓ Saved" : st.verdict === "Approved" ? "Confirm Approval" : st.verdict === "Issues Found" ? "Submit & Send Back" : "Select a verdict first"}
                           </button>
                         </div>
                       </div>

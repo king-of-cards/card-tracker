@@ -1235,7 +1235,7 @@ app.get("/api/pipelineBreakdown", async (req, res) => {
     rows.forEach(r => {
       stages[r.stage_key] = {
         notStarted: Number(r.not_started),
-        inProgress: Number(r.in_progress),
+        inProgress: Number(r.in_progress), 
         completed: Number(r.completed),
         issue: Number(r.issue),
       };
