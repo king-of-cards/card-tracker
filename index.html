@@ -679,6 +679,7 @@
     box-shadow: var(--shadow)
   }
 
+
   thead th {
     position: sticky;
     top: 0;
@@ -909,6 +910,30 @@
     font-weight: 600;
     font-size: 12px
   }
+
+
+  /* ---------- recently added / new-card glow ---------- */
+  @keyframes glowPulse {
+    0%   { box-shadow: 0 0 0 0 rgba(156,190,154,.55); }
+    70%  { box-shadow: 0 0 0 14px rgba(156,190,154,0); }
+    100% { box-shadow: 0 0 0 0 rgba(156,190,154,0); }
+  }
+  @keyframes slideInFade {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .new-card-alert {
+    animation: glowPulse 1.6s ease-out 2, slideInFade .4s ease-out;
+    border: 1px solid var(--sage) !important;
+  }
+  .new-card-badge {
+    animation: glowPulse 1.6s ease-out 3;
+  }
+  .recent-row {
+    animation: slideInFade .3s ease-out;
+  }
+
+
 
   .danger:hover {
     text-decoration: underline
@@ -1270,6 +1295,32 @@
   .pwwrap {
     position: relative;
     display: flex
+  }
+
+
+  /* ---------- recently added / new-card glow ---------- */
+  @keyframes glowPulse {
+    0%   { box-shadow: 0 0 0 0 rgba(156,190,154,.55); }
+    70%  { box-shadow: 0 0 0 14px rgba(156,190,154,0); }
+    100% { box-shadow: 0 0 0 0 rgba(156,190,154,0); }
+  }
+  @keyframes slideInFade {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .new-card-alert {
+    animation: glowPulse 1.6s ease-out 2, slideInFade .4s ease-out;
+    border: 1px solid var(--sage) !important;
+  }
+  .new-card-badge {
+    animation: glowPulse 1.6s ease-out 3;
+  }
+  .recent-row {
+    animation: slideInFade .3s ease-out;
+  }
+  .recent-body {
+    overflow: hidden;
+    transition: max-height .25s ease, opacity .2s ease;
   }
 
   .pwwrap input {
@@ -2246,6 +2297,64 @@
       </div>
     );
   }
+
+  // function RecentlyAddedPanel({ products }) {
+  //   const [glow, setGlow] = useState(false);
+  //   const prevCountRef = useRef(null); // null = not yet initialized
+
+  //   const recentItems = useMemo(() => {
+  //     return [...products]
+  //       .filter(p => p.createdAt)
+  //       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+  //       .slice(0, 8);
+  //   }, [products]);
+
+  //   const addedTodayCount = useMemo(() => {
+  //     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+  //     return products.filter(p => p.createdAt && new Date(p.createdAt) >= todayStart).length;
+  //   }, [products]);
+
+  //   // Glow whenever the "added today" count goes up after the first load
+  //   useEffect(() => {
+  //     if (prevCountRef.current !== null && addedTodayCount > prevCountRef.current) {
+  //       setGlow(true);
+  //       const t = setTimeout(() => setGlow(false), 5000);
+  //       return () => clearTimeout(t);
+  //     }
+  //     prevCountRef.current = addedTodayCount;
+  //   }, [addedTodayCount]);
+
+  //   if (recentItems.length === 0) return null;
+
+  //   return (
+  //     <div className={"card pad" + (glow ? " new-card-alert" : "")} style={{ marginBottom: 16 }}>
+  //       <div className="sec-h" style={{ marginBottom: 10 }}>
+  //         <h3 style={{ display: "flex", alignItems: "center", gap: 8 }}>
+  //           🆕 Recently Added
+  //           {addedTodayCount > 0 && (
+  //             <span className={"chip c-done" + (glow ? " new-card-badge" : "")}>
+  //               <span className="dot" />{addedTodayCount} added today
+  //             </span>
+  //           )}
+  //         </h3>
+  //         <span className="hint">last {recentItems.length} products created</span>
+  //       </div>
+  //       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+  //         {recentItems.map(p => (
+  //           <div key={p.id} className="recent-row" style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: "var(--card-2)", borderRadius: 9, border: "1px solid var(--line)" }}>
+  //             <span className="psku">{p.sku || "no-sku"}</span>
+  //             {p.name && <span style={{ fontWeight: 600, fontSize: 12.5 }}>{p.name}</span>}
+  //             <span className="tag">· {p.vendor || "—"}</span>
+  //             <div className="spacer" />
+  //             <span className="tag" style={{ whiteSpace: "nowrap" }}>{fmt(p.createdAt)}</span>
+  //           </div>
+  //         ))}
+  //       </div>
+  //     </div>
+  //   );
+  // }
+
+
   
   /* ---------------- OVERVIEW ---------------- */
   function Overview({ division, products, allDivProducts, issues, audit, go, goIssues, goProducts, vendors = [], allowedStages = null, auth, teamMembers = [], assignments = [], qcAuditLog = [] }) {
@@ -2595,6 +2704,14 @@ const recentActivityScoped = useMemo(() => {
       return list;
     }, [isMasterOrAdminView, myMemberId, assignments, division, myFullPool]);
 
+    // Distinct card ids that currently have an open issue (QC-flagged or a
+    // raw stage Issue) — used to keep "Pending" and "Issues" mutually
+    // exclusive instead of double-counting a flagged card as pending too.
+    const myIssueCardIds = useMemo(
+      () => new Set(myFlaggedIssues.map(x => x.p.id)),
+      [myFlaggedIssues]
+    );
+
     // Pushed-to-team SKU set, reused by both "Distributed" and "Pending" calcs below.
     const pushedToTeamSkuSet = useMemo(() => {
       return new Set(
@@ -2770,7 +2887,7 @@ const recentActivityScoped = useMemo(() => {
     // of whether they've also been pushed to a teammate.
     const pendingCount = isMasterOrAdminView
       ? remainingWithManager
-      : myFullPool.filter(p => !isCardCompleteForMe(p)).length;
+      : myFullPool.filter(p => !isCardCompleteForMe(p) && !myIssueCardIds.has(p.id)).length;
     const completeCount = isMasterOrAdminView
       ? done
       : myFullPool.filter(p => isCardCompleteForMe(p)).length;
@@ -2792,31 +2909,33 @@ const recentActivityScoped = useMemo(() => {
     // (via isCardCompleteForMe), not a single global stage like Website
     // Listing checked across the whole pool. Master/admin keeps the
     // org-wide website-listing view since they aren't scoped to an assignment.
-    const pendingVal = isMasterOrAdminView ? websiteStats.pending : pendingCount;
+    const pendingVal = isMasterOrAdminView
+      ? (allDivProducts || products).filter(p => p.verdict !== "Approved" && !divisionIssueCardIds.has(p.id)).length
+      : pendingCount;
     const completeVal = isMasterOrAdminView ? websiteStats.completed : completeCount;
     const distributedVal = isMasterOrAdminView ? distributedSkus 
       : (dbStats ? Number(dbStats.pushed_to_team) : distributedSkus);
     const withManagerVal = isMasterOrAdminView ? remainingWithManager 
       : (dbStats ? Number(dbStats.kept_by_manager) : myPersonalPool.length);
 
+    // // Master sees every flagged card across the division. A member/manager
+    // // only sees issues that live on a stage actually assigned to them —
+    // // never a flag that landed on a teammate's stage of the same card.
     // Master sees every flagged card across the division. A member/manager
     // only sees issues that live on a stage actually assigned to them —
     // never a flag that landed on a teammate's stage of the same card.
-    const myIssueCardIds = useMemo(
-      () => new Set(myFlaggedIssues.map(x => x.p.id)),
-      [myFlaggedIssues]
-    );
+    // Counts distinct CARDS with an open issue (not stage-flag instances),
+    // so Total = Pending + Complete + Issues stays clean and mutually exclusive.
     const issuesVal = isMasterOrAdminView
-      ? divisionIssuesList.length
-      : myFlaggedIssues.length;
+      ? divisionIssueCardIds.size
+      : myIssueCardIds.size;
     const liveAlertCount = issues.length + (isMasterOrAdminView ? divisionIssuesList.length : myFlaggedIssues.length);
-  
 
     const kpis = [
       { lab: "Total Products", val: totalVal, sub: division, ic: I.box, scope: "all" },
       { lab: "Pending", val: pendingVal, sub: isMasterOrAdminView ? "not yet assigned" : "with me, not done", ic: I.layers, color: pendingVal > 0 ? "var(--peach-ink)" : "var(--sage-ink)", scope: "pending" },
       { lab: "Complete", val: completeVal, sub: isMasterOrAdminView ? "fully done" : "done by me personally", ic: I.check, color: "var(--sage-ink)", scope: "completed" },
-            { lab: "Issues", val: issuesVal, sub: isMasterOrAdminView ? `${divisionIssuesList.length} flagged stage(s)` : `${issuesVal} on your stage(s)`, ic: I.alert, color: issuesVal ? "var(--rose-ink)" : "var(--ink)", scope: "issues" },
+            { lab: "Issues", val: issuesVal, sub: isMasterOrAdminView ? `${divisionIssuesList.length} flagged stage(s)` : `${myFlaggedIssues.length} flagged stage(s)`, ic: I.alert, color: issuesVal ? "var(--rose-ink)" : "var(--ink)", scope: "issues" },
 
     ];
 
@@ -3039,6 +3158,38 @@ const recentActivityScoped = useMemo(() => {
           ))}
         </div>
 
+<RecentlyAddedPanel products={allDivProducts || products} />
+
+        {(issues.length > 0 || (isMasterOrAdminView ? divisionIssuesList.length > 0 : myFlaggedIssues.length > 0)) && (
+          <div className="sec">
+            <div className="sec-h"><h3>Live alerts · missing, damaged & QC issues</h3><span className="hint">store reports + QC flags</span></div>
+            {issues.slice(0, 6).map((x, i) => (
+              <div className="alert" key={"store-" + i}><div className="ic">!</div>
+                <div className="tx"><b>{x.store}</b> — {x.s.missing > 0 ? `${x.s.missing} missing` : ""}{x.s.missing > 0 && x.s.damaged > 0 ? ", " : ""}{x.s.damaged > 0 ? `${x.s.damaged} damaged` : ""} · <b>{x.p.name || x.p.sku || "product"}</b> ({x.p.vendor || "—"}){x.s.notes ? ` · "${x.s.notes}"` : ""} <span className="tag">· {fmt(x.s.at)}</span></div>
+                <button className="ghost" onClick={() => { setShowQcPanel(false); go("dispatch"); }}>Resolve</button>
+              </div>
+            ))}
+            {issues.length > 6 && <div className="tag" style={{ marginTop: 4 }}>+{issues.length - 6} more in Dispatch & Stores</div>}
+            {(isMasterOrAdminView ? divisionIssuesList : myFlaggedIssues).reduce((acc, x) => {
+              const existing = acc.find(a => a.p.id === x.p.id);
+              if (existing) { existing.stageNames.push(x.stageName); if (x.type === "qc_flagged") existing.hasQc = true; }
+              else acc.push({ p: x.p, stageNames: [x.stageName], comment: x.comment, hasQc: x.type === "qc_flagged" });
+              return acc;
+            }, []).map((x, i) => (
+              <div className="alert" key={"qc-" + i} style={{ borderColor: "var(--rose)", background: "var(--rose-bg)" }}>
+                <div className="ic" style={{ background: "var(--rose-ink)" }}>{x.hasQc ? "QC" : "!"}</div>
+                <div className="tx">
+                  <b>{x.hasQc ? "QC Issues Found" : "Issue reported on stage"}</b> — <b>{x.p.name || x.p.sku || "product"}</b> ({x.p.vendor || "—"})
+                  {" · "}<span style={{ fontWeight: 600 }}>{x.stageNames.join(", ")}</span>
+                  {x.comment ? ` · "${x.comment}"` : ""}
+                  <span className="tag"> · SKU: {x.p.sku}</span>
+                </div>
+                {isMasterOrAdminView && x.hasQc && <button className="ghost" onClick={() => { setShowQcPanel(false); go("qcaudit"); }}>Review</button>}
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="sec ov-grid">
           <div className="card pad">
             <div className="sec-h" style={{ marginBottom: 6, alignItems: "center", flexWrap: "wrap", gap: 8 }}>
@@ -3189,16 +3340,7 @@ const recentActivityScoped = useMemo(() => {
               </table>
             </div>
           </div>
-          <div className="card pad">
-            <div className="sec-h" style={{ marginBottom: 10 }}><h3>Status mix</h3></div>
-            <div className="donutwrap">
-              <Donut segments={segs} centerTop={totalVal} centerBot="products" />
-              <div className="legend">
-                {segs.map((s, i) => (<div className="li" key={i}><span className="sw" style={{ background: s.color }} />{s.label}<span className="num">{s.value}</span></div>))}
-              </div>
-            </div>
           </div>
-        </div>
 
       <div className="sec ov-grid" style={!isMasterOrAdminView ? { gridTemplateColumns: "1fr" } : undefined}>
           {isMasterOrAdminView && (
@@ -3328,6 +3470,98 @@ const recentActivityScoped = useMemo(() => {
   // }
 
 
+  function playBellSound() {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AudioCtx();
+      const notes = [1318.5, 1046.5]; // bright two-tone "ding-dong" bell
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        const start = ctx.currentTime + i * 0.18;
+        gain.gain.setValueAtTime(0, start);
+        gain.gain.linearRampToValueAtTime(0.35, start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.9);
+        osc.start(start);
+        osc.stop(start + 0.9);
+      });
+      setTimeout(() => ctx.close(), 1500);
+    } catch (e) { console.warn("bell sound failed", e); }
+  }
+
+  function RecentlyAddedPanel({ products }) {
+    const [glow, setGlow] = useState(false);
+    const [open, setOpen] = useState(true);
+    const prevCountRef = useRef(null); // null = not yet initialized (first load, no sound)
+
+    const recentItems = useMemo(() => {
+      return [...products]
+        .filter(p => p.createdAt)
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .slice(0, 8);
+    }, [products]);
+
+    const addedTodayCount = useMemo(() => {
+      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+      return products.filter(p => p.createdAt && new Date(p.createdAt) >= todayStart).length;
+    }, [products]);
+
+    // Glow + bell whenever the "added today" count goes up after first load
+    useEffect(() => {
+      if (prevCountRef.current !== null && addedTodayCount > prevCountRef.current) {
+        setGlow(true);
+        setOpen(true); // auto-expand when new cards arrive
+        playBellSound();
+        const t = setTimeout(() => setGlow(false), 5000);
+        return () => clearTimeout(t);
+      }
+      prevCountRef.current = addedTodayCount;
+    }, [addedTodayCount]);
+
+    if (recentItems.length === 0) return null;
+
+    return (
+      <div className={"card" + (glow ? " new-card-alert" : "")} style={{ marginTop: 16, marginBottom: 8, overflow: "hidden" }}>
+        <div
+          onClick={() => setOpen(o => !o)}
+          className="pad"
+          style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", paddingTop: 14, paddingBottom: 14 }}
+        >
+          <span className={"chev " + (open ? "open" : "")}>▶</span>
+          <h3 style={{ margin: 0, fontSize: 15, display: "flex", alignItems: "center", gap: 8 }}>
+            🆕 Recently Added
+          </h3>
+          {addedTodayCount > 0 && (
+            <span className={"chip c-done" + (glow ? " new-card-badge" : "")}>
+              <span className="dot" />{addedTodayCount} added today
+            </span>
+          )}
+          <div className="spacer" />
+          <span className="hint">last {recentItems.length} products</span>
+        </div>
+        <div className="recent-body" style={{ maxHeight: open ? 480 : 0, opacity: open ? 1 : 0 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "0 18px 16px" }}>
+            {recentItems.map(p => (
+              <div key={p.id} className="recent-row" style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: "var(--card-2)", borderRadius: 9, border: "1px solid var(--line)" }}>
+                <span className="psku">{p.sku || "no-sku"}</span>
+                {p.name && <span style={{ fontWeight: 600, fontSize: 12.5 }}>{p.name}</span>}
+                <span className="tag">· {p.vendor || "—"}</span>
+                <div className="spacer" />
+                <span className="tag" style={{ whiteSpace: "nowrap" }}>{fmt(p.createdAt)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+
+
   function Products({ division, products, vendors, onUpsert, onStage, onStageBulk, onQC, onRemove, addVendor, allowedStages, operator, auth, assignments, teamMembers, allDivProducts, initialFilter, onFilterConsumed }) {
 
     // Build a map: sku → [stageKeys] that THIS member was specifically assigned
@@ -3381,7 +3615,14 @@ const recentActivityScoped = useMemo(() => {
       return map;
     }, [assignments, teamMembers, division, hasAssignAccess, isMasterOrAdmin, myMemberId]);
 
-    const [assignTab, setAssignTab] = useState("notassigned");
+    const [assignTab, setAssignTab] = useState(() => {
+      const isMgrOrAdmin = auth?.role === "master" || auth?.role === "admin";
+      const hasAssign = isMgrOrAdmin || (auth?.stages || "").split(",").map(s => s.trim()).includes("assign");
+      // A plain member's `products` prop is already scoped to their assigned
+      // cards only — "Not Assigned" will always be empty for them, so default
+      // to "Assigned" instead so the stage filter actually has data to work with.
+      return hasAssign ? "notassigned" : "assigned";
+    });
     const [filterMember, setFilterMember] = useState("");
     const [fSetNo, setFSetNo] = useState("");
     const [showFilters, setShowFilters] = useState(false);
@@ -3787,7 +4028,8 @@ const recentActivityScoped = useMemo(() => {
           const isFullyApproved = stagesDone && (!useQcGate || p.verdict === "Approved");
 
           if (assignTab === "completed" && !isFullyApproved) return false;
-          if (assignTab === "pending" && isFullyApproved) return false;
+          // A card with an open QC issue belongs in "Issues" only — never in "Pending".
+          if (assignTab === "pending" && (isFullyApproved || p.verdict === "Issues Found")) return false;
         }
       } else if (myMemberId) {
         const cardAssignments = assignments.filter(a =>
@@ -3806,7 +4048,7 @@ const recentActivityScoped = useMemo(() => {
             (!a.stage || a.stage === "all") ? productState(p) === "done" : p.stages?.[a.stage]?.status === "Completed"
           );
           if (assignTab === "completed" && !stagesDone) return false;
-          if (assignTab === "pending" && stagesDone) return false;
+          if (assignTab === "pending" && (stagesDone || p.verdict === "Issues Found")) return false;
         }
       }
        if (filterMember && assignTab !== "completed" && assignTab !== "pending") {
@@ -3829,26 +4071,6 @@ const recentActivityScoped = useMemo(() => {
     const totalPages = Math.max(1, Math.ceil(filtered.length / 20));
     return (
       <div>
-        {hasAssignAccess && myOwnStats.assigned > 0 && (
-          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)" }}>My own work:</span>
-            <button
-              onClick={() => { setFilterMember(myMemberId); setAssignTab("assigned"); setPage(1); }}
-              style={{ background: "var(--sky-bg)", color: "var(--sky-ink)", border: "1px solid var(--sky)", borderRadius: 999, padding: "3px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-              {myOwnStats.assigned} assigned
-            </button>
-            <button
-              onClick={() => { setFilterMember(myMemberId); setAssignTab("completed"); setPage(1); }}
-              style={{ background: "var(--sage-bg)", color: "var(--sage-ink)", border: "1px solid var(--sage)", borderRadius: 999, padding: "3px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-              ✓ {myOwnStats.completed} completed
-            </button>
-            <button
-              onClick={() => { setFilterMember(myMemberId); setAssignTab("pending"); setPage(1); }}
-              style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)", borderRadius: 999, padding: "3px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-              ⏳ {myOwnStats.pending} pending
-            </button>
-          </div>
-        )}
         {isMasterOrAdmin && managersWithReports.length > 0 && (
           <div style={{ background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 12, padding: 14, marginBottom: 14 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -4021,7 +4243,8 @@ const recentActivityScoped = useMemo(() => {
                     if (!a.stage || a.stage === "all") return productState(p) === "done";
                     return p.stages?.[a.stage]?.status === "Completed";
                   });
-                  return !(stagesDone && (!useQcGatePending || p.verdict === "Approved"));
+                  const isDone = stagesDone && (!useQcGatePending || p.verdict === "Approved");
+                  return !isDone && p.verdict !== "Issues Found";
                 }).length;
               }
               // else if (k === "pending") {
