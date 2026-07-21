@@ -362,6 +362,23 @@
     align-items: center;
     gap: 10px
   }
+  .recent-body {
+    overflow: hidden;
+    transition: max-height .25s ease, opacity .2s ease;
+  }
+  /* ---------- issue alert glow (rose) ---------- */
+  @keyframes glowPulseRose {
+    0%   { box-shadow: 0 0 0 0 rgba(216,159,159,.6); }
+    70%  { box-shadow: 0 0 0 14px rgba(216,159,159,0); }
+    100% { box-shadow: 0 0 0 0 rgba(216,159,159,0); }
+  }
+  .issue-card-alert {
+    animation: glowPulseRose 1.6s ease-out 3;
+    border: 1px solid var(--rose) !important;
+  }
+  .issue-card-badge {
+    animation: glowPulseRose 1.6s ease-out 3;
+  }
 
   .crumb {
     font-size: 11px;
@@ -2363,7 +2380,9 @@
     const [fMember, setFMember] = useState("");
     const [dashFromDate, setDashFromDate] = useState("");
     const [dashToDate, setDashToDate] = useState("");  
-    const todayStr = new Date().toISOString().split("T")[0];   
+    const todayStr = new Date().toISOString().split("T")[0];  
+    const [issueGlow, setIssueGlow] = useState(false);
+    const prevIssuesCountRef = useRef(null); // null = first load, skip the sound 
 
     // const [pipelineStats, setPipelineStats] = useState(null);
     const myMemberId = useMemo(() => {
@@ -2930,6 +2949,15 @@ const recentActivityScoped = useMemo(() => {
       ? divisionIssueCardIds.size
       : myIssueCardIds.size;
     const liveAlertCount = issues.length + (isMasterOrAdminView ? divisionIssuesList.length : myFlaggedIssues.length);
+    useEffect(() => {
+      if (prevIssuesCountRef.current !== null && issuesVal > prevIssuesCountRef.current) {
+        setIssueGlow(true);
+        playIssueSound();
+        const t = setTimeout(() => setIssueGlow(false), 5000);
+        return () => clearTimeout(t);
+      }
+      prevIssuesCountRef.current = issuesVal;
+    }, [issuesVal]);
 
     const kpis = [
       { lab: "Total Products", val: totalVal, sub: division, ic: I.box, scope: "all" },
@@ -3117,7 +3145,7 @@ const recentActivityScoped = useMemo(() => {
         <div className="grid kpis">
           {kpis.map((k, i) => (
             <div
-              className="card kpi"
+              className={"card kpi" + (k.scope === "issues" && issueGlow ? " issue-card-alert" : "")}
               key={i}
               onClick={() => {
                 if (k.scope === "all") {
@@ -3139,7 +3167,7 @@ const recentActivityScoped = useMemo(() => {
                         
               <div className="kico">{k.ic({})}</div>
               <div className="lab">{k.lab}</div>
-              <div className="val" style={{ color: k.color || "var(--ink)" }}>{k.val}</div>
+              <div className={"val" + (k.scope === "issues" && issueGlow ? " issue-card-badge" : "")} style={{ color: k.color || "var(--ink)" }}>{k.val}</div>
               <div className="sub">{k.sub}</div>
               <button
                 onClick={(e) => { e.stopPropagation(); downloadKpiExcel(k.scope, k.lab.replace(/\s+/g, "_")); }}
@@ -3158,37 +3186,7 @@ const recentActivityScoped = useMemo(() => {
           ))}
         </div>
 
-<RecentlyAddedPanel products={allDivProducts || products} />
-
-        {(issues.length > 0 || (isMasterOrAdminView ? divisionIssuesList.length > 0 : myFlaggedIssues.length > 0)) && (
-          <div className="sec">
-            <div className="sec-h"><h3>Live alerts · missing, damaged & QC issues</h3><span className="hint">store reports + QC flags</span></div>
-            {issues.slice(0, 6).map((x, i) => (
-              <div className="alert" key={"store-" + i}><div className="ic">!</div>
-                <div className="tx"><b>{x.store}</b> — {x.s.missing > 0 ? `${x.s.missing} missing` : ""}{x.s.missing > 0 && x.s.damaged > 0 ? ", " : ""}{x.s.damaged > 0 ? `${x.s.damaged} damaged` : ""} · <b>{x.p.name || x.p.sku || "product"}</b> ({x.p.vendor || "—"}){x.s.notes ? ` · "${x.s.notes}"` : ""} <span className="tag">· {fmt(x.s.at)}</span></div>
-                <button className="ghost" onClick={() => { setShowQcPanel(false); go("dispatch"); }}>Resolve</button>
-              </div>
-            ))}
-            {issues.length > 6 && <div className="tag" style={{ marginTop: 4 }}>+{issues.length - 6} more in Dispatch & Stores</div>}
-            {(isMasterOrAdminView ? divisionIssuesList : myFlaggedIssues).reduce((acc, x) => {
-              const existing = acc.find(a => a.p.id === x.p.id);
-              if (existing) { existing.stageNames.push(x.stageName); if (x.type === "qc_flagged") existing.hasQc = true; }
-              else acc.push({ p: x.p, stageNames: [x.stageName], comment: x.comment, hasQc: x.type === "qc_flagged" });
-              return acc;
-            }, []).map((x, i) => (
-              <div className="alert" key={"qc-" + i} style={{ borderColor: "var(--rose)", background: "var(--rose-bg)" }}>
-                <div className="ic" style={{ background: "var(--rose-ink)" }}>{x.hasQc ? "QC" : "!"}</div>
-                <div className="tx">
-                  <b>{x.hasQc ? "QC Issues Found" : "Issue reported on stage"}</b> — <b>{x.p.name || x.p.sku || "product"}</b> ({x.p.vendor || "—"})
-                  {" · "}<span style={{ fontWeight: 600 }}>{x.stageNames.join(", ")}</span>
-                  {x.comment ? ` · "${x.comment}"` : ""}
-                  <span className="tag"> · SKU: {x.p.sku}</span>
-                </div>
-                {isMasterOrAdminView && x.hasQc && <button className="ghost" onClick={() => { setShowQcPanel(false); go("qcaudit"); }}>Review</button>}
-              </div>
-            ))}
-          </div>
-        )}
+        <RecentlyAddedPanel products={allDivProducts || products} />
 
         <div className="sec ov-grid">
           <div className="card pad">
@@ -3470,11 +3468,12 @@ const recentActivityScoped = useMemo(() => {
   // }
 
 
+  // Soothing ascending chime — used when a new card is added (~2.6s)
   function playBellSound() {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       const ctx = new AudioCtx();
-      const notes = [1318.5, 1046.5]; // bright two-tone "ding-dong" bell
+      const notes = [523.25, 659.25, 783.99, 1046.5]; // C5 E5 G5 C6
       notes.forEach((freq, i) => {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
@@ -3482,15 +3481,39 @@ const recentActivityScoped = useMemo(() => {
         osc.frequency.value = freq;
         osc.connect(gain);
         gain.connect(ctx.destination);
-        const start = ctx.currentTime + i * 0.18;
+        const start = ctx.currentTime + i * 0.22;
         gain.gain.setValueAtTime(0, start);
-        gain.gain.linearRampToValueAtTime(0.35, start + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.9);
+        gain.gain.linearRampToValueAtTime(0.3, start + 0.05);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 1.4);
         osc.start(start);
-        osc.stop(start + 0.9);
+        osc.stop(start + 1.4);
       });
-      setTimeout(() => ctx.close(), 1500);
+      setTimeout(() => ctx.close(), 2800);
     } catch (e) { console.warn("bell sound failed", e); }
+  }
+
+  // Distinct, gentle-but-alerting descending tone — used when a NEW issue appears (~2.6s)
+  function playIssueSound() {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AudioCtx();
+      const notes = [440, 349.23, 293.66]; // A4 -> F4 -> D4, descending
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "triangle";
+        osc.frequency.value = freq;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        const start = ctx.currentTime + i * 0.32;
+        gain.gain.setValueAtTime(0, start);
+        gain.gain.linearRampToValueAtTime(0.32, start + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.85);
+        osc.start(start);
+        osc.stop(start + 0.85);
+      });
+      setTimeout(() => ctx.close(), 2800);
+    } catch (e) { console.warn("issue sound failed", e); }
   }
 
   function RecentlyAddedPanel({ products }) {
