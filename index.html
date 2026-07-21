@@ -2809,6 +2809,8 @@ const recentActivityScoped = useMemo(() => {
     const issuesVal = isMasterOrAdminView
       ? divisionIssuesList.length
       : myFlaggedIssues.length;
+    const liveAlertCount = issues.length + (isMasterOrAdminView ? divisionIssuesList.length : myFlaggedIssues.length);
+  
 
     const kpis = [
       { lab: "Total Products", val: totalVal, sub: division, ic: I.box, scope: "all" },
@@ -2820,6 +2822,7 @@ const recentActivityScoped = useMemo(() => {
 
     const [exporting, setExporting] = useState("");
     const [showDateFilter, setShowDateFilter] = useState(false);
+    const [showQcPanel, setShowQcPanel] = useState(false);
 
     const downloadKpiExcel = async (scope, label) => {
       setExporting(scope);
@@ -2864,42 +2867,114 @@ const recentActivityScoped = useMemo(() => {
     //     <div className="grid kpis">
         return (
       <div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginBottom: 10 }}>
 
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10, position: "relative" }}>
-          <button
-            onClick={() => setShowDateFilter(v => !v)}
-            style={{
-              display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600,
-              padding: "7px 12px", borderRadius: 9, cursor: "pointer",
-              border: `1px solid ${(dashFromDate || dashToDate) ? "var(--sky)" : "var(--line2)"}`,
-              background: (dashFromDate || dashToDate) ? "var(--sky-bg)" : "var(--card)",
-              color: (dashFromDate || dashToDate) ? "var(--sky-ink)" : "var(--muted)",
-            }}
-          >
-            📅 Activity by date{(dashFromDate || dashToDate) ? ` · ${dashboardActivity.length}` : ""}
-          </button>
+          {/* NEW: QC issues button + dropdown */}
+          <div style={{ position: "relative" }}>
+            <button
+              onClick={() => setShowQcPanel(v => !v)}
+              style={{
+                display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600,
+                padding: "7px 12px", borderRadius: 9, cursor: "pointer",
+                border: `1px solid ${liveAlertCount > 0 ? "var(--rose)" : "var(--line2)"}`,
+                background: liveAlertCount > 0 ? "var(--rose-bg)" : "var(--card)",
+                color: liveAlertCount > 0 ? "var(--rose-ink)" : "var(--muted)",
+              }}
+            >
+              ⚠ QC issues{liveAlertCount > 0 ? ` · ${liveAlertCount}` : ""}
+            </button>
 
-          {showDateFilter && (
-            <div className="card pad" style={{
-              position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 20,
-              display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", boxShadow: "var(--shadow-lg)",
-            }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>From</label>
-              <input type="date" value={dashFromDate} onChange={e => setDashFromDate(e.target.value)} max={todayStr}
-                style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "6px 9px", background: "var(--card)", fontSize: 12.5 }} />
-              <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>To</label>
-              <input type="date" value={dashToDate} onChange={e => setDashToDate(e.target.value)}
-                style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "6px 9px", background: "var(--card)", fontSize: 12.5 }} />
-              {(dashFromDate || dashToDate) && (
-                <button onClick={() => { setDashFromDate(""); setDashToDate(""); }}
-                  style={{ fontSize: 11, fontWeight: 600, color: "var(--rose-ink)", border: "1px solid var(--rose)", background: "var(--rose-bg)", borderRadius: 8, padding: "5px 10px" }}>
-                  ✕ Clear
+            {showQcPanel && (
+              <div className="card pad" style={{
+                position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 30,
+                width: 480, maxHeight: 440, overflowY: "auto", boxShadow: "var(--shadow-lg)",
+              }}>
+                <button
+                  onClick={() => setShowQcPanel(false)}
+                  style={{
+                    position: "absolute", top: 10, right: 10, zIndex: 31,
+                    width: 24, height: 24, borderRadius: 999,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    background: "var(--card-2)", border: "1px solid var(--line2)",
+                    color: "var(--muted)", fontSize: 13, fontWeight: 700, cursor: "pointer",
+                  }}
+                >
+                  ✕
                 </button>
-              )}
-              <span style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>{dashboardActivity.length} action(s) in range</span>
-            </div>
-          )}
+
+                {liveAlertCount === 0 ? (
+                  <div style={{ fontSize: 12.5, color: "var(--faint)" }}>No live alerts right now.</div>
+                ) : (
+                  <>
+                    <div className="sec-h"><h3>Live alerts · missing, damaged & QC issues</h3><span className="hint">store reports + QC flags</span></div>
+                    {issues.slice(0, 6).map((x, i) => (
+                      <div className="alert" key={"store-" + i}><div className="ic">!</div>
+                        <div className="tx"><b>{x.store}</b> — {x.s.missing > 0 ? `${x.s.missing} missing` : ""}{x.s.missing > 0 && x.s.damaged > 0 ? ", " : ""}{x.s.damaged > 0 ? `${x.s.damaged} damaged` : ""} · <b>{x.p.name || x.p.sku || "product"}</b> ({x.p.vendor || "—"}){x.s.notes ? ` · "${x.s.notes}"` : ""} <span className="tag">· {fmt(x.s.at)}</span></div>
+                        <button className="ghost" onClick={() => { setShowQcPanel(false); go("dispatch"); }}>Resolve</button>
+                      </div>
+                    ))}
+                    {issues.length > 6 && <div className="tag" style={{ marginTop: 4 }}>+{issues.length - 6} more in Dispatch & Stores</div>}
+                    {(isMasterOrAdminView ? divisionIssuesList : myFlaggedIssues).reduce((acc, x) => {
+                      const existing = acc.find(a => a.p.id === x.p.id);
+                      if (existing) { existing.stageNames.push(x.stageName); if (x.type === "qc_flagged") existing.hasQc = true; }
+                      else acc.push({ p: x.p, stageNames: [x.stageName], comment: x.comment, hasQc: x.type === "qc_flagged" });
+                      return acc;
+                    }, []).map((x, i) => (
+                      <div className="alert" key={"qc-" + i} style={{ borderColor: "var(--rose)", background: "var(--rose-bg)" }}>
+                        <div className="ic" style={{ background: "var(--rose-ink)" }}>{x.hasQc ? "QC" : "!"}</div>
+                        <div className="tx">
+                          <b>{x.hasQc ? "QC Issues Found" : "Issue reported on stage"}</b> — <b>{x.p.name || x.p.sku || "product"}</b> ({x.p.vendor || "—"})
+                          {" · "}<span style={{ fontWeight: 600 }}>{x.stageNames.join(", ")}</span>
+                          {x.comment ? ` · "${x.comment}"` : ""}
+                          <span className="tag"> · SKU: {x.p.sku}</span>
+                        </div>
+                        {isMasterOrAdminView && x.hasQc && <button className="ghost" onClick={() => { setShowQcPanel(false); go("qcaudit"); }}>Review</button>}
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Existing: Activity by date button + dropdown (unchanged) */}
+          <div style={{ position: "relative" }}>
+            <button
+              onClick={() => setShowDateFilter(v => !v)}
+              style={{
+                display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600,
+                padding: "7px 12px", borderRadius: 9, cursor: "pointer",
+                border: `1px solid ${(dashFromDate || dashToDate) ? "var(--sky)" : "var(--line2)"}`,
+                background: (dashFromDate || dashToDate) ? "var(--sky-bg)" : "var(--card)",
+                color: (dashFromDate || dashToDate) ? "var(--sky-ink)" : "var(--muted)",
+              }}
+            >
+              📅 Activity by date{(dashFromDate || dashToDate) ? ` · ${dashboardActivity.length}` : ""}
+            </button>
+
+            {showDateFilter && (
+              <div className="card pad" style={{
+                position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 20,
+                display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", boxShadow: "var(--shadow-lg)",
+              }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>From</label>
+                <input type="date" value={dashFromDate} onChange={e => setDashFromDate(e.target.value)} max={todayStr}
+                  style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "6px 9px", background: "var(--card)", fontSize: 12.5 }} />
+                <label style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>To</label>
+                <input type="date" value={dashToDate} onChange={e => setDashToDate(e.target.value)}
+                  style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "6px 9px", background: "var(--card)", fontSize: 12.5 }} />
+                {(dashFromDate || dashToDate) && (
+                  <button onClick={() => { setDashFromDate(""); setDashToDate(""); }}
+                    style={{ fontSize: 11, fontWeight: 600, color: "var(--rose-ink)", border: "1px solid var(--rose)", background: "var(--rose-bg)", borderRadius: 8, padding: "5px 10px" }}>
+                    ✕ Clear
+                  </button>
+                )}
+                <span style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>{dashboardActivity.length} action(s) in range</span>
+              </div>
+            )}
+          </div>
         </div>
+
 
         {(dashFromDate && dashToDate) && (
           <div className="card pad" style={{ marginBottom: 16 }}>
@@ -2963,39 +3038,6 @@ const recentActivityScoped = useMemo(() => {
             </div>
           ))}
         </div>
-
-      
-
-          {(issues.length > 0 || (isMasterOrAdminView ? divisionIssuesList.length > 0 : myFlaggedIssues.length > 0)) && (
-
-              <div className="sec">
-                <div className="sec-h"><h3>Live alerts · missing, damaged & QC issues</h3><span className="hint">store reports + QC flags</span></div>
-                {issues.slice(0, 6).map((x, i) => (
-                  <div className="alert" key={"store-" + i}><div className="ic">!</div>
-                    <div className="tx"><b>{x.store}</b> — {x.s.missing > 0 ? `${x.s.missing} missing` : ""}{x.s.missing > 0 && x.s.damaged > 0 ? ", " : ""}{x.s.damaged > 0 ? `${x.s.damaged} damaged` : ""} · <b>{x.p.name || x.p.sku || "product"}</b> ({x.p.vendor || "—"}){x.s.notes ? ` · "${x.s.notes}"` : ""} <span className="tag">· {fmt(x.s.at)}</span></div>
-                    <button className="ghost" onClick={() => go("dispatch")}>Resolve</button>
-                  </div>
-                ))}
-                {issues.length > 6 && <div className="tag" style={{ marginTop: 4 }}>+{issues.length - 6} more in Dispatch & Stores</div>}
-                {(isMasterOrAdminView ? divisionIssuesList : myFlaggedIssues).reduce((acc, x) => {
-                  const existing = acc.find(a => a.p.id === x.p.id);
-                  if (existing) { existing.stageNames.push(x.stageName); if (x.type === "qc_flagged") existing.hasQc = true; }
-                  else acc.push({ p: x.p, stageNames: [x.stageName], comment: x.comment, hasQc: x.type === "qc_flagged" });
-                  return acc;
-                }, []).map((x, i) => (
-                  <div className="alert" key={"qc-" + i} style={{ borderColor: "var(--rose)", background: "var(--rose-bg)" }}>
-                    <div className="ic" style={{ background: "var(--rose-ink)" }}>{x.hasQc ? "QC" : "!"}</div>
-                    <div className="tx">
-                      <b>{x.hasQc ? "QC Issues Found" : "Issue reported on stage"}</b> — <b>{x.p.name || x.p.sku || "product"}</b> ({x.p.vendor || "—"})
-                      {" · "}<span style={{ fontWeight: 600 }}>{x.stageNames.join(", ")}</span>
-                      {x.comment ? ` · "${x.comment}"` : ""}
-                      <span className="tag"> · SKU: {x.p.sku}</span>
-                    </div>
-                    {isMasterOrAdminView && x.hasQc && <button className="ghost" onClick={() => go("qcaudit")}>Review</button>}
-                  </div>
-                ))}
-              </div>
-            )}
 
         <div className="sec ov-grid">
           <div className="card pad">
@@ -3844,38 +3886,6 @@ const recentActivityScoped = useMemo(() => {
                     ))}
                   </div>
                 )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {!isMasterOrAdmin && hasAssignAccess && traceStats && (
-          <div style={{ background: "var(--card)", border: "1px solid var(--sky)", borderRadius: 12, padding: 14, marginBottom: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "var(--sky-ink)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 12 }}>
-              Your team's work
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-              <span style={{ background: "var(--sky-bg)", color: "var(--sky-ink)", border: "1px solid var(--sky)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>{traceStats.totalAssigned} total assigned to you</span>
-              <span style={{ background: "var(--sage-bg)", color: "var(--sage-ink)", border: "1px solid var(--sage)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>✓ {traceStats.completed} completed</span>
-              <span style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>⏳ {traceStats.pending} pending</span>
-              <span style={{ background: "var(--lav-bg)", color: "var(--lav-ink)", border: "1px solid var(--lav)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>↳ {traceStats.pushedTotal} pushed to your team</span>
-              <span style={{ background: "var(--card-2)", color: "var(--muted)", border: "1px solid var(--line2)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>◦ {traceStats.keptByManager} kept personally</span>
-            </div>
-            {traceStats.reports.length === 0 ? (
-              <div style={{ fontSize: 12.5, color: "var(--faint)" }}>You have no one reporting to you yet — everything above is your own work.</div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {traceStats.reports.map(r => (
-                  <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "var(--card-2)", border: "1px solid var(--line)", borderRadius: 9 }}>
-                    <b style={{ fontSize: 13, minWidth: 110 }}>{r.name}</b>
-                    <span style={{ fontSize: 12, color: "var(--muted)" }}>{r.assigned} assigned</span>
-                    <span style={{ fontSize: 12, color: "var(--sage-ink)", fontWeight: 700 }}>✓ {r.completed}</span>
-                    <span style={{ fontSize: 12, color: "var(--peach-ink)", fontWeight: 700 }}>⏳ {r.pending}</span>
-                    <div style={{ flex: 1, height: 6, borderRadius: 4, background: "var(--line2)", overflow: "hidden", maxWidth: 160 }}>
-                      <div style={{ width: `${r.assigned ? (r.completed / r.assigned) * 100 : 0}%`, height: "100%", background: "var(--sage)" }} />
-                    </div>
-                  </div>
-                ))}
               </div>
             )}
           </div>
