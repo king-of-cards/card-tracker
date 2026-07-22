@@ -3207,11 +3207,11 @@ const recentActivityScoped = useMemo(() => {
                 } else if (k.scope === "completed") {
                   goProducts && goProducts({ assignTab: "completed" });
                 } else if (k.scope === "issues") {
-                  if (isMasterOrAdminView) {
-                    goIssues && goIssues();
-                  } else {
-                    goProducts && goProducts({ assignTab: "assigned", fQcVerdict: "issues" });
-                  }
+                  // Route everyone through the same Products view with the
+                  // same card-level "issues" filter, so the number on this
+                  // KPI always matches what the list actually shows —
+                  // no separate goIssues() screen with its own counting logic.
+                  goProducts && goProducts({ assignTab: "assigned", fQcVerdict: "issues" });
                 }
               }}
               style={{ cursor: "pointer" }}
@@ -4065,10 +4065,44 @@ const recentActivityScoped = useMemo(() => {
       });
     };
 
+    // Card-level (not stage-level) counts for master/admin's Assigned/Completed/
+    // Pending tabs. dbAllMemberStats sums assignment ROWS — one row per stage per
+    // SKU — so a card split across multiple stages/members gets counted multiple
+    // times there. This recomputes by distinct SKU instead, matching exactly what
+    // `filtered` shows when that tab is selected.
+    const masterCardCounts = useMemo(() => {
+      if (!isMasterOrAdmin) return null;
+      const pool = allDivProducts || products;
+      let assignedCount = 0, completedCount = 0, pendingCount = 0;
+      pool.forEach(p => {
+        const key = p.sku.trim().toLowerCase();
+        if (!skuAssignedTo[key]) return;
+        assignedCount++;
+        const cardAssignments = assignments.filter(
+          a => a.division === division && a.managerId === "master" &&
+            a.sku.trim().toLowerCase() === key
+        );
+        if (cardAssignments.length === 0) return;
+        const specificStages = cardAssignments.filter(a => a.stage && a.stage !== "all");
+        const stagesToCheck = specificStages.length > 0 ? specificStages : cardAssignments;
+        const stagesDone = stagesToCheck.every(a => {
+          const stageKey = a.stage;
+          if (!stageKey || stageKey === "all") return productState(p) === "done";
+          return p.stages?.[stageKey]?.status === "Completed";
+        });
+        const isFullyApproved = stagesDone && p.verdict === "Approved";
+        if (cardHasOpenIssue(p)) return; // issues bucket, excluded from both
+        if (isFullyApproved) completedCount++; else pendingCount++;
+      });
+      return { assigned: assignedCount, completed: completedCount, pending: pendingCount };
+    }, [isMasterOrAdmin, allDivProducts, products, skuAssignedTo, assignments, division]);
+
     const filtered = sourceProducts.filter(p => {
       const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase();
       if (!t.includes(q.toLowerCase())) return false; 
-      if (fStatus && productState(p) !== fStatus) return false;
+      if (fStatus === "issue") {
+        if (!cardHasOpenIssue(p)) return false;
+      } else if (fStatus && productState(p) !== fStatus) return false;
       if (fEventType && (fEventFrom || fEventTo)) {
         const inRange = (iso) => {
           if (!iso) return false;
@@ -4118,8 +4152,12 @@ const recentActivityScoped = useMemo(() => {
       if (fSetNo && (p.set_no || "").trim().toLowerCase() !== fSetNo.trim().toLowerCase()) return false;
       if (fVendor && (p.vendor || "").trim() !== fVendor) return false;
       if (fStage && fStageStatus) {
-        const stageStatus = p.stages?.[fStage]?.status || "Not Started";
-        if (stageStatus !== fStageStatus) return false;
+        const stg = p.stages?.[fStage];
+        const stageStatus = stg?.status || "Not Started";
+        if (fStageStatus === "Issue") {
+          const isQcFlagged = stg?.status === "In Progress" && String(stg?.comments || "").startsWith("QC flagged:");
+          if (stageStatus !== "Issue" && !isQcFlagged) return false;
+        } else if (stageStatus !== fStageStatus) return false;
       }
       if (fHasIssue && !STAGES.some(s => s.k !== "finalqc" && p.stages[s.k]?.status === "Issue")) return false;
       if (fStalledDays) {
@@ -4356,6 +4394,9 @@ const recentActivityScoped = useMemo(() => {
                 } else if (!isMasterOrAdmin && dbMemberStats) {
                   const map = { assigned: "total_assigned", completed: "completed", pending: "pending" };
                   count = Number(dbMemberStats[map[k]]);
+                } else if (isMasterOrAdmin && masterCardCounts) {
+                  // Card-level, not the stage-row sum from dbAllMemberStats.
+                  count = masterCardCounts[k];
                 } else {
                   count = (dbAllMemberStats || []).reduce((s, m) => s + m[field], 0);
                 }
@@ -4398,10 +4439,24 @@ const recentActivityScoped = useMemo(() => {
                 const chip = (status, label, count, color, bg) => (
                   <button
                     key={status}
-                    onClick={() => { setFStage(s.k); setFStageStatus(status); setPage(1); }}
+                    onClick={() => {
+                      if (status === "Issue") {
+                        // "Issue" chip → jump straight to QC-flagged cards,
+                        // not a raw stage-status match.
+                        setFQcVerdict("issues");
+                        setFStage(""); setFStageStatus("");
+                        if (assignTab === "completed" || assignTab === "pending") {
+                          setAssignTab("assigned");
+                        }
+                      } else {
+                        setFQcVerdict("");
+                        setFStage(s.k); setFStageStatus(status);
+                      }
+                      setPage(1);
+                    }}
                     style={{
-                      background: (fStage === s.k && fStageStatus === status) ? color : bg,
-                      color: (fStage === s.k && fStageStatus === status) ? "#fff" : color,
+                      background: (status === "Issue" ? fQcVerdict === "issues" : (fStage === s.k && fStageStatus === status)) ? color : bg,
+                      color: (status === "Issue" ? fQcVerdict === "issues" : (fStage === s.k && fStageStatus === status)) ? "#fff" : color,
                       border: `1px solid ${color}`, borderRadius: 999, padding: "4px 12px",
                       fontSize: 12, fontWeight: 700, cursor: "pointer"
                     }}
@@ -4475,19 +4530,28 @@ const recentActivityScoped = useMemo(() => {
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 6 }}>Card status</div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {[
-                  ["", "All"],
-                  ["issue", "⚠ With issues"],
-                  ["prog", "… In production"],
-                  ["none", "○ Not started"],
-                ].map(([k, label]) => (
-                  <button key={k || "all"} onClick={() => { setFStatus(k); setPage(1); }} style={{
-                    padding: "7px 14px", borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: "pointer",
-                    background: fStatus === k ? "var(--ink)" : "var(--card-2)",
-                    color: fStatus === k ? "#fff" : "var(--ink)",
-                    border: `1px solid ${fStatus === k ? "var(--ink)" : "var(--line2)"}`,
-                  }}>{label}</button>
-                ))}
+                {(() => {
+                  // Card-level counts (one count per SKU, not per stage) —
+                  // "issue" always uses cardHasOpenIssue so it matches the
+                  // Issue chips/QC-verdict filter elsewhere on this page.
+                  const statusCounts = { "": sourceProducts.length };
+                  statusCounts.issue = sourceProducts.filter(p => cardHasOpenIssue(p)).length;
+                  statusCounts.prog = sourceProducts.filter(p => !cardHasOpenIssue(p) && productState(p) === "prog").length;
+                  statusCounts.none = sourceProducts.filter(p => !cardHasOpenIssue(p) && productState(p) === "none").length;
+                  return [
+                    ["", "All"],
+                    ["issue", "⚠ With issues"],
+                    ["prog", "… In production"],
+                    ["none", "○ Not started"],
+                  ].map(([k, label]) => (
+                    <button key={k || "all"} onClick={() => { setFStatus(k); setPage(1); }} style={{
+                      padding: "7px 14px", borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                      background: fStatus === k ? "var(--ink)" : "var(--card-2)",
+                      color: fStatus === k ? "#fff" : "var(--ink)",
+                      border: `1px solid ${fStatus === k ? "var(--ink)" : "var(--line2)"}`,
+                    }}>{label} <span style={{ opacity: .7, marginLeft: 4 }}>{statusCounts[k]}</span></button>
+                  ));
+                })()}
               </div>
             </div>
 
