@@ -753,9 +753,6 @@ app.get("/api/memberStats", async (req, res) => {
         SELECT sku FROM member_skus
         WHERE sku NOT IN (SELECT sku FROM pushed_skus)
       ),
-      -- Card-level completion: for every card this member is assigned on
-      -- (regardless of who assigned it), compare how many stages they own
-      -- on that card vs how many of those stages are Completed.
       target_assignments AS (
         SELECT DISTINCT p.id AS product_id, a.stage AS assigned_stage
         FROM assignments a
@@ -766,7 +763,11 @@ app.get("/api/memberStats", async (req, res) => {
         SELECT
           ta.product_id,
           COUNT(*) AS stages_owned,
-          COUNT(*) FILTER (WHERE se.status = 'Completed') AS stages_completed
+          COUNT(*) FILTER (WHERE se.status = 'Completed') AS stages_completed,
+          bool_or(
+            se.status = 'Issue'
+            OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
+          ) AS has_open_issue
         FROM target_assignments ta
         JOIN stage_entries se
           ON se.product_id = ta.product_id
@@ -777,8 +778,9 @@ app.get("/api/memberStats", async (req, res) => {
         (SELECT COUNT(*) FROM member_skus) AS total_assigned,
         (SELECT COUNT(*) FROM pushed_skus) AS pushed_to_team,
         (SELECT COUNT(*) FROM kept_skus)   AS kept_by_manager,
-        (SELECT COUNT(*) FROM card_level WHERE stages_completed = stages_owned) AS completed,
-        (SELECT COUNT(*) FROM card_level WHERE stages_completed < stages_owned) AS pending
+        (SELECT COUNT(*) FROM card_level WHERE stages_completed = stages_owned AND NOT has_open_issue) AS completed,
+        (SELECT COUNT(*) FROM card_level WHERE stages_completed < stages_owned AND NOT has_open_issue) AS pending,
+        (SELECT COUNT(*) FROM card_level WHERE has_open_issue) AS issues
     `, [memberId, division]);
 
     res.json({ ok: true, ...rows[0] });
@@ -805,7 +807,11 @@ app.get("/api/allMemberStats", async (req, res) => {
           ta.member_id,
           ta.product_id,
           COUNT(*) AS stages_owned,
-          COUNT(*) FILTER (WHERE se.status = 'Completed') AS stages_completed
+          COUNT(*) FILTER (WHERE se.status = 'Completed') AS stages_completed,
+          bool_or(
+            se.status = 'Issue'
+            OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
+          ) AS has_open_issue
         FROM target_assignments ta
         JOIN stage_entries se
           ON se.product_id = ta.product_id
@@ -816,8 +822,9 @@ app.get("/api/allMemberStats", async (req, res) => {
         u.id AS member_id,
         u.name AS member_name,
         COUNT(cl.product_id) AS total_assigned,
-        COUNT(*) FILTER (WHERE cl.stages_completed = cl.stages_owned) AS completed,
-        COUNT(*) FILTER (WHERE cl.stages_completed < cl.stages_owned) AS pending
+        COUNT(*) FILTER (WHERE cl.stages_completed = cl.stages_owned AND NOT cl.has_open_issue) AS completed,
+        COUNT(*) FILTER (WHERE cl.stages_completed < cl.stages_owned AND NOT cl.has_open_issue) AS pending,
+        COUNT(*) FILTER (WHERE cl.has_open_issue) AS issues
       FROM card_level cl
       JOIN users u ON u.id = cl.member_id
       GROUP BY u.id, u.name
@@ -832,6 +839,7 @@ app.get("/api/allMemberStats", async (req, res) => {
         total: Number(r.total_assigned),
         completed: Number(r.completed),
         pending: Number(r.pending),
+        issues: Number(r.issues),
       }))
     });
   } catch (e) {
@@ -839,7 +847,6 @@ app.get("/api/allMemberStats", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-
 
 
 
@@ -864,9 +871,14 @@ app.get("/api/pipelineStats", async (req, res) => {
       SELECT
         se.stage_key,
         COUNT(*) FILTER (WHERE se.status = 'Not Started') as not_started,
-        COUNT(*) FILTER (WHERE se.status = 'In Progress') as in_progress,
+        COUNT(*) FILTER (
+          WHERE se.status = 'In Progress' AND se.comments NOT LIKE 'QC flagged:%'
+        ) as in_progress,
         COUNT(*) FILTER (WHERE se.status = 'Completed') as completed,
-        COUNT(*) FILTER (WHERE se.status = 'Issue') as issue
+        COUNT(*) FILTER (
+          WHERE se.status = 'Issue'
+             OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
+        ) as issue
       FROM member_skus ms
       JOIN stage_entries se ON se.product_id = ms.product_id
         AND se.stage_key = ms.assigned_stage
