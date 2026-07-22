@@ -4097,6 +4097,50 @@ const recentActivityScoped = useMemo(() => {
       return { assigned: assignedCount, completed: completedCount, pending: pendingCount };
     }, [isMasterOrAdmin, allDivProducts, products, skuAssignedTo, assignments, division]);
 
+    // Per-stage breakdown for whichever team member is picked in the filter
+    // dropdown — "how many of THIS member's cards are done/pending/issue on
+    // each stage they're assigned to". Mirrors Overview's selectedMemberBreakdown
+    // so managers get the same detail here in Products & Pipeline.
+    const selectedMemberStageBreakdown = useMemo(() => {
+      if (!filterMember) return null;
+      const member = teamMembers?.find(m => m.id === filterMember);
+      if (!member) return null;
+      const pool = allDivProducts || products;
+
+      // sku -> Set of stage keys this member is assigned
+      const skuStageMap = {};
+      assignments
+        .filter(a => a.memberId === filterMember && a.division === division)
+        .forEach(a => {
+          const key = (a.sku || "").trim().toLowerCase();
+          const stageKey = a.stage && a.stage !== "all" ? a.stage : null;
+          if (!skuStageMap[key]) skuStageMap[key] = new Set();
+          if (stageKey) skuStageMap[key].add(stageKey);
+        });
+
+      const assignedStageKeys = [...new Set(Object.values(skuStageMap).flatMap(set => [...set]))];
+
+      const perStage = assignedStageKeys.map(stageKey => {
+        let completed = 0, inProgress = 0, issue = 0, notStarted = 0;
+        Object.entries(skuStageMap).forEach(([sku, stages]) => {
+          if (!stages.has(stageKey)) return;
+          const prod = pool.find(p => p.sku.trim().toLowerCase() === sku);
+          if (!prod) return;
+          const stg = prod.stages?.[stageKey];
+          const status = stg?.status || "Not Started";
+          const isQcFlagged = status === "In Progress" && String(stg?.comments || "").startsWith("QC flagged:");
+          if (status === "Completed") completed++;
+          else if (status === "Issue" || isQcFlagged) issue++;
+          else if (status === "In Progress") inProgress++;
+          else notStarted++;
+        });
+        const s = STAGES.find(x => x.k === stageKey);
+        return { key: stageKey, name: s?.n || stageKey, completed, inProgress, issue, notStarted };
+      });
+
+      return { memberName: member.name, perStage };
+    }, [filterMember, teamMembers, assignments, division, allDivProducts, products]);
+
     const filtered = sourceProducts.filter(p => {
       const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase();
       if (!t.includes(q.toLowerCase())) return false; 
@@ -4521,6 +4565,24 @@ const recentActivityScoped = useMemo(() => {
                 </div>
               );
             })()}
+          </div>
+        )}
+        {filterMember && selectedMemberStageBreakdown && selectedMemberStageBreakdown.perStage.length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".5px", marginBottom: 8 }}>
+              {selectedMemberStageBreakdown.memberName}'s stages — done / pending / issue
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {selectedMemberStageBreakdown.perStage.map(s => (
+                <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 10, padding: "10px 14px" }}>
+                  <b style={{ fontSize: 13, minWidth: 140 }}>{s.name}</b>
+                  <span style={{ background: "#F0EEE8", color: "#8C887E", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>○ Not Started: {s.notStarted}</span>
+                  <span style={{ background: "var(--sky-bg)", color: "var(--sky-ink)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>… In Progress: {s.inProgress}</span>
+                  <span style={{ background: "var(--sage-bg)", color: "var(--sage-ink)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>✓ Completed: {s.completed}</span>
+                  <span style={{ background: "var(--rose-bg)", color: "var(--rose-ink)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>⚠ Issue: {s.issue}</span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
         {showFilters && (
