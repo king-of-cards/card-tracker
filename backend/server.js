@@ -25,7 +25,7 @@ pool.on('error', (err) => {
 });
 
 const STAGE_KEYS = [
-  "barcoding", "content", "photography", "videography", "dimensions",
+  "barcoding", "content", "photography", "photoedit", "videography", "dimensions",
   "videoedit", "images", "backend", "website", "scan", "qc", "finalqc",
 ];
 const STORES = [
@@ -95,7 +95,7 @@ async function hydrateProducts(client, productRows) {
     };
   });
 
-  return productRows.map(p => {
+ return productRows.map(p => {
     const stages = {};
     STAGE_KEYS.forEach(k => {
       stages[k] = (stagesByProduct[p.id] && stagesByProduct[p.id][k]) || { status: "Not Started", person: "", comments: "", at: "" };

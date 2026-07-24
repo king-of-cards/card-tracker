@@ -1407,6 +1407,7 @@
     { k: "barcoding", n: "Bar Coding" },
     { k: "content", n: "Content" },
     { k: "photography", n: "Photography" },
+    { k: "photoedit", n: "Photo Editing" },
     { k: "videography", n: "Videography" },
     { k: "dimensions", n: "Dimensions" },
     { k: "videoedit", n: "Video Editing" },
@@ -1863,6 +1864,21 @@
 
         window.__teamMembers = fromSheet;
         setTeamMembers(fromSheet);
+
+        // Keep the signed-in session in sync with the DB — a stage/role
+        // edit made elsewhere (Assign Work → Team Members) should take
+        // effect on the next sync instead of requiring a manual logout/login.
+        if (auth && auth.email) {
+          const freshMe = sheetUsers.find(
+            u => u.email && u.email.toLowerCase() === auth.email.toLowerCase()
+          );
+          if (freshMe && (freshMe.stages !== auth.stages || freshMe.role !== auth.role)) {
+            const updatedAuth = { ...auth, stages: freshMe.stages, role: freshMe.role };
+            setAuth(updatedAuth);
+            localStorage.setItem("ct:auth", JSON.stringify(updatedAuth));
+            sessionStorage.setItem("ct:auth", JSON.stringify(updatedAuth));
+          }
+        }
       }
       setLoading(false);
     }, [auth]);
@@ -1920,12 +1936,17 @@
         let verdict = p.verdict;
         let issues = p.issues;
         if (patch.status === "Completed" && p.verdict === "Issues Found") {
-          // Only check stages that are "In Progress" (i.e. flagged by QC and sent back).
-          // As soon as none remain In Progress, the card is ready for re-approval.
-          const flaggedStagesStillPending = STAGES.filter(s => 
-            s.k !== "finalqc" && 
-            (updatedStages[s.k]?.status === "In Progress")
-          );
+          // Only count a stage as "still blocking re-approval" if it was
+          // actually the one QC sent back (comment prefixed "QC flagged:").
+          // Checking ANY "In Progress" stage was wrong — a card with some
+          // unrelated stage naturally mid-work (nothing to do with the QC
+          // flag) would never clear its verdict, so it could never surface
+          // under "Issue Resolved".
+          const flaggedStagesStillPending = STAGES.filter(s => {
+            if (s.k === "finalqc") return false;
+            const stg = updatedStages[s.k];
+            return stg?.status === "In Progress" && String(stg?.comments || "").startsWith("QC flagged:");
+          });
           if (flaggedStagesStillPending.length === 0) { 
             verdict = ""; 
             issues = ""; 
@@ -2928,8 +2949,16 @@ const recentActivityScoped = useMemo(() => {
     // For a regular member/manager, trust the DB-computed numbers from
     // /api/memberStats instead of recomputing client-side — this is the
     // same source of truth Products & Pipeline can now also read from.
-    const pendingCount = (!isMasterOrAdminView && dbStats && dbStats.pending !== undefined) ? Number(dbStats.pending) : myFullPool.filter(p => !isCardCompleteForMe(p) && !issueCardIdsForMe.has(p.id)).length;
-    const completeCount = (!isMasterOrAdminView && dbStats && dbStats.completed !== undefined) ? Number(dbStats.completed) : myFullPool.filter(p => isCardCompleteForMe(p) && !issueCardIdsForMe.has(p.id)).length;
+    const pendingCount = (!isMasterOrAdminView && dbStats && dbStats.pending !== undefined)
+      ? Number(dbStats.pending)
+      : (isMasterOrAdminView
+          ? (allDivProducts || products).length - (allDivProducts || products).filter(p => p.verdict === "Approved").length - (allDivProducts || products).filter(p => p.verdict === "Issues Found").length
+          : myFullPool.filter(p => !isCardCompleteForMe(p) && !issueCardIdsForMe.has(p.id)).length);
+    const completeCount = (!isMasterOrAdminView && dbStats && dbStats.completed !== undefined)
+      ? Number(dbStats.completed)
+      : (isMasterOrAdminView
+          ? (allDivProducts || products).filter(p => p.verdict === "Approved").length
+          : myFullPool.filter(p => isCardCompleteForMe(p) && !issueCardIdsForMe.has(p.id)).length);
 
     // Cards chitra kept for herself (not pushed to any team member)
     const myPersonalPool = useMemo(() => {
@@ -3907,6 +3936,15 @@ const recentActivityScoped = useMemo(() => {
     // to their own id — this is the actual access boundary, not just a UI hint.
     const effectiveTraceId = isMasterOrAdmin ? traceManagerId : myMemberId;
 
+    const [traceDbStats, setTraceDbStats] = useState(null);
+    useEffect(() => {
+        if (!effectiveTraceId) { setTraceDbStats(null); return; }
+        fetch(`${API}/api/memberStats?memberId=${encodeURIComponent(effectiveTraceId)}&division=${encodeURIComponent(division)}`)
+          .then(r => r.json())
+          .then(data => { if (data.ok) setTraceDbStats(data); })
+          .catch(e => console.error("traceDbStats fetch failed", e));
+      }, [effectiveTraceId, division]);
+
     // Full hierarchy trace for whichever manager is selected: their own totals,
     // plus a per-report breakdown of assigned / completed / pending — regardless
     // of whether the person viewing this is that manager or someone above them.
@@ -3916,45 +3954,105 @@ const recentActivityScoped = useMemo(() => {
       if (!manager) return null;
       const pool = allDivProducts || products;
 
-      const isDone = (prod, rows) => {
+      // Same definition the manager sees on their own Overview: "completed"
+      // means the stages THEY were assigned are Completed — no QC-approval
+      // gate. Issue-flagged cards are broken out separately instead of
+      // silently folding into "pending".
+      const isStagesDone = (prod, rows) => {
         const specific = rows.filter(a => a.stage && a.stage !== "all");
         const toCheck = specific.length ? specific : rows;
-        const stagesDone = toCheck.every(a => (!a.stage || a.stage === "all")
+        return toCheck.every(a => (!a.stage || a.stage === "all")
           ? productState(prod) === "done"
           : prod.stages?.[a.stage]?.status === "Completed");
-        return stagesDone && prod.verdict === "Approved";
+      };
+      const hasIssue = (prod, rows) => {
+        const stageKeys = rows.map(a => a.stage).filter(k => k && k !== "all");
+        const keysToCheck = stageKeys.length > 0 ? stageKeys : STAGES.filter(s => s.k !== "finalqc").map(s => s.k);
+        const stageFlagged = keysToCheck.some(k => {
+          const stg = prod.stages?.[k];
+          if (!stg) return false;
+          const isQcFlagged = stg.status === "In Progress" && String(stg.comments || "").startsWith("QC flagged:");
+          return stg.status === "Issue" || isQcFlagged;
+        });
+        if (stageFlagged) return true;
+        // Verdict says Issues Found but nothing on a checked stage was
+        // specifically flagged — still counts as an open issue.
+        if (prod.verdict === "Issues Found") {
+          const anyStageFlaggedAtAll = STAGES.filter(s => s.k !== "finalqc").some(s => {
+            const stg = prod.stages?.[s.k];
+            if (!stg) return false;
+            const isQcFlagged = stg.status === "In Progress" && String(stg.comments || "").startsWith("QC flagged:");
+            return stg.status === "Issue" || isQcFlagged;
+          });
+          if (!anyStageFlaggedAtAll) return true;
+        }
+        return false;
+      };
+      const classify = (rowsMap) => {
+        let completed = 0, pending = 0, issues = 0;
+        Object.entries(rowsMap).forEach(([sku, rows]) => {
+          const prod = pool.find(p => p.sku.trim().toLowerCase() === sku);
+          if (!prod) return;
+          if (hasIssue(prod, rows)) { issues++; return; }
+          isStagesDone(prod, rows) ? completed++ : pending++;
+        });
+        return { completed, pending, issues };
       };
 
       // Everything ever handed TO this manager (from master or anyone above)
       const managerRows = assignments.filter(a => a.division === division && a.memberId === effectiveTraceId);
       const managerSkuMap = {};
       managerRows.forEach(a => { (managerSkuMap[a.sku.trim().toLowerCase()] ||= []).push(a); });
-      let managerCompleted = 0, managerPending = 0;
-      Object.entries(managerSkuMap).forEach(([sku, rows]) => {
-        const prod = pool.find(p => p.sku.trim().toLowerCase() === sku);
-        if (!prod) return;
-        isDone(prod, rows) ? managerCompleted++ : managerPending++;
-      });
+      const managerResult = classify(managerSkuMap);
 
-      // Direct reports under this manager, with their own assigned/completed/pending
+      // Direct reports under this manager, with their own assigned/completed/pending/issues
       const reports = teamMembers.filter(m => m.managerId === effectiveTraceId).map(rep => {
         const repRows = assignments.filter(a => a.division === division && a.memberId === rep.id && a.managerId === effectiveTraceId);
         const skuMap = {};
         repRows.forEach(a => { (skuMap[a.sku.trim().toLowerCase()] ||= []).push(a); });
-        let completed = 0, pending = 0;
-        Object.entries(skuMap).forEach(([sku, rows]) => {
-          const prod = pool.find(p => p.sku.trim().toLowerCase() === sku);
-          if (!prod) return;
-          isDone(prod, rows) ? completed++ : pending++;
-        });
-        return { id: rep.id, name: rep.name, assigned: Object.keys(skuMap).length, completed, pending };
+        const r = classify(skuMap);
+        return { id: rep.id, name: rep.name, assigned: Object.keys(skuMap).length, completed: r.completed, pending: r.pending, issues: r.issues };
       }).sort((a, b) => b.assigned - a.assigned);
 
       const pushedTotal = reports.reduce((s, r) => s + r.assigned, 0);
       const keptByManager = Math.max(Object.keys(managerSkuMap).length - pushedTotal, 0);
 
-      return { managerName: manager.name, totalAssigned: Object.keys(managerSkuMap).length, completed: managerCompleted, pending: managerPending, pushedTotal, keptByManager, reports };
+      return {
+        managerName: manager.name,
+        totalAssigned: Object.keys(managerSkuMap).length,
+        completed: managerResult.completed,
+        pending: managerResult.pending,
+        issues: managerResult.issues,
+        pushedTotal, keptByManager, reports
+      };
     }, [effectiveTraceId, teamMembers, assignments, division, allDivProducts, products]);
+
+    // The manager's own dashboard (Overview) trusts the backend SQL numbers
+    // via dbMemberStats/dbAllMemberStats, since those correctly reflect the
+    // live DB state. traceStats above is a pure client-side recomputation and
+    // can drift out of sync (e.g. after direct DB fixes). Overlay the DB
+    // numbers on top wherever we have them, so master's trace panel always
+    // agrees with what the traced manager sees on their own screen.
+    const traceStatsResolved = useMemo(() => {
+      if (!traceStats) return null;
+      const dbFor = (id) => dbAllMemberStats?.find(m => m.memberId === id);
+      // Use the SAME endpoint (/api/memberStats) the traced manager's own
+      // Overview reads from. dbAllMemberStats sums assignment ROWS (one per
+      // stage per SKU) and double-counts a card split across multiple
+      // stages — that's what caused this to disagree with the manager's
+      // own dashboard.
+      const totalAssigned = traceDbStats ? Number(traceDbStats.total_assigned) : traceStats.totalAssigned;
+      const completed = traceDbStats ? Number(traceDbStats.completed) : traceStats.completed;
+      const pending = traceDbStats ? Number(traceDbStats.pending) : traceStats.pending;
+      const issues = traceDbStats && traceDbStats.issues !== undefined ? Number(traceDbStats.issues) : traceStats.issues;
+      const reports = traceStats.reports.map(r => {
+        const repDb = dbFor(r.id);
+        return repDb
+          ? { ...r, assigned: Number(repDb.total), completed: Number(repDb.completed), pending: Number(repDb.pending) }
+          : r;
+      });
+      return { ...traceStats, totalAssigned, completed, pending, issues, reports };
+    }, [traceStats, dbAllMemberStats, traceDbStats, effectiveTraceId]);
 
     // "My own work" — cards assigned directly TO this manager, regardless of
     // who assigned them (master, or themselves). Separate from team stats above,
@@ -4065,6 +4163,49 @@ const recentActivityScoped = useMemo(() => {
       });
     };
 
+    // Same check, restricted to specific stage keys — an issue only "counts"
+    // for someone if it's on a stage they're actually responsible for.
+    const stageHasOpenIssue = (p, stageKey) => {
+      const stg = p.stages?.[stageKey];
+      if (!stg) return false;
+      const isQcFlagged = stg.status === "In Progress" && String(stg.comments || "").startsWith("QC flagged:");
+      return stg.status === "Issue" || isQcFlagged;
+    };
+    const cardHasOpenIssueInStages = (p, stageKeys) => {
+      if (!stageKeys || stageKeys.length === 0) return false;
+      if (stageKeys.some(k => stageHasOpenIssue(p, k))) return true;
+      // Verdict says "Issues Found" but no stage was specifically flagged —
+      // ambiguous, so surface it to anyone with a stage on this card.
+      if (p.verdict === "Issues Found" && !eligibleStagesForIssueCheck.some(s => stageHasOpenIssue(p, s.k))) return true;
+      return false;
+    };
+
+    // Total number of *individual* flagged issues on a card — a card can carry
+    // more than one stage issue at once. Everywhere we show an "Issues" count,
+    // we should sum these instances, not count distinct cards. This mirrors
+    // the same logic Overview uses for its Issues KPI (divisionIssuesList).
+    const countCardIssueInstances = (p, stageKeys) => {
+      const keys = stageKeys || eligibleStagesForIssueCheck.map(s => s.k);
+      let count = 0;
+      keys.forEach(k => {
+        if (stageHasOpenIssue(p, k)) count++;
+      });
+      // Verdict says "Issues Found" but nothing on a checked stage was
+      // specifically flagged — still counts as at least one issue.
+      if (count === 0 && p.verdict === "Issues Found") count = 1;
+      return count;
+    };
+    // Stages THIS logged-in person is responsible for on THIS card: their
+    // specific per-card assignment if one exists, else their role-level
+    // stages. Master/admin has neither set, so this naturally falls through
+    // to "every stage" for them.
+    const myStageKeysOnCard = (p) => {
+      const cardStages = myAssignedStagesPerSku?.[p.sku.toLowerCase()];
+      if (cardStages && cardStages.size > 0) return [...cardStages];
+      return allowedStages ? [...allowedStages] : eligibleStagesForIssueCheck.map(s => s.k);
+    };
+    const cardHasOpenIssueForMe = (p) => cardHasOpenIssueInStages(p, myStageKeysOnCard(p));
+
     // Card-level (not stage-level) counts for master/admin's Assigned/Completed/
     // Pending tabs. dbAllMemberStats sums assignment ROWS — one row per stage per
     // SKU — so a card split across multiple stages/members gets counted multiple
@@ -4078,24 +4219,13 @@ const recentActivityScoped = useMemo(() => {
         const key = p.sku.trim().toLowerCase();
         if (!skuAssignedTo[key]) return;
         assignedCount++;
-        const cardAssignments = assignments.filter(
-          a => a.division === division && a.managerId === "master" &&
-            a.sku.trim().toLowerCase() === key
-        );
-        if (cardAssignments.length === 0) return;
-        const specificStages = cardAssignments.filter(a => a.stage && a.stage !== "all");
-        const stagesToCheck = specificStages.length > 0 ? specificStages : cardAssignments;
-        const stagesDone = stagesToCheck.every(a => {
-          const stageKey = a.stage;
-          if (!stageKey || stageKey === "all") return productState(p) === "done";
-          return p.stages?.[stageKey]?.status === "Completed";
-        });
-        const isFullyApproved = stagesDone && p.verdict === "Approved";
         if (cardHasOpenIssue(p)) return; // issues bucket, excluded from both
+        // Completed = every stage done AND QC has approved it.
+        const isFullyApproved = p.verdict === "Approved";
         if (isFullyApproved) completedCount++; else pendingCount++;
       });
       return { assigned: assignedCount, completed: completedCount, pending: pendingCount };
-    }, [isMasterOrAdmin, allDivProducts, products, skuAssignedTo, assignments, division]);
+    }, [isMasterOrAdmin, allDivProducts, products, skuAssignedTo, division]);
 
     // Per-stage breakdown for whichever team member is picked in the filter
     // dropdown — "how many of THIS member's cards are done/pending/issue on
@@ -4145,7 +4275,7 @@ const recentActivityScoped = useMemo(() => {
       const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase();
       if (!t.includes(q.toLowerCase())) return false; 
       if (fStatus === "issue") {
-        if (!cardHasOpenIssue(p)) return false;
+        if (!cardHasOpenIssueForMe(p)) return false;
       } else if (fStatus && productState(p) !== fStatus) return false;
       if (fEventType && (fEventFrom || fEventTo)) {
         const inRange = (iso) => {
@@ -4203,7 +4333,7 @@ const recentActivityScoped = useMemo(() => {
           if (stageStatus !== "Issue" && !isQcFlagged) return false;
         } else if (stageStatus !== fStageStatus) return false;
       }
-      if (fHasIssue && !STAGES.some(s => s.k !== "finalqc" && p.stages[s.k]?.status === "Issue")) return false;
+      if (fHasIssue && !myStageKeysOnCard(p).some(k => p.stages[k]?.status === "Issue")) return false;
       if (fStalledDays) {
         const cutoff = Date.now() - Number(fStalledDays) * 86400000;
         const updated = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
@@ -4217,7 +4347,7 @@ const recentActivityScoped = useMemo(() => {
         const stageStatus = p.stages?.[fStage]?.status || "Not Started";
         if (stageStatus !== fStageStatus) return false;
       }
-      if (fHasIssue && !STAGES.some(s => s.k !== "finalqc" && p.stages[s.k]?.status === "Issue")) return false;
+      if (fHasIssue && !myStageKeysOnCard(p).some(k => p.stages[k]?.status === "Issue")) return false;
       if (fStalledDays) {
         const cutoff = Date.now() - Number(fStalledDays) * 86400000;
         const updated = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
@@ -4231,7 +4361,7 @@ const recentActivityScoped = useMemo(() => {
         const stageStatus = p.stages?.[fStage]?.status || "Not Started";
         if (stageStatus !== fStageStatus) return false;
       }
-      if (fHasIssue && !STAGES.some(s => s.k !== "finalqc" && p.stages[s.k]?.status === "Issue")) return false;
+      if (fHasIssue && !myStageKeysOnCard(p).some(k => p.stages[k]?.status === "Issue")) return false;
       if (fStalledDays) {
         const cutoff = Date.now() - Number(fStalledDays) * 86400000;
         const updated = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
@@ -4250,10 +4380,11 @@ const recentActivityScoped = useMemo(() => {
           // the "Your team's work" panel use — cards actually assigned to
           // ME (memberId === myMemberId), not just what I've pushed further
           // down to my team. Master keeps its own "assigned by master" scope.
+          const isMasterOverallView = isMasterOrAdmin && !filterMember;
           const relevantAssignments = filterMember
             ? assignments.filter(a => a.memberId === filterMember)
             : (isMasterOrAdmin
-                ? assignments.filter(a => a.managerId === "master")
+                ? assignments // master's overall view spans every manager's assignments
                 : assignments.filter(a => a.memberId === myMemberId));
 
           const cardAssignments = relevantAssignments.filter(
@@ -4269,13 +4400,23 @@ const recentActivityScoped = useMemo(() => {
             if (!stageKey || stageKey === "all") return productState(p) === "done";
             return p.stages?.[stageKey]?.status === "Completed";
           });
-          // QC gate only applies to master's overall (no-member-filter) view.
-        const useQcGate = isMasterOrAdmin && !filterMember;
-          const isFullyApproved = stagesDone && (!useQcGate || p.verdict === "Approved");
+          // QC gate only applies to master's overall (no-member-filter) view —
+          // a card only counts as Completed once every stage is done AND it's
+          // been through Final QC and approved.
+          const isFullyApproved = isMasterOverallView ? (stagesDone && p.verdict === "Approved") : stagesDone;
 
-          if (assignTab === "completed" && (!isFullyApproved || cardHasOpenIssue(p))) return false;
-          // A card with an open QC issue belongs in "Issues" only — never in "Pending".
-          if (assignTab === "pending" && (isFullyApproved || cardHasOpenIssue(p))) return false;
+          // Master's whole-division view (no member picked) still sees issues
+          // anywhere; a specific member filter only counts issues on stages
+          // that member is actually assigned.
+          const scopeStageKeys = stagesToCheck.map(a => a.stage).filter(k => k && k !== "all");
+          const scopedHasIssue = (isMasterOrAdmin && !filterMember)
+            ? cardHasOpenIssue(p)
+            : cardHasOpenIssueInStages(p, scopeStageKeys.length > 0 ? scopeStageKeys : eligibleStagesForIssueCheck.map(s => s.k));
+
+
+
+          if (assignTab === "completed" && (!isFullyApproved || scopedHasIssue)) return false;
+          if (assignTab === "pending" && (isFullyApproved || scopedHasIssue)) return false;
         }
       } else if (myMemberId) {
         const cardAssignments = assignments.filter(a =>
@@ -4317,47 +4458,7 @@ const recentActivityScoped = useMemo(() => {
     const totalPages = Math.max(1, Math.ceil(filtered.length / 20));
     return (
       <div>
-        {isMasterOrAdmin && managersWithReports.length > 0 && (
-          <div style={{ background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 12, padding: 14, marginBottom: 14 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".5px" }}>Trace a manager's team</span>
-              <select value={traceManagerId} onChange={e => setTraceManagerId(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 9, padding: "8px 12px", background: "var(--card-2)", fontSize: 13, minWidth: 180 }}>
-                <option value="">— select manager —</option>
-                {managersWithReports.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-              </select>
-              {traceManagerId && <button className="ghost" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setTraceManagerId("")}>Clear</button>}
-            </div>
-
-            {traceStats && (
-              <div style={{ marginTop: 12 }}>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-                  <span style={{ background: "var(--sky-bg)", color: "var(--sky-ink)", border: "1px solid var(--sky)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>{traceStats.totalAssigned} total given to {traceStats.managerName}</span>
-                  <span style={{ background: "var(--sage-bg)", color: "var(--sage-ink)", border: "1px solid var(--sage)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>✓ {traceStats.completed} completed</span>
-                  <span style={{ background: "var(--peach-bg)", color: "var(--peach-ink)", border: "1px solid var(--peach)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>⏳ {traceStats.pending} pending</span>
-                  <span style={{ background: "var(--lav-bg)", color: "var(--lav-ink)", border: "1px solid var(--lav)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>↳ {traceStats.pushedTotal} pushed to team</span>
-                  <span style={{ background: "var(--card-2)", color: "var(--muted)", border: "1px solid var(--line2)", borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>◦ {traceStats.keptByManager} kept personally</span>
-                </div>
-                {traceStats.reports.length === 0 ? (
-                  <div style={{ fontSize: 12.5, color: "var(--faint)" }}>{traceStats.managerName} has no one reporting to them yet.</div>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {traceStats.reports.map(r => (
-                      <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "var(--card-2)", border: "1px solid var(--line)", borderRadius: 9 }}>
-                        <b style={{ fontSize: 13, minWidth: 110 }}>{r.name}</b>
-                        <span style={{ fontSize: 12, color: "var(--muted)" }}>{r.assigned} assigned</span>
-                        <span style={{ fontSize: 12, color: "var(--sage-ink)", fontWeight: 700 }}>✓ {r.completed}</span>
-                        <span style={{ fontSize: 12, color: "var(--peach-ink)", fontWeight: 700 }}>⏳ {r.pending}</span>
-                        <div style={{ flex: 1, height: 6, borderRadius: 4, background: "var(--line2)", overflow: "hidden", maxWidth: 160 }}>
-                          <div style={{ width: `${r.assigned ? (r.completed / r.assigned) * 100 : 0}%`, height: "100%", background: "var(--sage)" }} />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
+        
 
         <button onClick={() => setShowFilters(s => !s)} style={{
           display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 14,
@@ -4597,9 +4698,12 @@ const recentActivityScoped = useMemo(() => {
                   // "issue" always uses cardHasOpenIssue so it matches the
                   // Issue chips/QC-verdict filter elsewhere on this page.
                   const statusCounts = { "": sourceProducts.length };
-                  statusCounts.issue = sourceProducts.filter(p => cardHasOpenIssue(p)).length;
-                  statusCounts.prog = sourceProducts.filter(p => !cardHasOpenIssue(p) && productState(p) === "prog").length;
-                  statusCounts.none = sourceProducts.filter(p => !cardHasOpenIssue(p) && productState(p) === "none").length;
+                  statusCounts.issue = sourceProducts.reduce(
+                    (sum, p) => sum + countCardIssueInstances(p, myStageKeysOnCard(p)),
+                    0
+                  );
+                  statusCounts.prog = sourceProducts.filter(p => !cardHasOpenIssueForMe(p) && productState(p) === "prog").length;
+                  statusCounts.none = sourceProducts.filter(p => !cardHasOpenIssueForMe(p) && productState(p) === "none").length;
                   return [
                     ["", "All"],
                     ["issue", "⚠ With issues"],
@@ -4890,10 +4994,17 @@ const recentActivityScoped = useMemo(() => {
 
   function ProductRow({ p, open, toggle, onStage, onQC, onRemove, allowedStages, selected, onSelect, operator, assignedTo, memberStages, memberComplete }) {
 
-        const pct = productPct(p); const hasIssue = STAGES.some(s => p.stages[s.k].status === "Issue");
+        const pct = productPct(p);
         const isFullAccess = allowedStages === null;
-        // Filter stages visible to this user
+        // allowedStages here is already scoped to this person's specific card
+        // assignment, so the badge only reflects stages that are actually theirs.
         const visibleStages = allowedStages ? STAGES.filter(s => allowedStages.includes(s.k)) : STAGES;
+        const issueCount = visibleStages.reduce((count, s) => {
+          const stg = p.stages[s.k];
+          const isQcFlagged = stg.status === "In Progress" && String(stg.comments || "").startsWith("QC flagged:");
+          return count + ((stg.status === "Issue" || isQcFlagged) ? 1 : 0);
+        }, 0);
+        const hasIssue = issueCount > 0;
 
         // --- Multi-stage "mark as Issue" selection, scoped to this card ---
         const [stageSel, setStageSel] = useState({});
@@ -4994,7 +5105,12 @@ const recentActivityScoped = useMemo(() => {
               ? <span className="chip c-done"><span className="dot" />Completed</span>
               : <span className="chip c-prog"><span className="dot" />Pending</span>
           )}
-          {hasIssue && <Chip status="Issue" />}
+          {hasIssue && (
+            <span className="chip c-issue">
+              <span className="dot" />
+              {issueCount > 1 ? `${issueCount} Issues` : "Issue"}
+            </span>
+          )}
           {p.verdict === "Approved" && <span className="chip c-done"><span className="dot" />QC Approved</span>}
         </div>
         {open && (
@@ -6901,31 +7017,65 @@ const recentActivityScoped = useMemo(() => {
       return flaggedInLog || flaggedOnStage;
     };
 
-    const filtered = useMemo(() => {
-      return products.filter(p => {
-        const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase();
-        if (q && !t.includes(q.toLowerCase())) return false;
-        // A card only enters the QC queue once every pipeline stage (excluding
-        // finalqc itself) is Completed — no partial-pipeline QC.
-        if (isMasterOrAdmin && fSetNo && (p.set_no || "").trim().toLowerCase() !== fSetNo.trim().toLowerCase()) return false;
-        const allStagesDone = eligibleStages.every(s => p.stages[s.k].status === "Completed");
-        const previouslyFlagged = wasFlaggedBefore(p);
-        if (filter === "pending") return !p.verdict && allStagesDone && !previouslyFlagged;
-        if (filter === "resolved") return !p.verdict && allStagesDone && previouslyFlagged;
-        if (filter === "approved") return p.verdict === "Approved";
-        if (filter === "issues") return p.verdict === "Issues Found";
-        return true;
-      });
-    }, [products, q, filter, qcAuditLog, fSetNo, isMasterOrAdmin]);
+    const getFlaggedStageKeys = (p) => {
+      const fromLog = qcAuditLog
+        .filter(r => r.productId === p.id && r.verdict === "Issues Found" && r.stagesSentBack)
+        .flatMap(r => r.stagesSentBack.split(",").map(s => s.trim()).filter(Boolean));
+      const fromComments = eligibleStages
+        .filter(s => String(p.stages[s.k]?.comments || "").includes("QC flagged:"))
+        .map(s => s.k);
+      return [...new Set([...fromLog, ...fromComments])];
+    };
 
-    const resolvedCount = products.filter(p =>
-      !p.verdict &&
-      eligibleStages.every(s => p.stages[s.k].status === "Completed") &&
-      wasFlaggedBefore(p)
-    ).length;
+    const isResolved = (p) => {
+      if (p.verdict) return false;
+      if (!wasFlaggedBefore(p)) return false;
+      const flaggedKeys = getFlaggedStageKeys(p);
+      if (flaggedKeys.length > 0) return flaggedKeys.every(k => p.stages[k]?.status === "Completed");
+      return eligibleStages.every(s => p.stages[s.k].status === "Completed");
+    };
+
+const filtered = useMemo(() => {
+  return products.filter(p => {
+    const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase();
+    if (q && !t.includes(q.toLowerCase())) return false;
+    if (isMasterOrAdmin && fSetNo && (p.set_no || "").trim().toLowerCase() !== fSetNo.trim().toLowerCase()) return false;
+
+    const allStagesDone = eligibleStages.every(s => p.stages[s.k].status === "Completed");
+    const previouslyFlagged = wasFlaggedBefore(p);
+    const flaggedKeys = getFlaggedStageKeys(p);
+    const flaggedStagesDone = flaggedKeys.length > 0
+      ? flaggedKeys.every(k => p.stages[k]?.status === "Completed")
+      : allStagesDone;
+
+    if (filter === "pending") return !p.verdict && allStagesDone && !previouslyFlagged;
+    if (filter === "resolved") return !p.verdict && previouslyFlagged && flaggedStagesDone;
+    if (filter === "approved") return p.verdict === "Approved";
+    if (filter === "issues") return p.verdict === "Issues Found";
+    return true;
+  });
+}, [products, q, filter, qcAuditLog, fSetNo, isMasterOrAdmin]);
+
+    const resolvedCount = products.filter(p => isResolved(p)).length;
     const pendingCount = products.filter(p => !p.verdict).length - resolvedCount;
     const approvedCount = products.filter(p => p.verdict === "Approved").length;
-    const issuesCount = products.filter(p => p.verdict === "Issues Found").length;
+
+    // Count individual flagged issue INSTANCES, not distinct cards — a card
+    // can carry more than one flagged stage at once. This mirrors Overview's
+    // divisionIssuesList counting so both screens always agree.
+    const countIssueInstances = (p) => {
+      let count = 0;
+      eligibleStages.forEach(s => {
+        const stg = p.stages[s.k];
+        if (!stg) return;
+        const isQcFlagged = stg.status === "In Progress" && String(stg.comments || "").startsWith("QC flagged:");
+        if (stg.status === "Issue" || isQcFlagged) count++;
+      });
+      // Verdict says Issues Found but no specific stage was flagged — still counts as 1.
+      if (count === 0 && p.verdict === "Issues Found") count = 1;
+      return count;
+    };
+    const issuesCount = products.reduce((sum, p) => sum + countIssueInstances(p), 0);
 
     const getVState = (pid) => verdicts[pid] || { verdict: "", comments: "", stagesBack: [] };
     const setVState = (pid, patch) => setVerdicts(v => ({ ...v, [pid]: { ...getVState(pid), ...patch } }));
@@ -7126,11 +7276,11 @@ const recentActivityScoped = useMemo(() => {
                     <div className="spacer" />
                     {p.verdict === "Approved" && <span className="chip c-done"><span className="dot" />Approved</span>}
                     {p.verdict === "Issues Found" && <span className="chip c-issue"><span className="dot" />Issues Found</span>}
-                    {!p.verdict && allStagesDone && qcAuditLog.some(r => r.productId === p.id && r.verdict === "Issues Found") &&
+                    {!p.verdict && isResolved(p) &&
                       <span className="chip" style={{ background: "var(--sky-bg)", color: "var(--sky-ink)", border: "1px solid var(--sky)" }}><span className="dot" style={{ background: "var(--sky)" }} />↻ Issue Resolved — Re-review</span>}
-                    {!p.verdict && allStagesDone && !qcAuditLog.some(r => r.productId === p.id && r.verdict === "Issues Found") &&
+                    {!p.verdict && allStagesDone && !wasFlaggedBefore(p) &&
                       <span className="chip c-prog"><span className="dot" />Ready for QC</span>}
-                    {!p.verdict && !allStagesDone && <span className="chip c-app"><span className="dot" />Pipeline incomplete</span>}
+                    {!p.verdict && !allStagesDone && !isResolved(p) && <span className="chip c-app"><span className="dot" />Pipeline incomplete</span>}
                     <Pipe p={p} />
                   </div>
 
@@ -7143,12 +7293,17 @@ const recentActivityScoped = useMemo(() => {
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                           {eligibleStages.map(s => {
                             const sg = p.stages[s.k];
-                            const c = sg.status === "Completed" ? { bg: "var(--sage-bg)", border: "var(--sage)", ink: "var(--sage-ink)", icon: "✓" }
-                              : sg.status === "In Progress" ? { bg: "var(--sky-bg)", border: "var(--sky)", ink: "var(--sky-ink)", icon: "…" }
-                                : sg.status === "Issue" ? { bg: "var(--rose-bg)", border: "var(--rose)", ink: "var(--rose-ink)", icon: "!" }
+                            const isQcFlagged = sg.status === "In Progress" && String(sg.comments || "").startsWith("QC flagged:");
+                            const c = (sg.status === "Issue" || isQcFlagged) ? { bg: "var(--rose-bg)", border: "var(--rose)", ink: "var(--rose-ink)", icon: "⚠" }
+                              : sg.status === "Completed" ? { bg: "var(--sage-bg)", border: "var(--sage)", ink: "var(--sage-ink)", icon: "✓" }
+                                : sg.status === "In Progress" ? { bg: "var(--sky-bg)", border: "var(--sky)", ink: "var(--sky-ink)", icon: "…" }
                                   : { bg: "#F0EEE8", border: "var(--line2)", ink: "var(--muted)", icon: "○" };
                             return (
-                              <span key={s.k} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: c.bg, border: `1px solid ${c.border}`, color: c.ink, borderRadius: 8, padding: "3px 10px", fontSize: 11.5, fontWeight: 600 }}>
+                              <span key={s.k} style={{
+                                display: "inline-flex", alignItems: "center", gap: 5, background: c.bg,
+                                border: `${(sg.status === "Issue" || isQcFlagged) ? 2 : 1}px solid ${c.border}`,
+                                color: c.ink, borderRadius: 8, padding: "3px 10px", fontSize: 11.5, fontWeight: 700
+                              }} title={isQcFlagged ? sg.comments.replace(/^QC flagged:\s*/, "") : undefined}>
                                 {c.icon} {s.n}{sg.person ? ` · ${sg.person}` : ""}
                               </span>
                             );
