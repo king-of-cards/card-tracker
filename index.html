@@ -4214,16 +4214,13 @@ const recentActivityScoped = useMemo(() => {
     const masterCardCounts = useMemo(() => {
       if (!isMasterOrAdmin) return null;
       const pool = allDivProducts || products;
-      let assignedCount = 0, completedCount = 0, pendingCount = 0;
-      pool.forEach(p => {
-        const key = p.sku.trim().toLowerCase();
-        if (!skuAssignedTo[key]) return;
-        assignedCount++;
-        if (cardHasOpenIssue(p)) return; // issues bucket, excluded from both
-        // Completed = every stage done AND QC has approved it.
-        const isFullyApproved = p.verdict === "Approved";
-        if (isFullyApproved) completedCount++; else pendingCount++;
-      });
+      // Mirror Overview's exact calc: Completed = verdict Approved,
+      // Pending = everything else minus verdict "Issues Found" cards,
+      // Assigned = total pool assigned to someone (unchanged).
+      const completedCount = pool.filter(p => p.verdict === "Approved").length;
+      const issuesFoundCount = pool.filter(p => p.verdict === "Issues Found").length;
+      const pendingCount = pool.length - completedCount - issuesFoundCount;
+      const assignedCount = pool.filter(p => !!skuAssignedTo[p.sku.trim().toLowerCase()]).length;
       return { assigned: assignedCount, completed: completedCount, pending: pendingCount };
     }, [isMasterOrAdmin, allDivProducts, products, skuAssignedTo, division]);
 
