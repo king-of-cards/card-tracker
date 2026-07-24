@@ -7173,20 +7173,7 @@ const filtered = useMemo(() => {
               ) : null;
             })()}
           </div>
-          {[
-            ["pending", `Pending (${pendingCount})`],
-            ["resolved", `Issue Resolved (${resolvedCount})`],
-            ["approved", `Approved (${approvedCount})`],
-            ["issues", `Issues (${issuesCount})`],
-            ["all", "All"],
-          ].map(([k, label]) => (
-            <button key={k} onClick={() => setFilter(k)} style={{
-              padding: "8px 14px", borderRadius: 10, fontSize: 12, fontWeight: 600, cursor: "pointer",
-              background: filter === k ? "var(--ink)" : "var(--card)",
-              color: filter === k ? "#fff" : "var(--ink)",
-              border: `1px solid ${filter === k ? "var(--ink)" : "var(--line2)"}`,
-            }}>{label}</button>
-          ))}
+          
         </div>
 
         {/* Bulk selection bar */}
