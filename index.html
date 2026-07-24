@@ -1648,10 +1648,11 @@
   })();
   const STORE_HEADERS = ["division", "sku", "store", "dispatched", "received", "missing", "damaged", "notes"];
   function ensureStages(p) {
-    if (!p.stages) p.stages = {};
-    STAGES.forEach(s => {
-      if (!p.stages[s.k]) p.stages[s.k] = { status: "Not Started", person: "", comments: "", at: "" };
-      if (s.k === "dimensions") {
+  if (!p.stages) p.stages = {};
+  STAGES.forEach(s => {
+    if (!p.stages[s.k]) p.stages[s.k] = { status: "Not Started", person: "", comments: "", at: "", skipped: false };
+    if (p.stages[s.k].skipped === undefined) p.stages[s.k].skipped = false;
+    if (s.k === "dimensions") {
         if (p.stages[s.k].width === undefined) p.stages[s.k].width = "";
         if (p.stages[s.k].height === undefined) p.stages[s.k].height = "";
         if (p.stages[s.k].weight === undefined) p.stages[s.k].weight = "";
@@ -1665,14 +1666,24 @@
   }
   function blankProduct(division, vendor) {
     const stages = {}; STAGES.forEach(s => {
-      stages[s.k] = { status: "Not Started", person: "", comments: "", at: "" };
+      stages[s.k] = { status: "Not Started", person: "", comments: "", at: "", skipped: false };
       if (s.k === "dimensions") { stages[s.k].width = ""; stages[s.k].height = ""; stages[s.k].weight = ""; }
     });
     const stores = {}; STORES.forEach(st => stores[st] = { dispatched: 0, received: false, receivedAt: "", receivedBy: "", missing: 0, damaged: 0, notes: "", at: "" });
     return { id: uid(), division, sku: "", name: "", vendor: vendor || "", inward: "", qty: 0, note: "", stages, stores, verdict: "", issues: "", createdAt: now(), updatedAt: now() };
   }
-  function productPct(p) { return Math.round(STAGES.filter(s => p.stages[s.k].status === "Completed").length / STAGES.length * 100); }
-  function productState(p) { const pc = productPct(p); if (STAGES.some(s => p.stages[s.k].status === "Issue")) return "issue"; if (pc === 100) return "done"; if (pc === 0) return "none"; return "prog"; }
+  function productPct(p) {
+    const relevant = STAGES.filter(s => !p.stages[s.k]?.skipped);
+    if (relevant.length === 0) return 100;
+    return Math.round(relevant.filter(s => p.stages[s.k].status === "Completed").length / relevant.length * 100);
+  }
+  function productState(p) {
+    const pc = productPct(p);
+    if (STAGES.some(s => !p.stages[s.k]?.skipped && p.stages[s.k].status === "Issue")) return "issue";
+    if (pc === 100) return "done";
+    if (pc === 0) return "none";
+    return "prog";
+  }
 
   /* ---------- icons ---------- */
   const I = {
@@ -5007,7 +5018,9 @@ const recentActivityScoped = useMemo(() => {
         const [stageSel, setStageSel] = useState({});
         const [issueNote, setIssueNote] = useState("");
         const [bulkIssueBusy, setBulkIssueBusy] = useState(false);
-        const activeStages = visibleStages.filter(s => s.k !== "finalqc" && p.stages[s.k].status !== "Completed");
+        const activeStages = visibleStages.filter(s => s.k !== "finalqc" && p.stages[s.k].status !== "Completed" && !p.stages[s.k].skipped);
+        const skippedStages = visibleStages.filter(s => s.k !== "finalqc" && p.stages[s.k].skipped);
+        const isBombay = p.division === "Bombay Cards";
         const activeStageKeySet = useMemo(() => new Set(activeStages.map(s => s.k)), [activeStages.map(s => s.k).join(",")]);
         // Drop any selected stage that's no longer active (e.g. someone else just
         // completed it via sync) — prevents stale keys silently riding along into
@@ -5166,6 +5179,7 @@ const recentActivityScoped = useMemo(() => {
                   selected={!!stageSel[s.k]} onToggleSelect={() => toggleStageSel(s.k)}
                 />
               ))}
+
             </div>
             {/* Completed stages — pill popup style */}
             {visibleStages.filter(s => s.k !== "finalqc" && p.stages[s.k].status === "Completed").length > 0 && (
@@ -5189,6 +5203,24 @@ const recentActivityScoped = useMemo(() => {
                     </div>
                   );
                 })}
+              </div>
+            )}
+            {skippedStages.length > 0 && (
+              <div style={{ borderTop: "1px solid var(--line)", padding: "10px 16px", background: "#F0EEE8", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", letterSpacing: ".6px", textTransform: "uppercase", whiteSpace: "nowrap" }}>Not Required</span>
+                {skippedStages.map(s => (
+                  <span key={s.k} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 999, padding: "3px 11px", fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>
+                    ⊘ {s.n}
+                    {isBombay && (
+                      <button
+                        onClick={() => onStage(p.id, s.k, { skipped: false })}
+                        style={{ fontSize: 10, fontWeight: 700, color: "var(--sky-ink)", border: 0, background: "none", cursor: "pointer", padding: 0 }}
+                      >
+                        Undo
+                      </button>
+                    )}
+                  </span>
+                ))}
               </div>
             )}
             {/* QC — only for full access users */}
@@ -5262,6 +5294,15 @@ const recentActivityScoped = useMemo(() => {
           <input className="txt" placeholder="comments…" value={comments} onChange={e => setComments(e.target.value)} style={{ fontSize: 12, padding: "6px 9px", flex: 1, minWidth: 0 }} />
           <span style={{ fontSize: 10.5, color: "var(--faint)", whiteSpace: "nowrap", flexShrink: 0 }}>{cur.at ? fmt(cur.at) : "—"}</span>
           <button className={"mini " + (saved ? "saved" : "")} disabled={!dirty && !saved} onClick={save} style={{ flexShrink: 0 }}>{saved ? "✓" : "Save"}</button>
+          {p.division === "Bombay Cards" && (
+            <button
+              onClick={() => onStage(p.id, stage.k, { skipped: true })}
+              title="Mark this stage as not required for this card"
+              style={{ fontSize: 10.5, fontWeight: 700, color: "var(--muted)", border: "1px solid var(--line2)", background: "var(--card-2)", borderRadius: 7, padding: "6px 9px", flexShrink: 0, cursor: "pointer", whiteSpace: "nowrap" }}
+            >
+              ⊘ N/A
+            </button>
+          )}
         </div>
         {isDim && (
           <div style={{ display: "flex", gap: 10, marginTop: 10, paddingLeft: 36, flexWrap: "wrap" }}>
@@ -7202,7 +7243,7 @@ const filtered = useMemo(() => {
                 }}>
                 {bulkBusy ? "Approving…" : bulkDone ? "✓ Done" : `✓ Approve all (${bulkSelected.size})`}
               </button>
-              <button className="ghost" style={{ padding: "7px 14px", fontSize: 12 }} onClick={clearBulkSelect}>
+              <button className="ghost" style ={{ padding: "7px 14px", fontSize: 12 }} onClick={clearBulkSelect}>
                 Clear
               </button>
             </>
