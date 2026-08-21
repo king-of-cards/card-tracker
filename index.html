@@ -8112,7 +8112,6 @@ const productKpis = useMemo(() => {
         {isMasterOrAdmin && (
           <div className="subtab-row">
             <button className={"subtab-btn" + (subTab === "overview" ? " on" : "")} onClick={() => setSubTab("overview")}>Stage Speed</button>
-            <button className={"subtab-btn" + (subTab === "team" ? " on" : "")} onClick={() => setSubTab("team")}>Team Assigned</button>
             <button className={"subtab-btn" + (subTab === "full" ? " on" : "")} onClick={() => setSubTab("full")}>Full Breakdown</button>
           </div>
         )}
@@ -8173,37 +8172,10 @@ const productKpis = useMemo(() => {
           </>
         )}
 
-        {subTab === "team" && isMasterOrAdmin && (
-          <>
-            <div className="team-filters">
-              <select value={fVendor} onChange={e => setFVendor(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 12.5, color: fVendor ? "var(--ink)" : "var(--muted)" }}>
-                <option value="">— all vendors —</option>
-                {vendorOptions.map(v => <option key={v} value={v}>{v}</option>)}
-              </select>
-              <select value={fSetNo} onChange={e => setFSetNo(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 12.5, color: fSetNo ? "var(--ink)" : "var(--muted)" }}>
-                <option value="">— all set no. —</option>
-                {setNoOptions.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-              
-              <input type="date" value={fDateFrom} onChange={e => setFDateFrom(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 12.5 }} />
-              <span style={{ color: "var(--muted)", fontSize: 12 }}>to</span>
-              <input type="date" value={fDateTo} onChange={e => setFDateTo(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 12.5 }} />
-              {(fVendor || fSetNo || fDateFrom || fDateTo) && (
-                <button onClick={() => { setFVendor(""); setFSetNo(""); setFDateFrom(""); setFDateTo(""); }} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 12.5, cursor: "pointer", color: "var(--muted)" }}>
-                  Clear filters
-                </button>
-              )}
-            </div>
-
-            <div className="stacked-tables" style={{ maxWidth: "none", width: "100%" }}>
-              {renderTeamTable("Backend team", backendTableRows, BACKEND_STAGE_GROUP)}
-              {renderTeamTable("Photography & Videography team", photoTableRows, PHOTO_VIDEO_STAGE_GROUP)}
-            </div>
-          </>
-        )}
       </div>
     );
-  } 
+  }
+
   function QCAuditTab({ division, products, qcAuditLog, onSubmit, operator, auth, initialFilter = null, onFilterConsumed }) {
     const [q, setQ] = useState("");
     const [filter, setFilter] = useState(initialFilter || "pending");
