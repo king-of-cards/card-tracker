@@ -4086,8 +4086,24 @@
                   <span style={{ fontSize: 11.5, background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 999, padding: "2px 10px", fontWeight: 600 }}>
                     {drillCards.length} card{drillCards.length !== 1 ? "s" : ""}
                   </span>
-                  {fEventDate && <span className="tag">on {fEventDate}</span>}
-                  <button className="ghost" style={{ padding: "5px 10px", fontSize: 11, marginLeft: "auto" }} onClick={() => setDrill(null)}>✕ Close</button>
+                                    {fEventDate && <span className="tag">on {fEventDate}</span>}
+                  <button
+                    className="ghost"
+                    style={{ padding: "5px 10px", fontSize: 11, marginLeft: "auto" }}
+                    disabled={drillCards.length === 0}
+                    onClick={() => {
+                      const headers = ["SKU", "Name", "Vendor", "Qty"];
+                      const rows = drillCards.map(p => [p.sku || "", p.name || "", p.vendor || "", p.qty || 0]);
+                      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+                      ws["!cols"] = headers.map(h => ({ wch: Math.max(14, h.length + 4) }));
+                      const wb = XLSX.utils.book_new();
+                      XLSX.utils.book_append_sheet(wb, ws, drill.status.replace(/\s+/g, "_"));
+                      XLSX.writeFile(wb, `${drill.stageName}_${drill.status}`.replace(/\s+/g, "_") + ".xlsx");
+                    }}
+                  >
+                    {I.upload({ width: 13, height: 13 })} Download
+                  </button>
+                  <button className="ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => setDrill(null)}>✕ Close</button>
                 </div>
                 {drillCards.length === 0 ? (
                   <div style={{ fontSize: 12, color: "var(--faint)" }}>No cards found.</div>
