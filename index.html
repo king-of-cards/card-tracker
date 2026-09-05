@@ -7499,6 +7499,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
     const [selSkus, setSelSkus] = useState([]);
     const [selStages, setSelStages] = useState([]);
     const [expandedMember, setExpandedMember] = useState(null);
+    const [memberListSearch, setMemberListSearch] = useState("");
     const [assErr, setAssErr] = useState("");
     const [assMsg, setAssMsg] = useState("");
     const [skuSearch, setSkuSearch] = useState("");
@@ -8450,8 +8451,8 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
                 const uniqueSkuCount = new Set(myAss.map(a => a.sku.toLowerCase())).size;
                 const isOpen = expandedMember === m.id;
                 return (
-                  <div key={m.id} className="card" style={{ marginBottom: 10, overflow: "hidden" }}>
-                    <div onClick={() => setExpandedMember(isOpen ? null : m.id)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 18px", cursor: "pointer" }}>
+                                   <div key={m.id} className="card" style={{ marginBottom: 10, overflow: "hidden" }}>
+                    <div onClick={() => { setExpandedMember(isOpen ? null : m.id); setMemberListSearch(""); }} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 18px", cursor: "pointer" }}>
                       <span className={"chev " + (isOpen ? "open" : "")}>▶</span>
                       <b>{m.name}</b>
                       <span className="tag">· {m.role}</span>
@@ -8473,9 +8474,33 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
                             }
                             skuGroups[key].rows.push(a);
                           });
+                          const q = memberListSearch.trim().toLowerCase();
+                          const visibleGroups = q
+                            ? Object.values(skuGroups).filter(g => g.sku.toLowerCase().includes(q) || (g.prod?.name || "").toLowerCase().includes(q))
+                            : Object.values(skuGroups);
                           return (
                             <div style={{ borderTop: "1px solid var(--line)" }}>
-                              {Object.values(skuGroups).map(group => {
+                              <div style={{ padding: "10px 18px", borderBottom: "1px solid var(--line)" }}>
+                                <div style={{ position: "relative" }}>
+                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" style={{ position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)", color: "var(--faint)" }}><circle cx="11" cy="11" r="7" /><path d="m20 20-3-3" /></svg>
+                                  <input
+                                    className="txt"
+                                    placeholder="Search SKU or name…"
+                                    value={memberListSearch}
+                                    onChange={e => setMemberListSearch(e.target.value)}
+                                    style={{ paddingLeft: 30, fontSize: 12, width: "100%" }}
+                                  />
+                                  {memberListSearch && (
+                                    <button onClick={() => setMemberListSearch("")}
+                                      style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", fontSize: 12, color: "var(--faint)", fontWeight: 700 }}>✕</button>
+                                  )}
+                                </div>
+                                {q && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>{visibleGroups.length} of {Object.keys(skuGroups).length} SKU{Object.keys(skuGroups).length !== 1 ? "s" : ""} match</div>}
+                              </div>
+                              {visibleGroups.length === 0 && (
+                                <div style={{ padding: "14px 18px", color: "var(--faint)", fontSize: 13 }}>No SKUs match "{memberListSearch}".</div>
+                              )}
+                              {visibleGroups.map(group => {
                                 // All assignments for this SKU across the whole division
                                 const allForSku = divAssignments.filter(a => a.sku.toLowerCase() === group.sku.toLowerCase());
                                 // Build assignee summary: stage → memberName
