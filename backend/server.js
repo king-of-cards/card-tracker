@@ -802,9 +802,18 @@ app.post("/api/saveUsers", async (req, res) => {
 // });
 
 app.post("/api/setAssignments", async (req, res) => {
-  const assignments = req.body;
+  // Backward compatible: if body is a plain array, behave exactly as before
+  // (full-replace/sync). If body is { mode: "add", assignments: [...] },
+  // skip the delete/shrink-guard logic entirely and only insert/update —
+  // safe for small "assign more work" actions.
+  const isAddMode = !Array.isArray(req.body) && req.body?.mode === "add";
+  const assignments = isAddMode ? req.body.assignments : req.body;
+
   if (!Array.isArray(assignments)) {
-    return res.status(400).json({ ok: false, error: "expected array" });
+    return res.status(400).json({ ok: false, error: "expected array (or { mode: 'add', assignments: [...] })" });
+  }
+  if (isAddMode && assignments.length === 0) {
+    return res.status(400).json({ ok: false, error: "assignments array is empty" });
   }
 
   const divisionsInPayload = [...new Set(assignments.map((a) => a.division))];
@@ -814,9 +823,11 @@ app.post("/api/setAssignments", async (req, res) => {
     await client.query("SET LOCAL statement_timeout = '120s'");
     await client.query("BEGIN");
 
-    // ---- Per-division safety guards (fixes: a small Bombay Cards batch no longer
+        // ---- Per-division safety guards (fixes: a small Bombay Cards batch no longer
     // gets compared against KOC Cards' much larger row count) ----
-    for (const div of divisionsInPayload) {
+    // Skipped entirely in "add" mode, since add-mode never deletes anything —
+    // there's nothing for the shrink-guard to protect against.
+    for (const div of isAddMode ? [] : divisionsInPayload) {
       const { rows: cr } = await client.query(
         "SELECT COUNT(*) FROM assignments WHERE division = $1",
         [div],
@@ -876,9 +887,13 @@ app.post("/api/setAssignments", async (req, res) => {
       stages = [],
       assignedAts = [];
     const validIdsByDivision = {};
+    const skipped = []; // track WHY each row was dropped, instead of failing silently
     assignments.forEach((a) => {
-      const pid = prodMap[a.division + "||" + a.sku.toLowerCase()];
-      if (!pid) return;
+      const pid = prodMap[a.division + "||" + String(a.sku || "").toLowerCase()];
+      if (!pid) {
+        skipped.push({ sku: a.sku, division: a.division });
+        return;
+      }
       ids.push(a.id);
       memberIds.push(a.memberId);
       managerIds.push(a.managerId);
@@ -889,6 +904,18 @@ app.post("/api/setAssignments", async (req, res) => {
       assignedAts.push(a.assignedAt || new Date().toISOString());
       (validIdsByDivision[a.division] ||= []).push(a.id);
     });
+
+    // If every incoming row was skipped, this is the "nothing was written"
+    // case — surface exactly which SKU/division pairs failed to resolve
+    // instead of returning a bare ok:true with upserted:0.
+    if (isAddMode && ids.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({
+        ok: false,
+        error: `No matching product found for ${skipped.length} SKU(s) — check division/SKU spelling.`,
+        skipped,
+      });
+    }
 
     if (ids.length > 0) {
       await client.query(
@@ -915,11 +942,12 @@ app.post("/api/setAssignments", async (req, res) => {
       );
     }
 
-    // ---- Delete only rows NOT present in payload, scoped PER DIVISION ----
+        // ---- Delete only rows NOT present in payload, scoped PER DIVISION ----
     // This is the critical fix: previously this deleted globally, so any
     // omission for one division (e.g. Bombay) risked corrupting another
     // (e.g. KOC). Now a Bombay-only save can never touch KOC rows.
-    for (const div of divisionsInPayload) {
+    // Skipped entirely in "add" mode — additive calls never remove rows.
+    for (const div of isAddMode ? [] : divisionsInPayload) {
       const keepIds = validIdsByDivision[div] || [];
       if (keepIds.length > 0) {
         await client.query(
@@ -930,11 +958,11 @@ app.post("/api/setAssignments", async (req, res) => {
     }
 
     await client.query("COMMIT");
-    res.json({ ok: true, upserted: ids.length });
+    res.json({ ok: true, upserted: ids.length, skipped });
   } catch (e) {
     await client.query("ROLLBACK");
     console.error("setAssignments error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: e.message }); 
   } finally {
     client.release();
   }
@@ -3186,6 +3214,42 @@ app.get("/api/dispatch/branch-pending", async (req, res) => {
 });
 
 
-app.listen(process.env.PORT, () => {
+const server = app.listen(process.env.PORT, () => {
   console.log(`Server running on http://localhost:${process.env.PORT}`);
 });
+
+
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`${signal} received — starting graceful shutdown`);
+
+  // 1. Stop accepting new HTTP requests
+  server.close(() => {
+    console.log("HTTP server closed — no new requests accepted");
+  });
+
+  // 2. Give in-flight requests a window to finish before forcing exit
+  const forceExitTimer = setTimeout(() => {
+    console.error("Forced shutdown — requests did not finish in time");
+    process.exit(1);
+  }, 10000); // 10s grace period
+
+  try {
+    await pool.end(); // waits for checked-out clients to finish their queries
+    clearTimeout(forceExitTimer);
+    console.log("DB pool closed cleanly");
+    process.exit(0);
+  } catch (err) {
+    console.error("Error while closing DB pool:", err);
+    process.exit(1);
+  }
+}
+
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+
+
+
