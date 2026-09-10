@@ -17,6 +17,7 @@ const pool = new Pool({
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
   keepAlive: true,
+  max: 10,
   keepAliveInitialDelayMillis: 10000,
 });
 
@@ -3243,7 +3244,7 @@ async function gracefulShutdown(signal) {
     console.log("DB pool closed cleanly");
     process.exit(0);
   } catch (err) {
-    console.error("Error while closing DB pool:", err);
+    console.error("Error while closing DB pool:", err); 
     process.exit(1);
   }
 }
