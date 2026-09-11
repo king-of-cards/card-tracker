@@ -5,7 +5,7 @@ const cors = require("cors");
 
 const app = express();
 app.use(cors({ origin: "*" }));
-app.use(express.json({ limit: "25mb" })); // bulk product imports can be large
+app.use(express.json({ limit: "25mb" })); 
 
 const pool = new Pool({
   host: process.env.DB_HOST,
@@ -25,7 +25,7 @@ pool.on("error", (err) => {
   console.error("Idle client error — pool will recover:", err.message);
 });
 
-const MAX_PRODUCTS = 100000; // set your real ceiling here
+const MAX_PRODUCTS = 100000; 
 
 async function getProductCount(client) {
   const { rows } = await client.query("SELECT COUNT(*) FROM products");
