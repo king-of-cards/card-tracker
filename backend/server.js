@@ -74,6 +74,16 @@ app.get("/health", async (req, res) => {
     res.json({ ok: false, error: e.message });
   }
 });
+app.get("/health/pool", (req, res) => {
+  res.json({
+    total: pool.totalCount,
+    idle: pool.idleCount,
+    waiting: pool.waitingCount,
+    max: 10,
+  });
+});
+
+
 
 /* ----------------------------------------------------------------
    Helpers — convert a DB row shape into the nested JSON shape the
@@ -2635,7 +2645,7 @@ app.post("/api/dispatch/branch-upload", async (req, res) => {
     !batchLabel ||
     !branchName ||
     !Array.isArray(skus) ||
-    skus.length === 0
+    skus.length === 0 
   ) {
     return res.status(400).json({
       ok: false,
