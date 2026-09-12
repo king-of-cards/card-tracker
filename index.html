@@ -1650,9 +1650,20 @@
 
 
 
-  const API = "https://cardtracker.kingofcards.in"
+  // const API = "https://cardtracker.kingofcards.in"
   // const API = "http://localhost:8080"
+    const API= "https://heroism-passenger-uncharted.ngrok-free.dev"
 
+  const _origFetch = window.fetch;
+  window.fetch = (url, options = {}) => {
+    if (typeof url === "string" && url.startsWith(API)) {
+      options = {
+        ...options,
+        headers: { ...(options.headers || {}), "ngrok-skip-browser-warning": "true" }
+      };
+    }
+    return _origFetch(url, options);
+  };
   async function gsGetUsers() {
     try {
       const r = await fetch(API + "/api/getUsers");
