@@ -14,11 +14,17 @@ const pool = new Pool({
   database: process.env.DB_NAME,
   port: process.env.DB_PORT,
   ssl: { rejectUnauthorized: false },
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
+
+  max: 5,                            // small footprint — you're one of 5+ tenants on this RDS
+  min: 0,                            // don't hold connections open when nothing's happening
+  idleTimeoutMillis: 10000,          // release idle connections back fast (was 30000)
+  connectionTimeoutMillis: 5000,     // fail fast if pool is busy, instead of hanging like before
+
   keepAlive: true,
-  max: 10,
   keepAliveInitialDelayMillis: 10000,
+
+  application_name: "card-tracker",  // shows up in pg_stat_activity so you can ID your own queries
+  pipeline: true,
 });
 
 pool.on("error", (err) => {
@@ -1348,6 +1354,28 @@ app.post("/api/bulkImportProducts", async (req, res) => {
       });
     }
 
+        // ---- 1. Bulk upsert vendors (deduped, ONE query) ----
+    const vendorPairs = new Set();
+    validRows.forEach((r) => {
+      if (r.vendor && String(r.vendor).trim()) {
+        vendorPairs.add((r.division || "") + "||" + String(r.vendor).trim());
+      }
+    });
+    if (vendorPairs.size > 0) {
+      const vDivs = [],
+        vNames = [];
+      vendorPairs.forEach((p) => {
+        const [d, n] = p.split("||");
+        vDivs.push(d);
+        vNames.push(n);
+      });
+      await client.query(
+        `INSERT INTO vendors (division, vendor_name)
+         SELECT * FROM unnest($1::division_name[], $2::text[]) ON CONFLICT DO NOTHING`,
+        [vDivs, vNames],
+      );
+    }
+
     // ---- 1. Bulk upsert products (ONE query for the whole chunk) ----
     const divisions = [],
       skus = [],
@@ -1361,7 +1389,7 @@ app.post("/api/bulkImportProducts", async (req, res) => {
       divisions.push(r.division || null);
       skus.push(String(r.sku).trim());
       names.push(r.name || "");
-      vendors.push(r.vendor || null);
+      vendors.push(r.vendor ? String(r.vendor).trim() : null);
       inwards.push(r.inward ? String(r.inward) : null);
       qtys.push(Number(r.qty) || 0);
       notes.push(r.note || "");
@@ -1391,27 +1419,27 @@ app.post("/api/bulkImportProducts", async (req, res) => {
       r.inserted ? results.created++ : results.updated++;
     });
 
-    // ---- 2. Bulk upsert vendors (deduped, ONE query) ----
-    const vendorPairs = new Set();
-    validRows.forEach((r) => {
-      if (r.vendor && String(r.vendor).trim()) {
-        vendorPairs.add((r.division || "") + "||" + String(r.vendor).trim());
-      }
-    });
-    if (vendorPairs.size > 0) {
-      const vDivs = [],
-        vNames = [];
-      vendorPairs.forEach((p) => {
-        const [d, n] = p.split("||");
-        vDivs.push(d);
-        vNames.push(n);
-      });
-      await client.query(
-        `INSERT INTO vendors (division, vendor_name)
-         SELECT * FROM unnest($1::division_name[], $2::text[]) ON CONFLICT DO NOTHING`,
-        [vDivs, vNames],
-      );
-    }
+    // // ---- 2. Bulk upsert vendors (deduped, ONE query) ----
+    // const vendorPairs = new Set();
+    // validRows.forEach((r) => {
+    //   if (r.vendor && String(r.vendor).trim()) {
+    //     vendorPairs.add((r.division || "") + "||" + String(r.vendor).trim());
+    //   }
+    // });
+    // if (vendorPairs.size > 0) {
+    //   const vDivs = [],
+    //     vNames = [];
+    //   vendorPairs.forEach((p) => {
+    //     const [d, n] = p.split("||");
+    //     vDivs.push(d);
+    //     vNames.push(n);
+    //   });
+    //   await client.query(
+    //     `INSERT INTO vendors (division, vendor_name)
+    //      SELECT * FROM unnest($1::division_name[], $2::text[]) ON CONFLICT DO NOTHING`,
+    //     [vDivs, vNames],
+    //   );
+    // }
 
     // ---- 3. Bulk upsert stage_entries (ONE query for ALL stages of ALL rows) ----
     const pids = [],
