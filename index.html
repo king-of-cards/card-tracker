@@ -3407,7 +3407,42 @@
       // Live mode — respects every filter already applied (vendor, set no,
       // member, etc.) since it's scoped from filteredProducts.
       return filteredProducts.filter(p => (p.stages?.[drill.stageKey]?.status || "Not Started") === drill.status);
-    }, [drill, fEventDate, dateScopedStageStats, filteredProducts, allDivProducts, products]);
+        }, [drill, fEventDate, dateScopedStageStats, filteredProducts, allDivProducts, products]);
+
+    // ---- Download the currently opened drill-down list as Excel ----
+    const downloadDrillExcel = () => {
+      if (!drill || drillCards.length === 0) return;
+      try {
+        const headers = ["S.No", "SKU", "Name", "Vendor", "Qty", "Stage", "Stage Status", "Verdict", "Stage Updated", "Stage Comments", "Last Updated"];
+        const rows = drillCards.map((p, i) => {
+          const stg = (p.stages && p.stages[drill.stageKey]) || {};
+          return [
+            i + 1,
+            p.sku || "",
+            p.name || "",
+            p.vendor || "",
+            p.qty || 0,
+            drill.stageName,
+            drill.status,
+            p.verdict || "",
+            stg.at ? fmt(stg.at) : "",
+            stg.comments || "",
+            p.updatedAt ? fmt(p.updatedAt) : ""
+          ];
+        });
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+        ws["!cols"] = headers.map(h => ({ wch: Math.max(14, h.length + 4) }));
+        const wb = XLSX.utils.book_new();
+        const sheetName = (drill.stageName + "_" + drill.status).replace(/[^a-z0-9 _-]/gi, "").slice(0, 31);
+        XLSX.utils.book_append_sheet(wb, ws, sheetName || "List");
+        const safe = (v) => String(v).replace(/[^a-z0-9]+/gi, "_");
+        const datePart = fEventDate ? "_" + fEventDate : "";
+        XLSX.writeFile(wb, safe(division) + "_" + safe(drill.stageName) + "_" + safe(drill.status) + datePart + ".xlsx");
+      } catch (e) {
+        console.error("downloadDrillExcel error", e);
+        alert("Download failed - check console.");
+      }
+    };
 
 
     const hasScopeFilter = !!(fVendor || fSetNo);
@@ -4098,7 +4133,18 @@
                     {drillCards.length} card{drillCards.length !== 1 ? "s" : ""}
                   </span>
                   {fEventDate && <span className="tag">on {fEventDate}</span>}
-                  <button className="ghost" style={{ padding: "5px 10px", fontSize: 11, marginLeft: "auto" }} onClick={() => setDrill(null)}>✕ Close</button>
+                  <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                    <button
+                      className="ghost"
+                      onClick={downloadDrillExcel}
+                      disabled={drillCards.length === 0}
+                      title="Download this list as Excel"
+                      style={{ padding: "5px 10px", fontSize: 11, display: "inline-flex", alignItems: "center", gap: 5, color: "var(--sage-ink)", fontWeight: 700 }}
+                    >
+                      {I.upload({ width: 14, height: 14 })} Download Excel
+                    </button>
+                    <button className="ghost" style={{ padding: "5px 10px", fontSize: 11 }} onClick={() => setDrill(null)}>✕ Close</button>
+                  </div>
                 </div>
                 {drillCards.length === 0 ? (
                   <div style={{ fontSize: 12, color: "var(--faint)" }}>No cards found.</div>
