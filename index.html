@@ -9040,6 +9040,8 @@ const PHOTO_VIDEO_STAGE_GROUP = [
   //       </div>
   //     );
   //   }
+
+  /* ---------------- MEMBER NOTE CELL (Notes column in the Backend team table) ---------------- */
   function SpeedAnalytics({ division, auth, teamMembers = [], assignments = [], products = [], initialFilter = null, onFilterConsumed }) {
     const isMasterOrAdmin = auth?.role === "master" || auth?.role === "admin";
     const [subTab, setSubTab] = useState("overview"); // "overview" | "team"
@@ -9053,6 +9055,29 @@ const PHOTO_VIDEO_STAGE_GROUP = [
     const [fAssignedTo, setFAssignedTo] = useState("");
     const [fCompletedFrom, setFCompletedFrom] = useState("");
     const [fCompletedTo, setFCompletedTo] = useState("");
+    // Vendor notes are kept separately for each division + vendor in this browser.
+    const [vendorNote, setVendorNote] = useState("");
+    const [vendorNoteSaving, setVendorNoteSaving] = useState(false);
+    const [vendorNoteExpanded, setVendorNoteExpanded] = useState(false);
+    const vendorNoteStorageKey = useMemo(
+      () => `cardflow-vendor-note:${division || "unknown"}:${fVendor || ""}`,
+      [division, fVendor]
+    );
+
+    useEffect(() => {
+      if (!fVendor) {
+        setVendorNote("");
+        setVendorNoteExpanded(false);
+        return;
+      }
+      try {
+        setVendorNote(window.localStorage.getItem(vendorNoteStorageKey) || "");
+      } catch (error) {
+        console.warn("Could not load vendor note from this browser:", error);
+        setVendorNote("");
+      }
+      setVendorNoteExpanded(false);
+    }, [vendorNoteStorageKey, fVendor]);
 
     useEffect(() => {
       if (initialFilter?.vendor) {
@@ -9079,6 +9104,10 @@ const PHOTO_VIDEO_STAGE_GROUP = [
 
     const [teamStats, setTeamStats] = useState({ backendTeam: [], photoTeam: [] });
     const [teamLoading, setTeamLoading] = useState(false);
+
+    // Admins can edit anyone's note; a member can edit their own.
+    const canEditNote = (row) =>
+      isMasterOrAdmin || (auth?.name || "").trim().toLowerCase() === (row.memberName || "").trim().toLowerCase();
     // --- Full per-member × per-stage breakdown (ALL stages, not just backend/photo groups) ---
     const [fullBreakdown, setFullBreakdown] = useState({ members: [] });
     const [fullLoading, setFullLoading] = useState(false);
@@ -9218,26 +9247,29 @@ const PHOTO_VIDEO_STAGE_GROUP = [
     const backendTableRows = teamStats.backendTeam;
     const photoTableRows = teamStats.photoTeam;
 
-    const renderTeamTable = (title, rows, stageGroup) => (
+    const renderTeamTable = (title, rows, stageGroup, withNotes = false) => (
       <div className="card pad">
         <div className="sec-h"><h3>{title}</h3><span className="hint">{division}</span></div>
-        <div className="team-table" style={{ overflowX: "visible", border: "1px solid var(--line)", borderRadius: "var(--r)", background: "var(--card)", boxShadow: "var(--shadow)" }}>
-          <table>
+        <div className="team-table" style={{ overflowX: "auto", border: "1px solid var(--line)", borderRadius: "var(--r)", background: "var(--card)", boxShadow: "var(--shadow)" }}>
+          <table style={{ minWidth: 1200 }}>
             <colgroup>
               <col style={{ width: "10%" }} />
-              <col style={{ width: "6%" }} />
-              {stageGroup.map(s => (
-                <React.Fragment key={s.k}>
-                  <col style={{ width: `${84 / (stageGroup.length * 3) * 1.35}%` }} />
-                  <col style={{ width: `${84 / (stageGroup.length * 3) * 0.9}%` }} />
-                  <col style={{ width: `${84 / (stageGroup.length * 3) * 0.75}%` }} />
-                </React.Fragment>
-              ))}
+              <col style={{ width: "7%" }} />
+              {stageGroup.map(s => {
+                const stageTotal = 83;
+                return (
+                  <React.Fragment key={s.k}>
+                    <col style={{ width: `${stageTotal / (stageGroup.length * 3) * 1.35}%` }} />
+                    <col style={{ width: `${stageTotal / (stageGroup.length * 3) * 0.9}%` }} />
+                    <col style={{ width: `${stageTotal / (stageGroup.length * 3) * 0.75}%` }} />
+                  </React.Fragment>
+                );
+              })}
             </colgroup>
             <thead>
               <tr>
                 <th rowSpan={2} style={{ position: "sticky", left: 0, zIndex: 3, background: "var(--card-2)", borderRight: "2px solid var(--line2)" }}>Member</th>
-                <th rowSpan={2} className="num" style={{ borderRight: "2px solid var(--line2)", minWidth: 90, whiteSpace: "nowrap" }}>Total Assigned</th>
+                <th rowSpan={2} className="num" style={{ borderRight: "2px solid var(--line2)", whiteSpace: "normal", lineHeight: 1.25, overflowWrap: "anywhere" }}>Total<br />Assigned</th>
                 {stageGroup.map(s => <th key={s.k} colSpan={3} style={{ borderLeft: "2px solid var(--line2)", textAlign: "center", fontWeight: 700, background: "#F3E4E4", color: "#7A3B3B" }}>{s.n}</th>)}
               </tr>
               <tr>
@@ -9363,7 +9395,7 @@ const PHOTO_VIDEO_STAGE_GROUP = [
 
     const renderFullBreakdownTable = () => (
       <div className="stacked-tables" style={{ maxWidth: "none", width: "100%" }}>
-        {renderTeamTable("Backend team", buildGroupRowsFromFull(BACKEND_STAGE_GROUP), BACKEND_STAGE_GROUP)}
+        {renderTeamTable("Backend team", buildGroupRowsFromFull(BACKEND_STAGE_GROUP), BACKEND_STAGE_GROUP, true)}
         {renderTeamTable("Photography & Videography team", buildGroupRowsFromFull(PHOTO_VIDEO_STAGE_GROUP), PHOTO_VIDEO_STAGE_GROUP)}
       </div>
     );
@@ -9421,11 +9453,69 @@ const PHOTO_VIDEO_STAGE_GROUP = [
                 </button>
               )}
             </div>
+
+            <div className="card pad" style={{ marginTop: 12, marginBottom: 16 }}>
+              <div className="sec-h">
+                <h3>Vendor Notes</h3>
+                <span className="hint">{fVendor || "Select a vendor"}</span>
+              </div>
+
+              {!fVendor ? (
+                <p className="hint">Select a vendor above to view or add its notes. Each vendor has a separate note.</p>
+              ) : (
+                <>
+                  <textarea
+                    value={vendorNote}
+                    onChange={(e) => setVendorNote(e.target.value)}
+                    placeholder={`Add notes for ${fVendor}...`}
+                    rows={vendorNoteExpanded ? 7 : 3}
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      padding: 12,
+                      border: "1px solid var(--line)",
+                      borderRadius: "var(--r)",
+                      background: "var(--card)",
+                      color: "var(--ink)",
+                      resize: "vertical",
+                    }}
+                  />
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 10 }}>
+                    <button type="button" className="ghost" onClick={() => setVendorNoteExpanded(v => !v)} style={{ padding: "6px 10px", fontSize: 12 }}>
+                      {vendorNoteExpanded ? "Show less" : "Show more"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={vendorNoteSaving}
+                      onClick={() => {
+                        setVendorNoteSaving(true);
+                        try {
+                          window.localStorage.setItem(vendorNoteStorageKey, vendorNote);
+                        } catch (error) {
+                          alert("Could not save this note in your browser. Check browser storage settings.");
+                          console.error("Vendor note save failed:", error);
+                        } finally {
+                          setVendorNoteSaving(false);
+                        }
+                      }}
+                    >
+                      {vendorNoteSaving ? "Saving..." : "Save Note"}
+                    </button>
+                  </div>
+                  <p className="hint" style={{ marginTop: 8, fontSize: 11 }}>
+                    Notes are saved separately per vendor in this browser.
+                  </p>
+                </>
+              )}
+            </div>
+
             <div className="stacked-tables" style={{ maxWidth: "none", width: "100%" }}>
               {renderFullBreakdownTable()}
             </div>
           </>
         )}
+
+
 
         {subTab === "overview" && (
           <>
@@ -9485,7 +9575,7 @@ const PHOTO_VIDEO_STAGE_GROUP = [
             </div>
 
             <div className="stacked-tables" style={{ maxWidth: "none", width: "100%" }}>
-              {renderTeamTable("Backend team", backendTableRows, BACKEND_STAGE_GROUP)}
+              {renderTeamTable("Backend team", backendTableRows, BACKEND_STAGE_GROUP, true)}
               {renderTeamTable("Photography & Videography team", photoTableRows, PHOTO_VIDEO_STAGE_GROUP)}
             </div>
           </>
