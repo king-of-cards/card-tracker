@@ -1650,8 +1650,9 @@
 
 
 
-  const API = "https://cardtracker.kingofcards.in"
-  // const API = "http://localhost:8080"
+  //  const API = "http://localhost:8080"
+   const API = "http://localhost:8080"
+const VENDOR_ISSUES_API = API;
     // const API= "https://heroism-passenger-uncharted.ngrok-free.dev"
 
   const _origFetch = window.fetch;
@@ -9040,6 +9041,453 @@ const PHOTO_VIDEO_STAGE_GROUP = [
   //       </div>
   //     );
   //   }
+  
+function VendorIssues({ auth, selectedVendor = "" }) {
+  const isMaster =
+    String(auth?.role || "").toLowerCase() === "master";
+
+  const [issues, setIssues] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [modal, setModal] = useState(null);
+  const [note, setNote] = useState("");
+  const [status, setStatus] = useState("REPORTED");
+  const [saving, setSaving] = useState(false);
+
+  const statusLabels = {
+    REPORTED: "Issue Reported",
+    IN_PROGRESS: "Working on It",
+    RESOLVED: "Resolved"
+  };
+
+  const statusStyles = {
+    REPORTED: "c-issue",
+    IN_PROGRESS: "c-prog",
+    RESOLVED: "c-done"
+  };
+
+  const field = (row, snake, camel) =>
+    row?.[snake] ?? row?.[camel];
+
+  const formatDate = (value) => {
+    if (!value) return "—";
+
+    const date = new Date(value?.value || value);
+
+    return Number.isNaN(date.getTime())
+      ? "—"
+      : date.toLocaleString();
+  };
+
+  const readJson = async (response) => {
+    const text = await response.text();
+
+    let data;
+
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(
+        `Server returned a non-JSON response (HTTP ${response.status}). Check the API URL and backend.`
+      );
+    }
+
+    if (!response.ok || data?.ok === false) {
+      throw new Error(
+        data?.error || `Request failed (HTTP ${response.status})`
+      );
+    }
+
+    return data;
+  };
+
+  const loadIssues = useCallback(async (vendor) => {
+    if (!vendor) {
+      setIssues([]);
+      setError("");
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+    setIssues([]);
+
+    try {
+      const response = await fetch(
+        `${VENDOR_ISSUES_API}/api/vendor-issues?vendor=${encodeURIComponent(vendor)}`
+      );
+
+      const data = await readJson(response);
+
+      const rows = Array.isArray(data)
+        ? data
+        : Array.isArray(data.issues)
+          ? data.issues
+          : Array.isArray(data.rows)
+            ? data.rows
+            : Array.isArray(data.data)
+              ? data.data
+              : null;
+
+      if (!rows) {
+        throw new Error("Unexpected Vendor Issues API response.");
+      }
+
+      setIssues(rows);
+    } catch (err) {
+      setError(err.message || "Unable to load vendor issues.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadIssues(selectedVendor);
+  }, [selectedVendor, loadIssues]);
+
+  const openAdd = () => {
+    if (!isMaster || !selectedVendor) return;
+
+    setNote("");
+    setStatus("REPORTED");
+    setModal({ type: "add" });
+  };
+
+  const openEdit = (issue) => {
+    if (!isMaster) return;
+
+    setNote(issue.note || "");
+    setStatus(issue.status || "REPORTED");
+    setModal({ type: "edit", id: issue.id });
+  };
+
+  const saveIssue = async () => {
+    if (
+      !isMaster ||
+      !selectedVendor ||
+      !modal ||
+      !note.trim() ||
+      saving
+    ) {
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      const isEdit = modal.type === "edit";
+
+      const url = isEdit
+        ? `${VENDOR_ISSUES_API}/api/vendor-issues/${encodeURIComponent(modal.id)}`
+        : `${VENDOR_ISSUES_API}/api/vendor-issues`;
+
+      const payload = isEdit
+        ? {
+            note: note.trim(),
+            status
+          }
+        : {
+            vendorName: selectedVendor,
+            note: note.trim()
+          };
+
+      const response = await fetch(url, {
+  method: isEdit ? "PATCH" : "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "x-user-email": auth?.email || ""
+  },
+  body: JSON.stringify(payload)
+});
+
+      await readJson(response);
+
+      setModal(null);
+      await loadIssues(selectedVendor);
+    } catch (err) {
+      alert(`Could not save issue: ${err.message}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="card pad"
+      style={{
+        marginTop: 16,
+        marginBottom: 16,
+        width: "100%"
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 12,
+          flexWrap: "wrap",
+          marginBottom: 16
+        }}
+      >
+        <div>
+          <h3 style={{ margin: 0, fontSize: 17 }}>
+            Vendor Issues
+          </h3>
+
+          <div className="tag" style={{ marginTop: 5 }}>
+            Track vendor issues, updates and resolutions
+          </div>
+        </div>
+
+        {isMaster && (
+          <button
+            className="primary"
+            onClick={openAdd}
+            disabled={!selectedVendor}
+          >
+            + Add Issue
+          </button>
+        )}
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          flexWrap: "wrap",
+          marginBottom: 14
+        }}
+      >
+        <span className="tag">
+          {selectedVendor ? (
+            <>
+              Vendor: <b>{selectedVendor}</b>
+            </>
+          ) : (
+            "Select a vendor from the filter above"
+          )}
+        </span>
+
+        {selectedVendor && (
+          <button
+            className="ghost"
+            onClick={() => loadIssues(selectedVendor)}
+            disabled={loading}
+          >
+            Refresh
+          </button>
+        )}
+
+        {selectedVendor && !loading && !error && (
+          <span className="chip c-none">
+            {issues.length} issue{issues.length === 1 ? "" : "s"}
+          </span>
+        )}
+      </div>
+
+      {!selectedVendor && (
+        <div className="empty" style={{ padding: 28 }}>
+          Select a vendor to view its reported issues.
+        </div>
+      )}
+
+      {selectedVendor && loading && (
+        <div className="empty" style={{ padding: 28 }}>
+          Loading vendor issues...
+        </div>
+      )}
+
+      {selectedVendor && !loading && error && (
+        <div
+          className="note"
+          style={{
+            background: "var(--rose-bg)",
+            borderColor: "var(--rose)",
+            color: "var(--rose-ink)"
+          }}
+        >
+          Could not load vendor issues: {error}
+        </div>
+      )}
+
+      {selectedVendor &&
+        !loading &&
+        !error &&
+        issues.length === 0 && (
+          <div className="empty" style={{ padding: 28 }}>
+            No issues reported for this vendor.
+          </div>
+        )}
+
+      {selectedVendor &&
+        !loading &&
+        !error &&
+        issues.map((issue) => (
+          <div
+            key={issue.id}
+            style={{
+              padding: "16px 0",
+              borderTop: "1px solid var(--line)"
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                gap: 14,
+                flexWrap: "wrap"
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 180 }}>
+                <div
+                  style={{
+                    fontWeight: 600,
+                    fontSize: 13,
+                    whiteSpace: "pre-wrap",
+                    overflowWrap: "anywhere"
+                  }}
+                >
+                  {issue.note}
+                </div>
+
+                <div className="tag" style={{ marginTop: 8 }}>
+                  Created by:{" "}
+                  {field(issue, "created_by", "createdBy") || "—"}
+                  {" · "}
+                  {formatDate(
+                    field(issue, "created_at", "createdAt")
+                  )}
+                </div>
+
+                {field(issue, "updated_at", "updatedAt") && (
+                  <div className="tag" style={{ marginTop: 4 }}>
+                    Updated by:{" "}
+                    {field(issue, "updated_by", "updatedBy") || "—"}
+                    {" · "}
+                    {formatDate(
+                      field(issue, "updated_at", "updatedAt")
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <span
+                className={
+                  "chip " +
+                  (statusStyles[issue.status] || "c-none")
+                }
+              >
+                <span className="dot" />
+                {statusLabels[issue.status] || issue.status}
+              </span>
+
+              {isMaster && (
+                <button
+                  className="ghost"
+                  onClick={() => openEdit(issue)}
+                >
+                  Edit
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+
+      {modal && isMaster && (
+        <div
+          className="scrim"
+          onClick={() => {
+            if (!saving) setModal(null);
+          }}
+        >
+          <div
+            className="modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3>
+              {modal.type === "add"
+                ? "Report Vendor Issue"
+                : "Update Vendor Issue"}
+            </h3>
+
+            <div className="mbody">
+              <div className="tag">
+                Vendor: <b>{selectedVendor}</b>
+              </div>
+
+              <label className="fld">
+                Issue Note
+
+                <textarea
+                  rows={5}
+                  maxLength={5000}
+                  value={note}
+                  onChange={(event) =>
+                    setNote(event.target.value)
+                  }
+                  placeholder="Describe the vendor issue..."
+                />
+              </label>
+
+              {modal.type === "edit" ? (
+                <label className="fld">
+                  Status
+
+                  <select
+                    value={status}
+                    onChange={(event) =>
+                      setStatus(event.target.value)
+                    }
+                  >
+                    {Object.entries(statusLabels).map(
+                      ([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      )
+                    )}
+                  </select>
+                </label>
+              ) : (
+                <div className="tag">
+                  New issues start with the status Issue Reported.
+                </div>
+              )}
+            </div>
+
+            <div className="mfoot">
+              <button
+                className="ghost"
+                disabled={saving}
+                onClick={() => setModal(null)}
+              >
+                Cancel
+              </button>
+
+              <button
+                className="primary"
+                disabled={saving || !note.trim()}
+                onClick={saveIssue}
+              >
+                {saving
+                  ? "Saving..."
+                  : modal.type === "add"
+                    ? "Report Issue"
+                    : "Save Changes"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
   function SpeedAnalytics({ division, auth, teamMembers = [], assignments = [], products = [], initialFilter = null, onFilterConsumed }) {
     const isMasterOrAdmin = auth?.role === "master" || auth?.role === "admin";
     const [subTab, setSubTab] = useState("overview"); // "overview" | "team"
@@ -9421,9 +9869,16 @@ const PHOTO_VIDEO_STAGE_GROUP = [
                 </button>
               )}
             </div>
-            <div className="stacked-tables" style={{ maxWidth: "none", width: "100%" }}>
-              {renderFullBreakdownTable()}
-            </div>
+            
+<VendorIssues
+  auth={auth}
+  selectedVendor={fVendor}
+/>
+
+<div className="stacked-tables" style={{ maxWidth: "none", width: "100%" }}>
+  {renderFullBreakdownTable()}
+</div>
+
           </>
         )}
 
