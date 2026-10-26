@@ -6330,13 +6330,38 @@ const VENDOR_ISSUES_API = API;
     XLSX.writeFile(wb, mode === "admin" ? "dispatch_admin_reference_template.xlsx" : "dispatch_branch_received_template.xlsx");
   }
 
+  /* 3 KPI cards: Dispatched / Received / Still Pending — used by Admin Dispatch and Branch Upload */
+  function DispatchKpiRow({ dispatched, received, pending, scope, ready = true, loading = false }) {
+    const show = (n) => (!ready ? "—" : n);
+    const sub = (text) => (!ready ? scope : loading ? "updating…" : text);
+    return (
+      <div className="grid kpis" style={{ marginBottom: 16 }}>
+        <div className="card kpi">
+          <div className="lab">Cards Dispatched</div>
+          <div className="val" style={{ color: "var(--sky-ink)" }}>{show(dispatched)}</div>
+          <div className="sub">{sub(scope)}</div>
+        </div>
+        <div className="card kpi">
+          <div className="lab">Cards Received</div>
+          <div className="val" style={{ color: "var(--sage-ink)" }}>{show(received)}</div>
+          <div className="sub">{sub("scanned in so far")}</div>
+        </div>
+        <div className="card kpi">
+          <div className="lab">Still Pending</div>
+          <div className="val" style={{ color: ready && pending > 0 ? "var(--rose-ink)" : "var(--sage-ink)" }}>{show(pending)}</div>
+          <div className="sub">{sub("not yet scanned")}</div>
+        </div>
+      </div>
+    );
+  }
+
   function BranchReceiving({ division, myBranch, operator }) {
       const [pending, setPending] = useState([]);
       const [loadingPending, setLoadingPending] = useState(true);
       const scanPanelRef = useRef(null);
 
-      const loadPending = useCallback(async () => {
-        setLoadingPending(true);
+      const loadPending = useCallback(async (quiet = false) => {
+        if (!quiet) setLoadingPending(true);
         const rows = await fetchBranchPending(division, myBranch);
         setPending(rows);
         setLoadingPending(false);
@@ -6379,9 +6404,27 @@ const VENDOR_ISSUES_API = API;
 
       const pendingOnly = pending.filter(r => !r.fully_received);
 
+      // KPI numbers follow the Vendor / Batch / Set pickers below ("" = everything for this branch)
+      const kpiRows = pending.filter(r =>
+        (!vendor || r.vendor === vendor) &&
+        (!batchLabel || r.batch_label === batchLabel) &&
+        (!setLabel || r.set_label === setLabel));
+      const kpiDispatched = kpiRows.reduce((sum, r) => sum + (Number(r.dispatched_count) || 0), 0);
+      const kpiReceived = kpiRows.reduce((sum, r) => sum + (Number(r.received_count) || 0), 0);
+      const kpiPending = kpiRows.reduce((sum, r) => sum + (Number(r.pending_count) || 0), 0);
+      const kpiScope = [vendor, batchLabel, setLabel].filter(Boolean).join(" › ") || `all dispatches to ${myBranch}`;
+
       return (
         <div>
           <div className="note">Scan every card as it arrives at <b>{myBranch}</b>. Only sets that were actually dispatched to your branch show up below. Duplicate scans are flagged instantly.</div>
+
+          <DispatchKpiRow
+            dispatched={kpiDispatched}
+            received={kpiReceived}
+            pending={kpiPending}
+            scope={kpiScope}
+            loading={loadingPending}
+          />
 
           {/* Pending dispatches panel */}
           <div className="sec">
@@ -6460,7 +6503,7 @@ const VENDOR_ISSUES_API = API;
                 key={`${vendor}|${batchLabel}|${setLabel}`}
                 division={division} vendor={vendor} batchLabel={batchLabel} setLabel={setLabel}
                 branchName={myBranch} source="received" scannedBy={operator}
-                onScanned={loadPending}
+                onScanned={() => loadPending(true)}
               />
             </div>
           )}
@@ -6588,6 +6631,31 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
     const effectiveBatchLabel = batchLabel || newBatchLabel.trim();
     const effectiveSetLabel = setLabel || newSetLabel.trim();
 
+    // One fetch feeds both the KPI cards and the "Sets in this batch" list.
+    // Re-runs whenever vendor / batch change, and after every upload or scan (kpiTick).
+    const [kpiTick, setKpiTick] = useState(0);
+    const bumpKpis = useCallback(() => setKpiTick(t => t + 1), []);
+    const [summarySets, setSummarySets] = useState([]);
+    const [summaryLoading, setSummaryLoading] = useState(false);
+    useEffect(() => {
+      if (!vendor || !effectiveBatchLabel) { setSummarySets([]); setSummaryLoading(false); return; }
+      let cancelled = false;
+      setSummaryLoading(true);
+      fetchSetSummary(division, vendor, effectiveBatchLabel).then(rows => {
+        if (cancelled) return;
+        setSummarySets(rows);
+        setSummaryLoading(false);
+      });
+      return () => { cancelled = true; };
+    }, [division, vendor, effectiveBatchLabel, kpiTick]);
+
+    const kpiSets = effectiveSetLabel ? summarySets.filter(x => x.setLabel === effectiveSetLabel) : summarySets;
+    const kpiBranchRows = kpiSets.flatMap(x => x.branches || []);
+    const adminDispatched = kpiBranchRows.reduce((sum, b) => sum + (b.dispatchedCount || 0), 0);
+    const adminReceived = kpiBranchRows.reduce((sum, b) => sum + (b.receivedCount || 0), 0);
+    const adminPending = Math.max(0, adminDispatched - adminReceived);
+    const adminScope = [vendor, effectiveBatchLabel, effectiveSetLabel || "all sets"].filter(Boolean).join(" › ");
+
     const submitAdmin = async () => {
       if (!vendor || !effectiveBatchLabel || !effectiveSetLabel || !branchName || !rows) {
         setErr("Vendor, batch label, set label, branch and a file are required.");
@@ -6606,6 +6674,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
       setNewBatchLabel(""); setAddingBatch(false);
       setNewSetLabel(""); setAddingSet(false);
       loadGroups();
+      bumpKpis();
       fetchBatchLabels(division, vendor).then(setBatchLabelOptions);
       fetchSetLabels(division, vendor, effectiveBatchLabel).then(setSetLabelOptions);
       setBatchLabel(effectiveBatchLabel);
@@ -6624,6 +6693,19 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
           <button className={"subtab-btn" + (mode === "admin" ? " on" : "")} onClick={() => { setMode("admin"); setResult(null); setErr(""); }}>Dispatch to Branch</button>
           <button className={"subtab-btn" + (mode === "compare" ? " on" : "")} onClick={() => { setMode("compare"); setResult(null); setErr(""); }}>Compare</button>
         </div>
+
+        {mode === "admin" && (
+          <div style={{ marginTop: 14 }}>
+            <DispatchKpiRow
+              dispatched={adminDispatched}
+              received={adminReceived}
+              pending={adminPending}
+              scope={adminScope}
+              ready={!!(vendor && effectiveBatchLabel)}
+              loading={summaryLoading}
+            />
+          </div>
+        )}
 
         {mode === "admin" && (
           <div className="card pad" style={{ marginTop: 14 }}>
@@ -6686,7 +6768,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
               !vendor || !effectiveBatchLabel || !effectiveSetLabel ? (
                 <div className="note">Pick a vendor, batch label and set label above to start scanning.</div>
               ) : (
-                <DispatchScanPanel division={division} vendor={vendor} batchLabel={effectiveBatchLabel} setLabel={effectiveSetLabel} branchName={branchName} source="dispatched" scannedBy={operator} />
+                <DispatchScanPanel division={division} vendor={vendor} batchLabel={effectiveBatchLabel} setLabel={effectiveSetLabel} branchName={branchName} source="dispatched" scannedBy={operator} onScanned={bumpKpis} />
               )
             ) : (
               <>
@@ -6730,7 +6812,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
         )}
 
         {vendor && effectiveBatchLabel && (
-          <SetSummaryPanel division={division} vendor={vendor} batchLabel={effectiveBatchLabel} />
+          <SetSummaryPanel sets={summarySets} />
         )}
 
         {groups.length > 0 && mode !== "compare" && (
@@ -6758,19 +6840,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
   }
 
 
-  function SetSummaryPanel({ division, vendor, batchLabel }) {
-    const [sets, setSets] = useState([]);
-    const [loading, setLoading] = useState(false);
-
-    const load = useCallback(async () => {
-      setLoading(true);
-      const s = await fetchSetSummary(division, vendor, batchLabel);
-      setSets(s);
-      setLoading(false);
-    }, [division, vendor, batchLabel]);
-    useEffect(() => { load(); }, [load]);
-
-    if (loading) return null;
+  function SetSummaryPanel({ sets }) {
     if (sets.length === 0) return null;
 
     const statusChip = (status) => {
@@ -6779,40 +6849,8 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
       return <Chip status="Not Started" />;
     };
 
-    // Totals across every branch this batch was dispatched to — computed
-    // from `sets`, not from BranchReceiving's `pending` (that belongs to a
-    // different, single-branch component).
-    const allBranchRows = sets.flatMap(s => s.branches);
-    const totalDispatched = allBranchRows.reduce((sum, b) => sum + (b.dispatchedCount || 0), 0);
-    const totalReceived = allBranchRows.reduce((sum, b) => sum + (b.receivedCount || 0), 0);
-    const totalPending = totalDispatched - totalReceived;
-    const totalBranches = new Set(allBranchRows.map(b => b.branchName)).size;
-
     return (
       <div className="sec">
-        <div className="grid kpis" style={{ marginBottom: 16 }}>
-          <div className="card kpi">
-            <div className="lab">Branches in this batch</div>
-            <div className="val">{totalBranches}</div>
-            <div className="sub">{batchLabel}</div>
-          </div>
-          <div className="card kpi">
-            <div className="lab">Cards Dispatched</div>
-            <div className="val" style={{ color: "var(--sky-ink)" }}>{totalDispatched}</div>
-            <div className="sub">sent across all branches</div>
-          </div>
-          <div className="card kpi">
-            <div className="lab">Cards Received</div>
-            <div className="val" style={{ color: "var(--sage-ink)" }}>{totalReceived}</div>
-            <div className="sub">scanned in so far</div>
-          </div>
-          <div className="card kpi">
-            <div className="lab">Still Pending</div>
-            <div className="val" style={{ color: totalPending > 0 ? "var(--rose-ink)" : "var(--sage-ink)" }}>{totalPending}</div>
-            <div className="sub">not yet scanned</div>
-          </div>
-        </div>
-
         <div className="sec-h"><h3>Sets in this batch</h3><span className="hint">who each set was dispatched to</span></div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {sets.map(s => (
@@ -7011,6 +7049,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
         if (idx === -1) return [{ sku, scanCount: res.scanCount }, ...prev];
         const next = [...prev]; next[idx] = { sku, scanCount: res.scanCount }; return next;
       });
+      onScanned && onScanned();
     };
 
     const undoScan = async (sku) => {
@@ -7024,6 +7063,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
         if (res.removed) return prev.filter(i => i.sku.toLowerCase() !== sku.toLowerCase());
         return prev.map(i => i.sku.toLowerCase() === sku.toLowerCase() ? { ...i, scanCount: res.scanCount } : i);
       });
+      onScanned && onScanned();
     };
 
     const totalScans = items.reduce((s, i) => s + i.scanCount, 0);
@@ -9042,6 +9082,83 @@ const PHOTO_VIDEO_STAGE_GROUP = [
   //     );
   //   }
   
+/* ---------- Custom dropdown with colored status pills ---------- */
+function StatusDropdown({ value, options, onChange, disabled = false, readOnly = false, minWidth = 170, header = "", labelOnly = false }) {
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+    const esc = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", esc); };
+  }, [open]);
+
+  const current = options.find(o => o.value === value) || options[0];
+  const pill = (o) => (
+    <span className={"chip " + (o.cls || "c-none")}><span className="dot" />{o.label}</span>
+  );
+
+  if (readOnly) return pill(current);
+
+  return (
+    <div ref={boxRef} style={{ position: "relative", display: "inline-block" }}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen(v => !v)}
+        style={{
+          display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+          minWidth, padding: "5px 8px 5px 6px", border: "1px solid var(--line2)", borderRadius: 10,
+          background: "var(--card)", cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.6 : 1
+        }}
+      >
+        {labelOnly
+          ? <span className={"chip " + (current.cls || "c-none")}><span className="dot" />{header || current.label}</span>
+          : pill(current)}
+        <span style={{ fontSize: 10, color: "var(--muted)", transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}>▼</span>
+      </button>
+
+      {open && (
+        <div
+          style={{
+            position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 50, minWidth: "100%",
+            background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 12,
+            boxShadow: "0 10px 30px rgba(0,0,0,.12)", padding: 6
+          }}
+        >
+          {header && (
+            <div style={{ padding: "6px 8px 8px", marginBottom: 4, borderBottom: "1px solid var(--line)", fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--muted)" }}>
+              {header}
+            </div>
+          )}
+          {options.map(o => {
+            const active = o.value === value;
+            return (
+              <div
+                key={o.value}
+                onClick={() => { setOpen(false); if (!active) onChange(o.value); }}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14,
+                  padding: "7px 8px", borderRadius: 8, cursor: "pointer",
+                  background: active ? "var(--card-2)" : "transparent"
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--card-2)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = active ? "var(--card-2)" : "transparent"; }}
+              >
+                {pill(o)}
+                {active && <span style={{ fontSize: 12, color: "var(--sage-ink)", fontWeight: 700 }}>✓</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function VendorIssues({ auth, selectedVendor = "" }) {
   const isMaster =
     String(auth?.role || "").toLowerCase() === "master";
@@ -9053,9 +9170,13 @@ function VendorIssues({ auth, selectedVendor = "" }) {
   const [note, setNote] = useState("");
   const [status, setStatus] = useState("REPORTED");
   const [saving, setSaving] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [expandedIds, setExpandedIds] = useState({});
+  const toggleExpanded = (id) => setExpandedIds(prev => ({ ...prev, [id]: !prev[id] }));
+  const [busyId, setBusyId] = useState(null);
 
   const statusLabels = {
-    REPORTED: "Issue Reported",
+    REPORTED: "Pending",
     IN_PROGRESS: "Working on It",
     RESOLVED: "Resolved"
   };
@@ -9066,8 +9187,23 @@ function VendorIssues({ auth, selectedVendor = "" }) {
     RESOLVED: "c-done"
   };
 
+  const statusOptions = Object.keys(statusLabels).map(k => ({ value: k, label: statusLabels[k], cls: statusStyles[k] }));
+
   const field = (row, snake, camel) =>
     row?.[snake] ?? row?.[camel];
+
+  // Show a person's name instead of their email address
+  const displayName = (who) => {
+    const v = String(who || "").trim();
+    if (!v) return "—";
+    if (!v.includes("@")) return v;
+    if (auth?.email && v.toLowerCase() === String(auth.email).toLowerCase() && auth?.name) return auth.name;
+    return v.split("@")[0]
+      .split(/[._\-+]+/)
+      .filter(Boolean)
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(" ") || v;
+  };
 
   const formatDate = (value) => {
     if (!value) return "—";
@@ -9145,6 +9281,31 @@ function VendorIssues({ auth, selectedVendor = "" }) {
   useEffect(() => {
     loadIssues(selectedVendor);
   }, [selectedVendor, loadIssues]);
+
+  // One-click status change (Reported / Working on It / Resolved) without opening the modal
+  const quickStatus = async (issue, newStatus) => {
+    if (!isMaster || busyId || (issue.status || "REPORTED") === newStatus) return;
+    setBusyId(issue.id);
+    try {
+      const response = await fetch(
+        `${VENDOR_ISSUES_API}/api/vendor-issues/${encodeURIComponent(issue.id)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", "x-user-email": auth?.email || "" },
+          body: JSON.stringify({ note: issue.note, status: newStatus })
+        }
+      );
+      await readJson(response);
+      await loadIssues(selectedVendor);
+    } catch (err) {
+      alert(`Could not update status: ${err.message}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const countBy = (st) => issues.filter(i => (i.status || "REPORTED") === st).length;
+  const visibleIssues = statusFilter === "ALL" ? issues : issues.filter(i => (i.status || "REPORTED") === statusFilter);
 
   const openAdd = () => {
     if (!isMaster || !selectedVendor) return;
@@ -9241,7 +9402,7 @@ function VendorIssues({ auth, selectedVendor = "" }) {
           </div>
         </div>
 
-        {isMaster && (
+        {isMaster && selectedVendor && !loading && !error && issues.length === 0 && (
           <button
             className="primary"
             onClick={openAdd}
@@ -9286,6 +9447,22 @@ function VendorIssues({ auth, selectedVendor = "" }) {
             {issues.length} issue{issues.length === 1 ? "" : "s"}
           </span>
         )}
+
+        {selectedVendor && !loading && !error && issues.length > 0 && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <span className="tag">Filters:</span>
+            <StatusDropdown
+              header="Filter by status"
+              value={statusFilter}
+              onChange={setStatusFilter}
+              minWidth={190}
+              options={[
+                { value: "ALL", label: `All (${issues.length})`, cls: "c-none" },
+                ...statusOptions.map(o => ({ ...o, label: `${o.label} (${countBy(o.value)})` }))
+              ]}
+            />
+          </div>
+        )}
       </div>
 
       {!selectedVendor && (
@@ -9322,10 +9499,16 @@ function VendorIssues({ auth, selectedVendor = "" }) {
           </div>
         )}
 
+      {selectedVendor && !loading && !error && issues.length > 0 && visibleIssues.length === 0 && (
+        <div className="empty" style={{ padding: 28 }}>
+          No issues with this status.
+        </div>
+      )}
+
       {selectedVendor &&
         !loading &&
         !error &&
-        issues.map((issue) => (
+        visibleIssues.map((issue) => (
           <div
             key={issue.id}
             style={{
@@ -9343,6 +9526,17 @@ function VendorIssues({ auth, selectedVendor = "" }) {
               }}
             >
               <div style={{ flex: 1, minWidth: 180 }}>
+                <div style={{ marginBottom: 10 }}>
+                  <StatusDropdown
+                    header="Issue status"
+                    labelOnly
+                    value={issue.status || "REPORTED"}
+                    options={statusOptions}
+                    readOnly={!isMaster}
+                    disabled={busyId === issue.id}
+                    onChange={(v) => quickStatus(issue, v)}
+                  />
+                </div>
                 <div
                   style={{
                     fontWeight: 600,
@@ -9354,44 +9548,45 @@ function VendorIssues({ auth, selectedVendor = "" }) {
                   {issue.note}
                 </div>
 
-                <div className="tag" style={{ marginTop: 8 }}>
-                  Created by:{" "}
-                  {field(issue, "created_by", "createdBy") || "—"}
-                  {" · "}
-                  {formatDate(
-                    field(issue, "created_at", "createdAt")
-                  )}
-                </div>
+                {expandedIds[issue.id] && (
+                  <>
+                    <div className="tag" style={{ marginTop: 8 }}>
+                      Created by:{" "}
+                      {displayName(field(issue, "created_by", "createdBy"))}
+                      {" · "}
+                      {formatDate(
+                        field(issue, "created_at", "createdAt")
+                      )}
+                    </div>
 
-                {field(issue, "updated_at", "updatedAt") && (
-                  <div className="tag" style={{ marginTop: 4 }}>
-                    Updated by:{" "}
-                    {field(issue, "updated_by", "updatedBy") || "—"}
-                    {" · "}
-                    {formatDate(
-                      field(issue, "updated_at", "updatedAt")
+                    {field(issue, "updated_at", "updatedAt") && (
+                      <div className="tag" style={{ marginTop: 4 }}>
+                        Updated by:{" "}
+                        {displayName(field(issue, "updated_by", "updatedBy"))}
+                        {" · "}
+                        {formatDate(
+                          field(issue, "updated_at", "updatedAt")
+                        )}
+                      </div>
                     )}
-                  </div>
+                  </>
                 )}
+
+                <button
+                  type="button"
+                  onClick={() => toggleExpanded(issue.id)}
+                  style={{ marginTop: 8, padding: 0, fontSize: 12, fontWeight: 700, color: "var(--sky-ink)", background: "none", border: "none", cursor: "pointer" }}
+                >
+                  {expandedIds[issue.id] ? "Show less" : "Show more"}
+                </button>
               </div>
 
-              <span
-                className={
-                  "chip " +
-                  (statusStyles[issue.status] || "c-none")
-                }
-              >
-                <span className="dot" />
-                {statusLabels[issue.status] || issue.status}
-              </span>
-
               {isMaster && (
-                <button
-                  className="ghost"
-                  onClick={() => openEdit(issue)}
-                >
-                  Edit
-                </button>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  <button className="ghost" onClick={() => openEdit(issue)} style={{ padding: "4px 10px", fontSize: 12 }}>
+                    Edit
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -9434,24 +9629,19 @@ function VendorIssues({ auth, selectedVendor = "" }) {
               </label>
 
               {modal.type === "edit" ? (
-                <label className="fld">
+                <div className="fld">
                   Status
 
-                  <select
-                    value={status}
-                    onChange={(event) =>
-                      setStatus(event.target.value)
-                    }
-                  >
-                    {Object.entries(statusLabels).map(
-                      ([value, label]) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      )
-                    )}
-                  </select>
-                </label>
+                  <div style={{ marginTop: 6 }}>
+                    <StatusDropdown
+                      header="Issue status"
+                      value={status}
+                      options={statusOptions}
+                      onChange={setStatus}
+                      minWidth={200}
+                    />
+                  </div>
+                </div>
               ) : (
                 <div className="tag">
                   New issues start with the status Issue Reported.
@@ -9669,23 +9859,23 @@ function VendorIssues({ auth, selectedVendor = "" }) {
     const renderTeamTable = (title, rows, stageGroup) => (
       <div className="card pad">
         <div className="sec-h"><h3>{title}</h3><span className="hint">{division}</span></div>
-        <div className="team-table" style={{ overflowX: "visible", border: "1px solid var(--line)", borderRadius: "var(--r)", background: "var(--card)", boxShadow: "var(--shadow)" }}>
-          <table>
+        <div className="team-table" style={{ overflowX: "auto", border: "1px solid var(--line)", borderRadius: "var(--r)", background: "var(--card)", boxShadow: "var(--shadow)" }}>
+          <table style={{ minWidth: 1500 }}>
             <colgroup>
               <col style={{ width: "10%" }} />
-              <col style={{ width: "6%" }} />
+              <col style={{ width: "7%" }} />
               {stageGroup.map(s => (
                 <React.Fragment key={s.k}>
-                  <col style={{ width: `${84 / (stageGroup.length * 3) * 1.35}%` }} />
-                  <col style={{ width: `${84 / (stageGroup.length * 3) * 0.9}%` }} />
-                  <col style={{ width: `${84 / (stageGroup.length * 3) * 0.75}%` }} />
+                  <col style={{ width: `${83 / (stageGroup.length * 3) * 1.35}%` }} />
+                  <col style={{ width: `${83 / (stageGroup.length * 3) * 0.9}%` }} />
+                  <col style={{ width: `${83 / (stageGroup.length * 3) * 0.75}%` }} />
                 </React.Fragment>
               ))}
             </colgroup>
             <thead>
               <tr>
                 <th rowSpan={2} style={{ position: "sticky", left: 0, zIndex: 3, background: "var(--card-2)", borderRight: "2px solid var(--line2)" }}>Member</th>
-                <th rowSpan={2} className="num" style={{ borderRight: "2px solid var(--line2)", minWidth: 90, whiteSpace: "nowrap" }}>Total Assigned</th>
+                <th rowSpan={2} className="num" style={{ borderRight: "2px solid var(--line2)", whiteSpace: "normal", lineHeight: 1.25, overflowWrap: "anywhere" }}>Total<br />Assigned</th>
                 {stageGroup.map(s => <th key={s.k} colSpan={3} style={{ borderLeft: "2px solid var(--line2)", textAlign: "center", fontWeight: 700, background: "#F3E4E4", color: "#7A3B3B" }}>{s.n}</th>)}
               </tr>
               <tr>
@@ -9959,6 +10149,7 @@ function VendorIssues({ auth, selectedVendor = "" }) {
       }
     }, [initialFilter]);
     const [fSetNo, setFSetNo] = useState(""); // set-wise filter (master/admin only)
+    const [fVendor, setFVendor] = useState(""); // vendor-wise filter (master/admin only)
     const isMasterOrAdmin = auth?.role === "master" || auth?.role === "admin";
     const [expanded, setExpanded] = useState({});
     const [verdicts, setVerdicts] = useState({});
@@ -9992,7 +10183,20 @@ function VendorIssues({ auth, selectedVendor = "" }) {
 
     const QC_GATE_EXCLUDED = ["scan", "qc", "finalqc"];
     const eligibleStages = STAGES.filter(s => !QC_GATE_EXCLUDED.includes(s.k));
-    const setNoOptions = useMemo(() => [...new Set(products.map(p => p.set_no).filter(Boolean))].sort(), [products]);
+    const vendorOptions = useMemo(
+      () => [...new Set(products.map(p => (p.vendor || "").trim()).filter(Boolean))].sort(),
+      [products]
+    );
+    // Set numbers narrow down to the selected vendor's sets
+    const setNoOptions = useMemo(
+      () => [...new Set(
+        products
+          .filter(p => !fVendor || (p.vendor || "").trim().toLowerCase() === fVendor.trim().toLowerCase())
+          .map(p => p.set_no)
+          .filter(Boolean)
+      )].sort(),
+      [products, fVendor]
+    );
 
 
 
@@ -10025,6 +10229,7 @@ const filtered = useMemo(() => {
   return products.filter(p => {
     const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase();
     if (q && !t.includes(q.toLowerCase())) return false;
+    if (isMasterOrAdmin && fVendor && (p.vendor || "").trim().toLowerCase() !== fVendor.trim().toLowerCase()) return false;
     if (isMasterOrAdmin && fSetNo && (p.set_no || "").trim().toLowerCase() !== fSetNo.trim().toLowerCase()) return false;
 
     const allStagesDone = eligibleStages.every(s => p.stages[s.k]?.skipped || p.stages[s.k].status === "Completed");
@@ -10040,7 +10245,7 @@ const filtered = useMemo(() => {
     if (filter === "issues") return p.verdict === "Issues Found";
     return true;
   });
-}, [products, q, filter, qcAuditLog, fSetNo, isMasterOrAdmin]);
+}, [products, q, filter, qcAuditLog, fSetNo, fVendor, isMasterOrAdmin]);
 
     const resolvedCount = products.filter(p => isResolved(p)).length;
     const pendingCount = products.filter(p => !p.verdict).length - resolvedCount;
@@ -10105,8 +10310,16 @@ const filtered = useMemo(() => {
         </div>
 
         {/* Toolbar */}
-        {isMasterOrAdmin && setNoOptions.length > 0 && (
+        {isMasterOrAdmin && (vendorOptions.length > 0 || setNoOptions.length > 0) && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+            <select
+              value={fVendor}
+              onChange={e => { setFVendor(e.target.value); setFSetNo(""); clearBulkSelect(); }}
+              style={{ border: "1px solid var(--line2)", borderRadius: 10, padding: "9px 12px", background: "var(--card)", fontSize: 13, fontWeight: 500, minWidth: 180 }}
+            >
+              <option value="">— all vendors —</option>
+              {vendorOptions.map(v => <option key={v} value={v}>{v}</option>)}
+            </select>
             <select
               value={fSetNo}
               onChange={e => setFSetNo(e.target.value)}
@@ -10115,8 +10328,8 @@ const filtered = useMemo(() => {
               <option value="">— all set no. —</option>
               {setNoOptions.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
-            {fSetNo && (
-              <button className="ghost" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setFSetNo("")}>
+            {(fVendor || fSetNo) && (
+              <button className="ghost" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => { setFVendor(""); setFSetNo(""); }}>
                 Clear
               </button>
             )}
