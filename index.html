@@ -9170,10 +9170,8 @@ function VendorIssues({ auth, selectedVendor = "" }) {
   const [note, setNote] = useState("");
   const [status, setStatus] = useState("REPORTED");
   const [saving, setSaving] = useState(false);
-  const [statusFilter, setStatusFilter] = useState("ALL");
   const [expandedIds, setExpandedIds] = useState({});
   const toggleExpanded = (id) => setExpandedIds(prev => ({ ...prev, [id]: !prev[id] }));
-  const [busyId, setBusyId] = useState(null);
 
   const statusLabels = {
     REPORTED: "Pending",
@@ -9267,12 +9265,12 @@ function VendorIssues({ auth, selectedVendor = "" }) {
               : null;
 
       if (!rows) {
-        throw new Error("Unexpected Vendor Issues API response.");
+        throw new Error("Unexpected Vendor Notes API response.");
       }
 
       setIssues(rows);
     } catch (err) {
-      setError(err.message || "Unable to load vendor issues.");
+      setError(err.message || "Unable to load vendor notes.");
     } finally {
       setLoading(false);
     }
@@ -9282,30 +9280,12 @@ function VendorIssues({ auth, selectedVendor = "" }) {
     loadIssues(selectedVendor);
   }, [selectedVendor, loadIssues]);
 
-  // One-click status change (Reported / Working on It / Resolved) without opening the modal
-  const quickStatus = async (issue, newStatus) => {
-    if (!isMaster || busyId || (issue.status || "REPORTED") === newStatus) return;
-    setBusyId(issue.id);
-    try {
-      const response = await fetch(
-        `${VENDOR_ISSUES_API}/api/vendor-issues/${encodeURIComponent(issue.id)}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json", "x-user-email": auth?.email || "" },
-          body: JSON.stringify({ note: issue.note, status: newStatus })
-        }
-      );
-      await readJson(response);
-      await loadIssues(selectedVendor);
-    } catch (err) {
-      alert(`Could not update status: ${err.message}`);
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  const countBy = (st) => issues.filter(i => (i.status || "REPORTED") === st).length;
-  const visibleIssues = statusFilter === "ALL" ? issues : issues.filter(i => (i.status || "REPORTED") === statusFilter);
+  // Newest note first, so freshly added notes appear at the top
+  const visibleIssues = [...issues].sort((x, y) => {
+    const tx = new Date(field(x, "created_at", "createdAt")?.value || field(x, "created_at", "createdAt") || 0).getTime() || 0;
+    const ty = new Date(field(y, "created_at", "createdAt")?.value || field(y, "created_at", "createdAt") || 0).getTime() || 0;
+    return ty - tx;
+  });
 
   const openAdd = () => {
     if (!isMaster || !selectedVendor) return;
@@ -9394,21 +9374,20 @@ function VendorIssues({ auth, selectedVendor = "" }) {
       >
         <div>
           <h3 style={{ margin: 0, fontSize: 17 }}>
-            Vendor Issues
+            Vendor Notes
           </h3>
 
           <div className="tag" style={{ marginTop: 5 }}>
-            Track vendor issues, updates and resolutions
           </div>
         </div>
 
-        {isMaster && selectedVendor && !loading && !error && issues.length === 0 && (
+        {isMaster && selectedVendor && !loading && !error && (
           <button
             className="primary"
             onClick={openAdd}
             disabled={!selectedVendor}
           >
-            + Add Issue
+            + Add Note
           </button>
         )}
       </div>
@@ -9432,48 +9411,22 @@ function VendorIssues({ auth, selectedVendor = "" }) {
           )}
         </span>
 
-        {selectedVendor && (
-          <button
-            className="ghost"
-            onClick={() => loadIssues(selectedVendor)}
-            disabled={loading}
-          >
-            Refresh
-          </button>
-        )}
-
         {selectedVendor && !loading && !error && (
           <span className="chip c-none">
-            {issues.length} issue{issues.length === 1 ? "" : "s"}
+            {issues.length} note{issues.length === 1 ? "" : "s"}
           </span>
-        )}
-
-        {selectedVendor && !loading && !error && issues.length > 0 && (
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <span className="tag">Filters:</span>
-            <StatusDropdown
-              header="Filter by status"
-              value={statusFilter}
-              onChange={setStatusFilter}
-              minWidth={190}
-              options={[
-                { value: "ALL", label: `All (${issues.length})`, cls: "c-none" },
-                ...statusOptions.map(o => ({ ...o, label: `${o.label} (${countBy(o.value)})` }))
-              ]}
-            />
-          </div>
         )}
       </div>
 
       {!selectedVendor && (
         <div className="empty" style={{ padding: 28 }}>
-          Select a vendor to view its reported issues.
+          Select a vendor to view and add its notes.
         </div>
       )}
 
       {selectedVendor && loading && (
         <div className="empty" style={{ padding: 28 }}>
-          Loading vendor issues...
+          Loading vendor notes...
         </div>
       )}
 
@@ -9486,7 +9439,7 @@ function VendorIssues({ auth, selectedVendor = "" }) {
             color: "var(--rose-ink)"
           }}
         >
-          Could not load vendor issues: {error}
+          Could not load vendor notes: {error}
         </div>
       )}
 
@@ -9495,15 +9448,9 @@ function VendorIssues({ auth, selectedVendor = "" }) {
         !error &&
         issues.length === 0 && (
           <div className="empty" style={{ padding: 28 }}>
-            No issues reported for this vendor.
+            No notes yet for this vendor.
           </div>
         )}
-
-      {selectedVendor && !loading && !error && issues.length > 0 && visibleIssues.length === 0 && (
-        <div className="empty" style={{ padding: 28 }}>
-          No issues with this status.
-        </div>
-      )}
 
       {selectedVendor &&
         !loading &&
@@ -9526,17 +9473,6 @@ function VendorIssues({ auth, selectedVendor = "" }) {
               }}
             >
               <div style={{ flex: 1, minWidth: 180 }}>
-                <div style={{ marginBottom: 10 }}>
-                  <StatusDropdown
-                    header="Issue status"
-                    labelOnly
-                    value={issue.status || "REPORTED"}
-                    options={statusOptions}
-                    readOnly={!isMaster}
-                    disabled={busyId === issue.id}
-                    onChange={(v) => quickStatus(issue, v)}
-                  />
-                </div>
                 <div
                   style={{
                     fontWeight: 600,
@@ -9605,8 +9541,8 @@ function VendorIssues({ auth, selectedVendor = "" }) {
           >
             <h3>
               {modal.type === "add"
-                ? "Report Vendor Issue"
-                : "Update Vendor Issue"}
+                ? "Add Vendor Note"
+                : "Edit Vendor Note"}
             </h3>
 
             <div className="mbody">
@@ -9615,7 +9551,7 @@ function VendorIssues({ auth, selectedVendor = "" }) {
               </div>
 
               <label className="fld">
-                Issue Note
+                Note
 
                 <textarea
                   rows={5}
@@ -9624,29 +9560,9 @@ function VendorIssues({ auth, selectedVendor = "" }) {
                   onChange={(event) =>
                     setNote(event.target.value)
                   }
-                  placeholder="Describe the vendor issue..."
+                  placeholder="Write a note about this vendor..."
                 />
               </label>
-
-              {modal.type === "edit" ? (
-                <div className="fld">
-                  Status
-
-                  <div style={{ marginTop: 6 }}>
-                    <StatusDropdown
-                      header="Issue status"
-                      value={status}
-                      options={statusOptions}
-                      onChange={setStatus}
-                      minWidth={200}
-                    />
-                  </div>
-                </div>
-              ) : (
-                <div className="tag">
-                  New issues start with the status Issue Reported.
-                </div>
-              )}
             </div>
 
             <div className="mfoot">
@@ -9666,7 +9582,7 @@ function VendorIssues({ auth, selectedVendor = "" }) {
                 {saving
                   ? "Saving..."
                   : modal.type === "add"
-                    ? "Report Issue"
+                    ? "Add Note"
                     : "Save Changes"}
               </button>
             </div>
@@ -10060,14 +9976,14 @@ function VendorIssues({ auth, selectedVendor = "" }) {
               )}
             </div>
             
+<div className="stacked-tables" style={{ maxWidth: "none", width: "100%" }}>
+  {renderFullBreakdownTable()}
+</div>
+
 <VendorIssues
   auth={auth}
   selectedVendor={fVendor}
 />
-
-<div className="stacked-tables" style={{ maxWidth: "none", width: "100%" }}>
-  {renderFullBreakdownTable()}
-</div>
 
           </>
         )}
