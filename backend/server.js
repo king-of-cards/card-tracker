@@ -5,7 +5,7 @@
 
 // const app = express();
 // app.use(cors({ origin: "*" }));
-// app.use(express.json({ limit: "25mb" })); 
+// app.use(express.json({ limit: "25mb" }));
 
 // // const pool = new Pool({
 // //   host: process.env.DB_HOST,
@@ -23,7 +23,7 @@
 // //   keepAlive: true,
 // //   keepAliveInitialDelayMillis: 10000,
 
-// //   application_name: "card-tracker",  
+// //   application_name: "card-tracker",
 // //   pipeline: true,
 // // });
 
@@ -49,7 +49,7 @@
 
 
 
-// const MAX_PRODUCTS = 100000; 
+// const MAX_PRODUCTS = 100000;
 
 // async function getProductCount(client) {
 //   const { rows } = await client.query("SELECT COUNT(*) FROM products");
@@ -1925,7 +1925,7 @@
 //     !batchLabel ||
 //     !branchName ||
 //     !Array.isArray(skus) ||
-//     skus.length === 0 
+//     skus.length === 0
 //   ) {
 //     return res.status(400).json({
 //       ok: false,
@@ -2534,7 +2534,7 @@
 //     console.log("DB pool closed cleanly");
 //     process.exit(0);
 //   } catch (err) {
-//     console.error("Error while closing DB pool:", err); 
+//     console.error("Error while closing DB pool:", err);
 //     process.exit(1);
 //   }
 // }
@@ -2550,7 +2550,7 @@ require("dotenv").config();
 const express = require("express");
 const { BigQuery } = require("@google-cloud/bigquery");
 const cors = require("cors");
-
+const { randomInt } = require("node:crypto");
 const app = express();
 
 app.use(cors({ origin: "*" }));
@@ -3480,6 +3480,303 @@ app.post("/api/setVendors", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+/* ============================================================
+   VENDOR ISSUES APIs
+   Table: shared_rds_data.vendor_issues
+============================================================ */
+
+// Looks up the caller's role in the DB from the x-user-email header
+async function attachUserFromHeader(req, res, next) {
+  try {
+    const email = String(req.headers["x-user-email"] || "").trim().toLowerCase();
+    if (!email) return next();
+    const { rows } = await db.query(
+      `SELECT email, role FROM ${T("users")} WHERE LOWER(email) = $1 LIMIT 1`,
+      [email]
+    );
+    if (rows.length) req.user = { email: rows[0].email, role: rows[0].role };
+    next();
+  } catch (e) {
+    next(e);
+  }
+}
+app.use(attachUserFromHeader);
+
+const VENDOR_ISSUE_STATUSES = [
+  "REPORTED",
+  "IN_PROGRESS",
+  "RESOLVED"
+];
+
+// These routes must be connected to verified authentication.
+// Never obtain the role or email directly from req.body.
+function requireVendorIssueUser(req, res, next) {
+  if (!req.user || !req.user.email || !req.user.role) {
+    return res.status(401).json({
+      ok: false,
+      error: "Authentication required"
+    });
+  }
+
+  next();
+}
+
+function requireVendorIssueMaster(req, res, next) {
+  if (String(req.user.role).toLowerCase() !== "master") {
+    return res.status(403).json({
+      ok: false,
+      error: "Only Masters can modify vendor issues"
+    });
+  }
+
+  next();
+}
+
+/* ------------------------------------------------------------
+   GET /api/vendor-issues?vendor=VendorName
+------------------------------------------------------------ */
+
+app.get(
+  "/api/vendor-issues",
+  async (req, res) => {
+    try {
+      const vendor = String(req.query.vendor || "").trim();
+
+      if (!vendor) {
+        return res.status(400).json({
+          ok: false,
+          error: "Vendor name is required"
+        });
+      }
+
+      const { rows } = await db.query(
+        `
+        SELECT
+          id,
+          vendor_name,
+          note,
+          status,
+          created_by,
+          created_at,
+          updated_by,
+          updated_at
+        FROM ${T("vendor_issues")}
+        WHERE vendor_name = $1
+        ORDER BY created_at DESC
+        `,
+        [vendor]
+      );
+
+      return res.json({
+        ok: true,
+        issues: rows
+      });
+    } catch (error) {
+      console.error("getVendorIssues error:", error);
+
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to fetch vendor issues"
+      });
+    }
+  }
+);
+
+/* ------------------------------------------------------------
+   POST /api/vendor-issues
+------------------------------------------------------------ */
+
+app.post(
+  "/api/vendor-issues",
+  requireVendorIssueUser,
+  requireVendorIssueMaster,
+  async (req, res) => {
+    try {
+      const { vendorName, note } = req.body || {};
+
+      if (
+        typeof vendorName !== "string" ||
+        !vendorName.trim() ||
+        typeof note !== "string" ||
+        !note.trim()
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error: "Vendor name and note are required"
+        });
+      }
+
+      if (note.trim().length > 5000) {
+        return res.status(400).json({
+          ok: false,
+          error: "Note cannot exceed 5000 characters"
+        });
+      }
+
+      const vendor = vendorName.trim();
+
+      // Verify that the vendor exists.
+      const { rows: vendors } = await db.query(
+        `
+        SELECT vendor_name
+        FROM ${T("vendors")}
+        WHERE vendor_name = $1
+        LIMIT 1
+        `,
+        [vendor]
+      );
+
+      if (!vendors.length) {
+        return res.status(404).json({
+          ok: false,
+          error: "Vendor not found"
+        });
+      }
+
+      // Numeric ID allocation must be implemented before
+      // enabling creation. BigQuery has no AUTO_INCREMENT.
+      // Generate a positive numeric issue ID.
+const id = randomInt(1, 2147483647);
+
+await db.query(
+  `
+  INSERT INTO ${T("vendor_issues")}
+    (id, vendor_name, note, status, created_by, created_at)
+  VALUES
+    ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP())
+  `,
+  [
+    id,
+    vendor,
+    note.trim(),
+    "REPORTED",
+    req.user.email
+  ]
+);
+
+return res.status(201).json({
+  ok: true,
+  message: "Vendor issue created successfully",
+  id
+});
+
+    } catch (error) {
+      console.error("createVendorIssue error:", error);
+
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to create vendor issue"
+      });
+    }
+  }
+);
+
+/* ------------------------------------------------------------
+   PATCH /api/vendor-issues/:id
+------------------------------------------------------------ */
+
+app.patch(
+  "/api/vendor-issues/:id",
+  requireVendorIssueUser,
+  requireVendorIssueMaster,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+
+      if (!Number.isSafeInteger(id) || id <= 0) {
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid issue ID"
+        });
+      }
+
+      const { note, status } = req.body || {};
+
+      if (note === undefined && status === undefined) {
+        return res.status(400).json({
+          ok: false,
+          error: "Provide a note or status"
+        });
+      }
+
+      if (
+        note !== undefined &&
+        (typeof note !== "string" ||
+          !note.trim() ||
+          note.trim().length > 5000)
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid note"
+        });
+      }
+
+      if (
+        status !== undefined &&
+        !VENDOR_ISSUE_STATUSES.includes(status)
+      ) {
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid issue status"
+        });
+      }
+
+      const { rows: existing } = await db.query(
+        `
+        SELECT id
+        FROM ${T("vendor_issues")}
+        WHERE id = $1
+        LIMIT 1
+        `,
+        [id]
+      );
+
+      if (!existing.length) {
+        return res.status(404).json({
+          ok: false,
+          error: "Vendor issue not found"
+        });
+      }
+
+      await db.query(
+  `
+  UPDATE ${T("vendor_issues")}
+  SET
+    note = COALESCE($1, note),
+    status = COALESCE($2, status),
+    updated_by = $3,
+    updated_at = CURRENT_TIMESTAMP()
+  WHERE id = $4
+  `,
+  [
+    note === undefined ? null : note.trim(),
+    status === undefined ? null : status,
+    req.user.email,
+    id
+  ],
+  {
+    p1: "STRING",
+    p2: "STRING"
+  }
+);
+
+      return res.json({
+        ok: true,
+        message: "Vendor issue updated successfully"
+      });
+
+    } catch (error) {
+      console.error("updateVendorIssue error:", error);
+
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to update vendor issue"
+      });
+    }
+  }
+);
+
 
 /* ----------------------------------------------------------------
    Helper: stages may arrive as an array or a string.

@@ -16,8 +16,8 @@ async function check() {
 
     // check all tables
     const tables = await pool.query(`
-      SELECT table_name 
-      FROM information_schema.tables 
+      SELECT table_name
+      FROM information_schema.tables
       WHERE table_schema = 'public'
       ORDER BY table_name
     `);
@@ -34,7 +34,7 @@ async function check() {
     // check row counts
     console.log("\nRow counts:\n");
     const tableNames = ["users", "products", "stage_entries", "stores", "assignments", "audit_log", "qc_audit", "vendors"];
-    
+
     for (const t of tableNames) {
       try {
         const count = await pool.query(`SELECT COUNT(*) FROM ${t}`);

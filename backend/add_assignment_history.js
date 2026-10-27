@@ -50,8 +50,8 @@ CREATE INDEX IF NOT EXISTS idx_ahistory_action     ON assignment_history (action
 
     // Verify table exists
     const { rows: tableCheck } = await pool.query(`
-      SELECT table_name 
-      FROM information_schema.tables 
+      SELECT table_name
+      FROM information_schema.tables
       WHERE table_name = 'assignment_history'
     `);
     if (tableCheck.length) {
@@ -62,8 +62,8 @@ CREATE INDEX IF NOT EXISTS idx_ahistory_action     ON assignment_history (action
 
     // Verify indexes
     const { rows: indexCheck } = await pool.query(`
-      SELECT indexname 
-      FROM pg_indexes 
+      SELECT indexname
+      FROM pg_indexes
       WHERE tablename = 'assignment_history'
       ORDER BY indexname
     `);

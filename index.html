@@ -1649,9 +1649,10 @@
 
 
 
-
-  const API = "https://cardtracker.kingofcards.in"
-  // const API = "http://localhost:8080"
+   const API = "https://cardtracker.kingofcards.in"
+  //  const API = "http://localhost:8080"
+  //  const API = "http://localhost:8080"
+const VENDOR_ISSUES_API = API;
     // const API= "https://heroism-passenger-uncharted.ngrok-free.dev"
 
   const _origFetch = window.fetch;
@@ -1810,7 +1811,7 @@
     return `${days} day${days !== 1 ? "s" : ""} ago`;
   }
 
-  
+
 
 
 
@@ -1969,7 +1970,6 @@
     );
   }
 
-  /* ============================================================= */
   function Login({ onLogin }) {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
@@ -2020,7 +2020,6 @@
     );
   }
 
-  /* ============================================================= */
   function App() {
     const [loading, setLoading] = useState(true);
     const [division, setDivision] = useState("KOC Cards");
@@ -2222,9 +2221,9 @@
             const stg = updatedStages[s.k];
             return stg?.status === "In Progress" && String(stg?.comments || "").startsWith("QC flagged:");
           });
-          if (flaggedStagesStillPending.length === 0) { 
-            verdict = ""; 
-            issues = ""; 
+          if (flaggedStagesStillPending.length === 0) {
+            verdict = "";
+            issues = "";
           }
         }
         return { ...p, stages: updatedStages, verdict, issues, updatedAt: nowIso };
@@ -2740,7 +2739,7 @@
   // }
 
 
-  
+
   /* ---------------- OVERVIEW ---------------- */
   function Overview({ division, products, allDivProducts, issues, audit, go, goIssues, goProducts, vendors = [], allowedStages = null, auth, teamMembers = [], assignments = [], qcAuditLog = [] }) {
     const [fVendor, setFVendor] = useState("");
@@ -2752,12 +2751,12 @@
     const [fEventDate, setFEventDate] = useState("");
     const [drill, setDrill] = useState(null); // { stageKey, stageName, status }
     const [dashFromDate, setDashFromDate] = useState("");
-    const [dashToDate, setDashToDate] = useState("");  
+    const [dashToDate, setDashToDate] = useState("");
     const todayStr = new Date().toISOString().split("T")[0];
     const [snapshotDate, setSnapshotDate] = useState(todayStr);
-    const [showSnapshot, setShowSnapshot] = useState(false); 
+    const [showSnapshot, setShowSnapshot] = useState(false);
     const [issueGlow, setIssueGlow] = useState(false);
-    const prevIssuesCountRef = useRef(null); // null = first load, skip the sound 
+    const prevIssuesCountRef = useRef(null); // null = first load, skip the sound
 
     // const [pipelineStats, setPipelineStats] = useState(null);
     const myMemberId = useMemo(() => {
@@ -2774,7 +2773,7 @@
 
     useEffect(() => {
       if (!auth || !myMemberId) return;
-      
+
       fetch(`${API}/api/memberStats?memberId=${encodeURIComponent(myMemberId)}&division=${encodeURIComponent(division)}`)
         .then(r => r.json())
         .then(data => { if (data.ok) setDbStats(data); })
@@ -2977,7 +2976,7 @@
       });
     }, [audit, isMasterOrAdminView, auth]);
 
-   
+
 
     // Pending/Complete KPIs now reflect the Website Listing (Shopify) stage
     // specifically, across the full platform pool for this scope.
@@ -3172,7 +3171,7 @@
             foundStageFlag = true;
             list.push({
               p, stageKey: s.k, stageName: s.n,
-              type: isQcFlagged ? "qc_flagged" : "issue_status",  
+              type: isQcFlagged ? "qc_flagged" : "issue_status",
               comment: String(stg.comments || "").replace(/^QC flagged:\s*/, "")
             });
           }
@@ -3292,8 +3291,8 @@
     filteredProducts.forEach(p => STORES.forEach(st => { const s = p.stores[st]; dispatched += s.dispatched || 0; if (s.received) received++; missing += s.missing || 0; damaged += s.damaged || 0; }));
     // const visibleStages = allowedStages ? STAGES.filter(s => allowedStages.includes(s.k)) : STAGES;
     const OVERVIEW_EXCLUDED = ["scan", "qc", "finalqc"];
-    const visibleStages = allowedStages 
-      ? STAGES.filter(s => allowedStages.includes(s.k) && !OVERVIEW_EXCLUDED.includes(s.k)) 
+    const visibleStages = allowedStages
+      ? STAGES.filter(s => allowedStages.includes(s.k) && !OVERVIEW_EXCLUDED.includes(s.k))
       : STAGES.filter(s => !OVERVIEW_EXCLUDED.includes(s.k));
     const isStageIssue = (stg) => stg.status === "Issue" || (stg.status === "In Progress" && String(stg.comments || "").startsWith("QC flagged:"));
     // const stageStats = (fMember && selectedMemberBreakdown
@@ -3596,9 +3595,9 @@
 
     const pendingVal = pendingCount;
     const completeVal = completeCount;
-    const distributedVal = isMasterOrAdminView ? distributedSkus 
+    const distributedVal = isMasterOrAdminView ? distributedSkus
       : (dbStats ? Number(dbStats.pushed_to_team) : distributedSkus);
-    const withManagerVal = isMasterOrAdminView ? remainingWithManager 
+    const withManagerVal = isMasterOrAdminView ? remainingWithManager
       : (dbStats ? Number(dbStats.kept_by_manager) : myPersonalPool.length);
 
     // // Master sees every flagged card across the division. A member/manager
@@ -3678,7 +3677,7 @@
 
     // return (
     //   <div>
-       
+
     //     <div className="grid kpis">
         return (
       <div>
@@ -3879,7 +3878,7 @@
               }}
               style={{ cursor: "pointer" }}
             >
-                        
+
               <div className="kico">{k.ic({})}</div>
               <div className="lab">{k.lab}</div>
               <div className={"val" + (k.scope === "issues" && issueGlow ? " issue-card-badge" : "")} style={{ color: k.color || "var(--ink)" }}>{k.val}</div>
@@ -4491,7 +4490,7 @@
       console.log("[DEBUG] myMemberId resolved to:", resolved, "| auth:", auth, "| matched teamMember:", me);
       return resolved;
     }, [teamMembers, auth]);
-    
+
 
     const [dbMemberStats, setDbMemberStats] = useState(null);
     useEffect(() => {
@@ -4591,18 +4590,18 @@
     const [showFilters, setShowFilters] = useState(false);
     const [fStatus, setFStatus] = useState("");
     const [fAssignee, setFAssignee] = useState("");
-    const [fEventType, setFEventType] = useState(""); 
+    const [fEventType, setFEventType] = useState("");
     const [fEventFrom, setFEventFrom] = useState("");
     const [fEventTo, setFEventTo] = useState("");
     const [fVendor, setFVendor] = useState("");
-    const [fCompletion, setFCompletion] = useState(""); 
+    const [fCompletion, setFCompletion] = useState("");
     const [fStage, setFStage] = useState("");
     const [fStageStatus, setFStageStatus] = useState("");
     const [fHasIssue, setFHasIssue] = useState(false);
     const [fStalledDays, setFStalledDays] = useState("");
     const [fQcVerdict, setFQcVerdict] = useState("");
     const [sortBy, setSortBy] = useState("recent");
- 
+
     useEffect(() => {
     if (!initialFilter) return;
     if (initialFilter.assignTab) { setAssignTab(initialFilter.assignTab); setShowFilters(true); }
@@ -4892,7 +4891,7 @@
       setBulkErr("");
       const personName = (operator && operator.trim()) || "";
       try {
-        
+
         const CHUNK = 25;
         for (let i = 0; i < selectedIds.length; i += CHUNK) {
           const chunk = selectedIds.slice(i, i + CHUNK);
@@ -4941,7 +4940,7 @@
     const sourceProducts = (hasAssignAccess && (assignTab === "assigned" || assignTab === "completed" || assignTab === "pending"))
       ? (allDivProducts || products)
       : products;
-    
+
   //   const cardHasOpenIssue = (p) => {
   //   if (p.verdict === "Issues Found") return true;
   //   return eligibleStagesForIssueCheck.some(s => {
@@ -5144,7 +5143,7 @@
 
     const filtered = sourceProducts.filter(p => {
       const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase();
-      if (!t.includes(q.toLowerCase())) return false; 
+      if (!t.includes(q.toLowerCase())) return false;
       if (fStatus === "issue") {
         if (!cardHasOpenIssueForMe(p)) return false;
       } else if (fStatus && productState(p) !== fStatus) return false;
@@ -5240,7 +5239,7 @@
       }
       if (fQcVerdict === "pending" && p.verdict) return false;
       if (fQcVerdict === "approved" && p.verdict !== "Approved") return false;
-      
+
       // New: independent Completed/Pending dropdown — works whether or not
       // a member is selected, and doesn't touch assignTab's own logic at all.
       if (fCompletion) {
@@ -5349,7 +5348,7 @@
     const totalPages = Math.max(1, Math.ceil(filtered.length / 20));
     return (
       <div>
-        
+
 
         <button onClick={() => setShowFilters(s => !s)} style={{
           display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 14,
@@ -5366,7 +5365,7 @@
           )}
           <span style={{ fontSize: 11, opacity: 0.7 }}>{showFilters ? "▲" : "▼"}</span>
         </button>
-    
+
           {showFilters && (
                 <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
                   {[
@@ -5537,7 +5536,7 @@
             )}
           </div>
         )}
-        
+
         {showFilters && (
           <div style={{ background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 12, padding: 14, marginBottom: 14, display: "flex", flexDirection: "column", gap: 12 }}>
 
@@ -5729,7 +5728,7 @@
           )}
         </div>
 
-        
+
         <div className="toolbar">
           <div className="search" style={{ position: "relative" }}>
             {I.search({})}
@@ -5839,8 +5838,8 @@
               // When viewing a specific member's cards, show THEIR stage assignments
               const memberSpecificStages = filterMember
                 ? assignments
-                    .filter(a => a.memberId === filterMember && 
-                                a.division === division && 
+                    .filter(a => a.memberId === filterMember &&
+                                a.division === division &&
                                 a.sku.trim().toLowerCase() === p.sku.trim().toLowerCase())
                     .map(a => {
                       const stageName = STAGES.find(s => s.k === a.stage)?.n || a.stage;
@@ -6259,7 +6258,7 @@
   /* ---------------- DISPATCH ---------------- */
     /* ---------------- DISPATCH ---------------- */
   function Dispatch({ products, onStore, onStage, operator, division }) {
-    const [q, setQ] = useState(""); 
+    const [q, setQ] = useState("");
     const [open, setOpen] = useState({});
     const filtered = products.filter(p => (p.sku + " " + p.name + " " + p.vendor).toLowerCase().includes(q.toLowerCase()));
     return (
@@ -6276,7 +6275,7 @@
     try {
       const params = new URLSearchParams({ division, vendor, batchLabel });
       const r = await fetch(`${API}/api/dispatch/batches?${params.toString()}`);
-      return await r.json(); 
+      return await r.json();
     } catch (e) { console.error("fetchDispatchBatchesList", e); return { ok: false }; }
   }
 
@@ -6304,7 +6303,7 @@
 
 
 
-  function downloadDispatchTemplate(mode) {  
+  function downloadDispatchTemplate(mode) {
     const headers = ["sku", "qty"];
     const exampleRows = [
       ["EXAMPLE-SKU-001 (delete this row)", 1],
@@ -6329,13 +6328,38 @@
     XLSX.writeFile(wb, mode === "admin" ? "dispatch_admin_reference_template.xlsx" : "dispatch_branch_received_template.xlsx");
   }
 
+  /* 3 KPI cards: Dispatched / Received / Still Pending — used by Admin Dispatch and Branch Upload */
+  function DispatchKpiRow({ dispatched, received, pending, scope, ready = true, loading = false }) {
+    const show = (n) => (!ready ? "—" : n);
+    const sub = (text) => (!ready ? scope : loading ? "updating…" : text);
+    return (
+      <div className="grid kpis" style={{ marginBottom: 16 }}>
+        <div className="card kpi">
+          <div className="lab">Cards Dispatched</div>
+          <div className="val" style={{ color: "var(--sky-ink)" }}>{show(dispatched)}</div>
+          <div className="sub">{sub(scope)}</div>
+        </div>
+        <div className="card kpi">
+          <div className="lab">Cards Received</div>
+          <div className="val" style={{ color: "var(--sage-ink)" }}>{show(received)}</div>
+          <div className="sub">{sub("scanned in so far")}</div>
+        </div>
+        <div className="card kpi">
+          <div className="lab">Still Pending</div>
+          <div className="val" style={{ color: ready && pending > 0 ? "var(--rose-ink)" : "var(--sage-ink)" }}>{show(pending)}</div>
+          <div className="sub">{sub("not yet scanned")}</div>
+        </div>
+      </div>
+    );
+  }
+
   function BranchReceiving({ division, myBranch, operator }) {
       const [pending, setPending] = useState([]);
       const [loadingPending, setLoadingPending] = useState(true);
       const scanPanelRef = useRef(null);
 
-      const loadPending = useCallback(async () => {
-        setLoadingPending(true);
+      const loadPending = useCallback(async (quiet = false) => {
+        if (!quiet) setLoadingPending(true);
         const rows = await fetchBranchPending(division, myBranch);
         setPending(rows);
         setLoadingPending(false);
@@ -6378,9 +6402,27 @@
 
       const pendingOnly = pending.filter(r => !r.fully_received);
 
+      // KPI numbers follow the Vendor / Batch / Set pickers below ("" = everything for this branch)
+      const kpiRows = pending.filter(r =>
+        (!vendor || r.vendor === vendor) &&
+        (!batchLabel || r.batch_label === batchLabel) &&
+        (!setLabel || r.set_label === setLabel));
+      const kpiDispatched = kpiRows.reduce((sum, r) => sum + (Number(r.dispatched_count) || 0), 0);
+      const kpiReceived = kpiRows.reduce((sum, r) => sum + (Number(r.received_count) || 0), 0);
+      const kpiPending = kpiRows.reduce((sum, r) => sum + (Number(r.pending_count) || 0), 0);
+      const kpiScope = [vendor, batchLabel, setLabel].filter(Boolean).join(" › ") || `all dispatches to ${myBranch}`;
+
       return (
         <div>
           <div className="note">Scan every card as it arrives at <b>{myBranch}</b>. Only sets that were actually dispatched to your branch show up below. Duplicate scans are flagged instantly.</div>
+
+          <DispatchKpiRow
+            dispatched={kpiDispatched}
+            received={kpiReceived}
+            pending={kpiPending}
+            scope={kpiScope}
+            loading={loadingPending}
+          />
 
           {/* Pending dispatches panel */}
           <div className="sec">
@@ -6459,7 +6501,7 @@
                 key={`${vendor}|${batchLabel}|${setLabel}`}
                 division={division} vendor={vendor} batchLabel={batchLabel} setLabel={setLabel}
                 branchName={myBranch} source="received" scannedBy={operator}
-                onScanned={loadPending}
+                onScanned={() => loadPending(true)}
               />
             </div>
           )}
@@ -6587,6 +6629,31 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
     const effectiveBatchLabel = batchLabel || newBatchLabel.trim();
     const effectiveSetLabel = setLabel || newSetLabel.trim();
 
+    // One fetch feeds both the KPI cards and the "Sets in this batch" list.
+    // Re-runs whenever vendor / batch change, and after every upload or scan (kpiTick).
+    const [kpiTick, setKpiTick] = useState(0);
+    const bumpKpis = useCallback(() => setKpiTick(t => t + 1), []);
+    const [summarySets, setSummarySets] = useState([]);
+    const [summaryLoading, setSummaryLoading] = useState(false);
+    useEffect(() => {
+      if (!vendor || !effectiveBatchLabel) { setSummarySets([]); setSummaryLoading(false); return; }
+      let cancelled = false;
+      setSummaryLoading(true);
+      fetchSetSummary(division, vendor, effectiveBatchLabel).then(rows => {
+        if (cancelled) return;
+        setSummarySets(rows);
+        setSummaryLoading(false);
+      });
+      return () => { cancelled = true; };
+    }, [division, vendor, effectiveBatchLabel, kpiTick]);
+
+    const kpiSets = effectiveSetLabel ? summarySets.filter(x => x.setLabel === effectiveSetLabel) : summarySets;
+    const kpiBranchRows = kpiSets.flatMap(x => x.branches || []);
+    const adminDispatched = kpiBranchRows.reduce((sum, b) => sum + (b.dispatchedCount || 0), 0);
+    const adminReceived = kpiBranchRows.reduce((sum, b) => sum + (b.receivedCount || 0), 0);
+    const adminPending = Math.max(0, adminDispatched - adminReceived);
+    const adminScope = [vendor, effectiveBatchLabel, effectiveSetLabel || "all sets"].filter(Boolean).join(" › ");
+
     const submitAdmin = async () => {
       if (!vendor || !effectiveBatchLabel || !effectiveSetLabel || !branchName || !rows) {
         setErr("Vendor, batch label, set label, branch and a file are required.");
@@ -6594,7 +6661,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
       }
       setBusy(true); setErr("");
       const skus = extractSkus(rows);
-      const res = await dispatchAdminUpload({    
+      const res = await dispatchAdminUpload({
         division, vendor, batchLabel: effectiveBatchLabel, setLabel: effectiveSetLabel,
         branchName, uploadedBy: operator || "Unattributed", filename: fname, skus,
       });
@@ -6605,6 +6672,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
       setNewBatchLabel(""); setAddingBatch(false);
       setNewSetLabel(""); setAddingSet(false);
       loadGroups();
+      bumpKpis();
       fetchBatchLabels(division, vendor).then(setBatchLabelOptions);
       fetchSetLabels(division, vendor, effectiveBatchLabel).then(setSetLabelOptions);
       setBatchLabel(effectiveBatchLabel);
@@ -6623,6 +6691,19 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
           <button className={"subtab-btn" + (mode === "admin" ? " on" : "")} onClick={() => { setMode("admin"); setResult(null); setErr(""); }}>Dispatch to Branch</button>
           <button className={"subtab-btn" + (mode === "compare" ? " on" : "")} onClick={() => { setMode("compare"); setResult(null); setErr(""); }}>Compare</button>
         </div>
+
+        {mode === "admin" && (
+          <div style={{ marginTop: 14 }}>
+            <DispatchKpiRow
+              dispatched={adminDispatched}
+              received={adminReceived}
+              pending={adminPending}
+              scope={adminScope}
+              ready={!!(vendor && effectiveBatchLabel)}
+              loading={summaryLoading}
+            />
+          </div>
+        )}
 
         {mode === "admin" && (
           <div className="card pad" style={{ marginTop: 14 }}>
@@ -6685,7 +6766,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
               !vendor || !effectiveBatchLabel || !effectiveSetLabel ? (
                 <div className="note">Pick a vendor, batch label and set label above to start scanning.</div>
               ) : (
-                <DispatchScanPanel division={division} vendor={vendor} batchLabel={effectiveBatchLabel} setLabel={effectiveSetLabel} branchName={branchName} source="dispatched" scannedBy={operator} />
+                <DispatchScanPanel division={division} vendor={vendor} batchLabel={effectiveBatchLabel} setLabel={effectiveSetLabel} branchName={branchName} source="dispatched" scannedBy={operator} onScanned={bumpKpis} />
               )
             ) : (
               <>
@@ -6729,7 +6810,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
         )}
 
         {vendor && effectiveBatchLabel && (
-          <SetSummaryPanel division={division} vendor={vendor} batchLabel={effectiveBatchLabel} />
+          <SetSummaryPanel sets={summarySets} />
         )}
 
         {groups.length > 0 && mode !== "compare" && (
@@ -6757,19 +6838,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
   }
 
 
-  function SetSummaryPanel({ division, vendor, batchLabel }) {
-    const [sets, setSets] = useState([]);
-    const [loading, setLoading] = useState(false);
-
-    const load = useCallback(async () => {
-      setLoading(true);
-      const s = await fetchSetSummary(division, vendor, batchLabel);
-      setSets(s);
-      setLoading(false);
-    }, [division, vendor, batchLabel]);
-    useEffect(() => { load(); }, [load]);
-
-    if (loading) return null;
+  function SetSummaryPanel({ sets }) {
     if (sets.length === 0) return null;
 
     const statusChip = (status) => {
@@ -6778,40 +6847,8 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
       return <Chip status="Not Started" />;
     };
 
-    // Totals across every branch this batch was dispatched to — computed
-    // from `sets`, not from BranchReceiving's `pending` (that belongs to a
-    // different, single-branch component).
-    const allBranchRows = sets.flatMap(s => s.branches);
-    const totalDispatched = allBranchRows.reduce((sum, b) => sum + (b.dispatchedCount || 0), 0);
-    const totalReceived = allBranchRows.reduce((sum, b) => sum + (b.receivedCount || 0), 0);
-    const totalPending = totalDispatched - totalReceived;
-    const totalBranches = new Set(allBranchRows.map(b => b.branchName)).size;
-
     return (
       <div className="sec">
-        <div className="grid kpis" style={{ marginBottom: 16 }}>
-          <div className="card kpi">
-            <div className="lab">Branches in this batch</div>
-            <div className="val">{totalBranches}</div>
-            <div className="sub">{batchLabel}</div>
-          </div>
-          <div className="card kpi">
-            <div className="lab">Cards Dispatched</div>
-            <div className="val" style={{ color: "var(--sky-ink)" }}>{totalDispatched}</div>
-            <div className="sub">sent across all branches</div>
-          </div>
-          <div className="card kpi">
-            <div className="lab">Cards Received</div>
-            <div className="val" style={{ color: "var(--sage-ink)" }}>{totalReceived}</div>
-            <div className="sub">scanned in so far</div>
-          </div>
-          <div className="card kpi">
-            <div className="lab">Still Pending</div>
-            <div className="val" style={{ color: totalPending > 0 ? "var(--rose-ink)" : "var(--sage-ink)" }}>{totalPending}</div>
-            <div className="sub">not yet scanned</div>
-          </div>
-        </div>
-
         <div className="sec-h"><h3>Sets in this batch</h3><span className="hint">who each set was dispatched to</span></div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {sets.map(s => (
@@ -6976,7 +7013,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
 
 
   function DispatchScanPanel({ division, vendor, batchLabel, setLabel, branchName, source, scannedBy, onScanned }) {
-    const [items, setItems] = useState([]); 
+    const [items, setItems] = useState([]);
     const [flashDupe, setFlashDupe] = useState(null);
     const [batchId, setBatchId] = useState(null);
     const [selectedDupe, setSelectedDupe] = useState(""); // NEW
@@ -7010,6 +7047,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
         if (idx === -1) return [{ sku, scanCount: res.scanCount }, ...prev];
         const next = [...prev]; next[idx] = { sku, scanCount: res.scanCount }; return next;
       });
+      onScanned && onScanned();
     };
 
     const undoScan = async (sku) => {
@@ -7023,6 +7061,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
         if (res.removed) return prev.filter(i => i.sku.toLowerCase() !== sku.toLowerCase());
         return prev.map(i => i.sku.toLowerCase() === sku.toLowerCase() ? { ...i, scanCount: res.scanCount } : i);
       });
+      onScanned && onScanned();
     };
 
     const totalScans = items.reduce((s, i) => s + i.scanCount, 0);
@@ -7918,7 +7957,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
 
     const unassign = (id, sku, memberName) => {
 
-      
+
       gsPost("appendAssignmentHistory", {
         id: uid(),
         action: "unassigned",
@@ -8936,7 +8975,7 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
                           Show less
                         </button>
                       )}
-                    </div>             
+                    </div>
                   )}
 
                   {rows.length === 0 && (
@@ -8944,8 +8983,8 @@ function BranchUploadTab({ division, vendors, operator, assignments, auth, teamM
                   )}
 
                   <button
-                    onClick={() => downloadReport(m, rows)}      
-                    disabled={rows.length === 0}               
+                    onClick={() => downloadReport(m, rows)}
+                    disabled={rows.length === 0}
                     className="ghost"
                     style={{ width: "100%", justifyContent: "center", fontSize: 12, opacity: rows.length === 0 ? 0.4 : 1 }}>
                     {I.upload({ width: 14, height: 14 })} Download full activity · {selMonth}
@@ -9041,7 +9080,519 @@ const PHOTO_VIDEO_STAGE_GROUP = [
   //     );
   //   }
 
-  /* ---------------- MEMBER NOTE CELL (Notes column in the Backend team table) ---------------- */
+
+
+/* ---------- Custom dropdown with colored status pills ---------- */
+function StatusDropdown({ value, options, onChange, disabled = false, readOnly = false, minWidth = 170, header = "", labelOnly = false }) {
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+    const esc = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", esc); };
+  }, [open]);
+
+  const current = options.find(o => o.value === value) || options[0];
+  const pill = (o) => (
+    <span className={"chip " + (o.cls || "c-none")}><span className="dot" />{o.label}</span>
+  );
+
+  if (readOnly) return pill(current);
+
+  return (
+    <div ref={boxRef} style={{ position: "relative", display: "inline-block" }}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen(v => !v)}
+        style={{
+          display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+          minWidth, padding: "5px 8px 5px 6px", border: "1px solid var(--line2)", borderRadius: 10,
+          background: "var(--card)", cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.6 : 1
+        }}
+      >
+        {labelOnly
+          ? <span className={"chip " + (current.cls || "c-none")}><span className="dot" />{header || current.label}</span>
+          : pill(current)}
+        <span style={{ fontSize: 10, color: "var(--muted)", transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}>▼</span>
+      </button>
+
+      {open && (
+        <div
+          style={{
+            position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 50, minWidth: "100%",
+            background: "var(--card)", border: "1px solid var(--line2)", borderRadius: 12,
+            boxShadow: "0 10px 30px rgba(0,0,0,.12)", padding: 6
+          }}
+        >
+          {header && (
+            <div style={{ padding: "6px 8px 8px", marginBottom: 4, borderBottom: "1px solid var(--line)", fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--muted)" }}>
+              {header}
+            </div>
+          )}
+          {options.map(o => {
+            const active = o.value === value;
+            return (
+              <div
+                key={o.value}
+                onClick={() => { setOpen(false); if (!active) onChange(o.value); }}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14,
+                  padding: "7px 8px", borderRadius: 8, cursor: "pointer",
+                  background: active ? "var(--card-2)" : "transparent"
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--card-2)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = active ? "var(--card-2)" : "transparent"; }}
+              >
+                {pill(o)}
+                {active && <span style={{ fontSize: 12, color: "var(--sage-ink)", fontWeight: 700 }}>✓</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VendorIssues({ auth, selectedVendor = "" }) {
+  const isMaster =
+    String(auth?.role || "").toLowerCase() === "master";
+
+  const [issues, setIssues] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [modal, setModal] = useState(null);
+  const [note, setNote] = useState("");
+  const [status, setStatus] = useState("REPORTED");
+  const [saving, setSaving] = useState(false);
+  const [expandedIds, setExpandedIds] = useState({});
+  const toggleExpanded = (id) => setExpandedIds(prev => ({ ...prev, [id]: !prev[id] }));
+
+  const statusLabels = {
+    REPORTED: "Pending",
+    IN_PROGRESS: "Working on It",
+    RESOLVED: "Resolved"
+  };
+
+  const statusStyles = {
+    REPORTED: "c-issue",
+    IN_PROGRESS: "c-prog",
+    RESOLVED: "c-done"
+  };
+
+  const statusOptions = Object.keys(statusLabels).map(k => ({ value: k, label: statusLabels[k], cls: statusStyles[k] }));
+
+  const field = (row, snake, camel) =>
+    row?.[snake] ?? row?.[camel];
+
+  // Show a person's name instead of their email address
+  const displayName = (who) => {
+    const v = String(who || "").trim();
+    if (!v) return "—";
+    if (!v.includes("@")) return v;
+    if (auth?.email && v.toLowerCase() === String(auth.email).toLowerCase() && auth?.name) return auth.name;
+    return v.split("@")[0]
+      .split(/[._\-+]+/)
+      .filter(Boolean)
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(" ") || v;
+  };
+
+  const formatDate = (value) => {
+    if (!value) return "—";
+
+    const date = new Date(value?.value || value);
+
+    return Number.isNaN(date.getTime())
+      ? "—"
+      : date.toLocaleString();
+  };
+
+  const readJson = async (response) => {
+    const text = await response.text();
+
+    let data;
+
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(
+        `Server returned a non-JSON response (HTTP ${response.status}). Check the API URL and backend.`
+      );
+    }
+
+    if (!response.ok || data?.ok === false) {
+      throw new Error(
+        data?.error || `Request failed (HTTP ${response.status})`
+      );
+    }
+
+    return data;
+  };
+
+  const loadIssues = useCallback(async (vendor) => {
+    if (!vendor) {
+      setIssues([]);
+      setError("");
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+    setIssues([]);
+
+    try {
+      const response = await fetch(
+        `${VENDOR_ISSUES_API}/api/vendor-issues?vendor=${encodeURIComponent(vendor)}`
+      );
+
+      const data = await readJson(response);
+
+      const rows = Array.isArray(data)
+        ? data
+        : Array.isArray(data.issues)
+          ? data.issues
+          : Array.isArray(data.rows)
+            ? data.rows
+            : Array.isArray(data.data)
+              ? data.data
+              : null;
+
+      if (!rows) {
+        throw new Error("Unexpected Vendor Notes API response.");
+      }
+
+      setIssues(rows);
+    } catch (err) {
+      setError(err.message || "Unable to load vendor notes.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadIssues(selectedVendor);
+  }, [selectedVendor, loadIssues]);
+
+  // Newest note first, so freshly added notes appear at the top
+  const visibleIssues = [...issues].sort((x, y) => {
+    const tx = new Date(field(x, "created_at", "createdAt")?.value || field(x, "created_at", "createdAt") || 0).getTime() || 0;
+    const ty = new Date(field(y, "created_at", "createdAt")?.value || field(y, "created_at", "createdAt") || 0).getTime() || 0;
+    return ty - tx;
+  });
+
+  const openAdd = () => {
+    if (!isMaster || !selectedVendor) return;
+
+    setNote("");
+    setStatus("REPORTED");
+    setModal({ type: "add" });
+  };
+
+  const openEdit = (issue) => {
+    if (!isMaster) return;
+
+    setNote(issue.note || "");
+    setStatus(issue.status || "REPORTED");
+    setModal({ type: "edit", id: issue.id });
+  };
+
+  const saveIssue = async () => {
+    if (
+      !isMaster ||
+      !selectedVendor ||
+      !modal ||
+      !note.trim() ||
+      saving
+    ) {
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      const isEdit = modal.type === "edit";
+
+      const url = isEdit
+        ? `${VENDOR_ISSUES_API}/api/vendor-issues/${encodeURIComponent(modal.id)}`
+        : `${VENDOR_ISSUES_API}/api/vendor-issues`;
+
+      const payload = isEdit
+        ? {
+            note: note.trim(),
+            status
+          }
+        : {
+            vendorName: selectedVendor,
+            note: note.trim()
+          };
+
+      const response = await fetch(url, {
+  method: isEdit ? "PATCH" : "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "x-user-email": auth?.email || ""
+  },
+  body: JSON.stringify(payload)
+});
+
+      await readJson(response);
+
+      setModal(null);
+      await loadIssues(selectedVendor);
+    } catch (err) {
+      alert(`Could not save issue: ${err.message}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="card pad"
+      style={{
+        marginTop: 16,
+        marginBottom: 16,
+        width: "100%"
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 12,
+          flexWrap: "wrap",
+          marginBottom: 16
+        }}
+      >
+        <div>
+          <h3 style={{ margin: 0, fontSize: 17 }}>
+            Vendor Notes
+          </h3>
+
+          <div className="tag" style={{ marginTop: 5 }}>
+          </div>
+        </div>
+
+        {isMaster && selectedVendor && !loading && !error && (
+          <button
+            className="primary"
+            onClick={openAdd}
+            disabled={!selectedVendor}
+          >
+            + Add Note
+          </button>
+        )}
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          flexWrap: "wrap",
+          marginBottom: 14
+        }}
+      >
+        <span className="tag">
+          {selectedVendor ? (
+            <>
+              Vendor: <b>{selectedVendor}</b>
+            </>
+          ) : (
+            "Select a vendor from the filter above"
+          )}
+        </span>
+
+        {selectedVendor && !loading && !error && (
+          <span className="chip c-none">
+            {issues.length} note{issues.length === 1 ? "" : "s"}
+          </span>
+        )}
+      </div>
+
+      {!selectedVendor && (
+        <div className="empty" style={{ padding: 28 }}>
+          Select a vendor to view and add its notes.
+        </div>
+      )}
+
+      {selectedVendor && loading && (
+        <div className="empty" style={{ padding: 28 }}>
+          Loading vendor notes...
+        </div>
+      )}
+
+      {selectedVendor && !loading && error && (
+        <div
+          className="note"
+          style={{
+            background: "var(--rose-bg)",
+            borderColor: "var(--rose)",
+            color: "var(--rose-ink)"
+          }}
+        >
+          Could not load vendor notes: {error}
+        </div>
+      )}
+
+      {selectedVendor &&
+        !loading &&
+        !error &&
+        issues.length === 0 && (
+          <div className="empty" style={{ padding: 28 }}>
+            No notes yet for this vendor.
+          </div>
+        )}
+
+      {selectedVendor &&
+        !loading &&
+        !error &&
+        visibleIssues.map((issue) => (
+          <div
+            key={issue.id}
+            style={{
+              padding: "16px 0",
+              borderTop: "1px solid var(--line)"
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                gap: 14,
+                flexWrap: "wrap"
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 180 }}>
+                <div
+                  style={{
+                    fontWeight: 600,
+                    fontSize: 13,
+                    whiteSpace: "pre-wrap",
+                    overflowWrap: "anywhere"
+                  }}
+                >
+                  {issue.note}
+                </div>
+
+                {expandedIds[issue.id] && (
+                  <>
+                    <div className="tag" style={{ marginTop: 8 }}>
+                      Created by:{" "}
+                      {displayName(field(issue, "created_by", "createdBy"))}
+                      {" · "}
+                      {formatDate(
+                        field(issue, "created_at", "createdAt")
+                      )}
+                    </div>
+
+                    {field(issue, "updated_at", "updatedAt") && (
+                      <div className="tag" style={{ marginTop: 4 }}>
+                        Updated by:{" "}
+                        {displayName(field(issue, "updated_by", "updatedBy"))}
+                        {" · "}
+                        {formatDate(
+                          field(issue, "updated_at", "updatedAt")
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => toggleExpanded(issue.id)}
+                  style={{ marginTop: 8, padding: 0, fontSize: 12, fontWeight: 700, color: "var(--sky-ink)", background: "none", border: "none", cursor: "pointer" }}
+                >
+                  {expandedIds[issue.id] ? "Show less" : "Show more"}
+                </button>
+              </div>
+
+              {isMaster && (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  <button className="ghost" onClick={() => openEdit(issue)} style={{ padding: "4px 10px", fontSize: 12 }}>
+                    Edit
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+
+      {modal && isMaster && (
+        <div
+          className="scrim"
+          onClick={() => {
+            if (!saving) setModal(null);
+          }}
+        >
+          <div
+            className="modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3>
+              {modal.type === "add"
+                ? "Add Vendor Note"
+                : "Edit Vendor Note"}
+            </h3>
+
+            <div className="mbody">
+              <div className="tag">
+                Vendor: <b>{selectedVendor}</b>
+              </div>
+
+              <label className="fld">
+                Note
+
+                <textarea
+                  rows={5}
+                  maxLength={5000}
+                  value={note}
+                  onChange={(event) =>
+                    setNote(event.target.value)
+                  }
+                  placeholder="Write a note about this vendor..."
+                />
+              </label>
+            </div>
+
+            <div className="mfoot">
+              <button
+                className="ghost"
+                disabled={saving}
+                onClick={() => setModal(null)}
+              >
+                Cancel
+              </button>
+
+              <button
+                className="primary"
+                disabled={saving || !note.trim()}
+                onClick={saveIssue}
+              >
+                {saving
+                  ? "Saving..."
+                  : modal.type === "add"
+                    ? "Add Note"
+                    : "Save Changes"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
   function SpeedAnalytics({ division, auth, teamMembers = [], assignments = [], products = [], initialFilter = null, onFilterConsumed }) {
     const isMasterOrAdmin = auth?.role === "master" || auth?.role === "admin";
     const [subTab, setSubTab] = useState("overview"); // "overview" | "team"
@@ -9251,20 +9802,19 @@ const PHOTO_VIDEO_STAGE_GROUP = [
       <div className="card pad">
         <div className="sec-h"><h3>{title}</h3><span className="hint">{division}</span></div>
         <div className="team-table" style={{ overflowX: "auto", border: "1px solid var(--line)", borderRadius: "var(--r)", background: "var(--card)", boxShadow: "var(--shadow)" }}>
-          <table style={{ minWidth: 1200 }}>
+
+          <table style={{ minWidth: 1500 }}>
             <colgroup>
               <col style={{ width: "10%" }} />
               <col style={{ width: "7%" }} />
-              {stageGroup.map(s => {
-                const stageTotal = 83;
-                return (
-                  <React.Fragment key={s.k}>
-                    <col style={{ width: `${stageTotal / (stageGroup.length * 3) * 1.35}%` }} />
-                    <col style={{ width: `${stageTotal / (stageGroup.length * 3) * 0.9}%` }} />
-                    <col style={{ width: `${stageTotal / (stageGroup.length * 3) * 0.75}%` }} />
-                  </React.Fragment>
-                );
-              })}
+              {stageGroup.map(s => (
+                <React.Fragment key={s.k}>
+                  <col style={{ width: `${83 / (stageGroup.length * 3) * 1.35}%` }} />
+                  <col style={{ width: `${83 / (stageGroup.length * 3) * 0.9}%` }} />
+                  <col style={{ width: `${83 / (stageGroup.length * 3) * 0.75}%` }} />
+                </React.Fragment>
+              ))}
+
             </colgroup>
             <thead>
               <tr>
@@ -9281,7 +9831,7 @@ const PHOTO_VIDEO_STAGE_GROUP = [
                   </React.Fragment>
                 ))}
               </tr>
-               
+
             </thead>
             <tbody>
               {teamLoading && (
@@ -9347,7 +9897,7 @@ const PHOTO_VIDEO_STAGE_GROUP = [
                 </tr>
               )}
             </tbody>
-              
+
           </table>
         </div>
       </div>
@@ -9400,7 +9950,7 @@ const PHOTO_VIDEO_STAGE_GROUP = [
       </div>
     );
 
-    
+
 
     return (
       <div>
@@ -9453,6 +10003,7 @@ const PHOTO_VIDEO_STAGE_GROUP = [
                 </button>
               )}
             </div>
+
 
             <div className="card pad" style={{ marginTop: 12, marginBottom: 16 }}>
               <div className="sec-h">
@@ -9512,6 +10063,16 @@ const PHOTO_VIDEO_STAGE_GROUP = [
             <div className="stacked-tables" style={{ maxWidth: "none", width: "100%" }}>
               {renderFullBreakdownTable()}
             </div>
+
+<div className="stacked-tables" style={{ maxWidth: "none", width: "100%" }}>
+  {renderFullBreakdownTable()}
+</div>
+
+<VendorIssues
+  auth={auth}
+  selectedVendor={fVendor}
+/>
+
           </>
         )}
 
@@ -9563,7 +10124,7 @@ const PHOTO_VIDEO_STAGE_GROUP = [
                 <option value="">— all set no. —</option>
                 {setNoOptions.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
-              
+
               <input type="date" value={fDateFrom} onChange={e => setFDateFrom(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 12.5 }} />
               <span style={{ color: "var(--muted)", fontSize: 12 }}>to</span>
               <input type="date" value={fDateTo} onChange={e => setFDateTo(e.target.value)} style={{ border: "1px solid var(--line2)", borderRadius: 8, padding: "6px 10px", background: "var(--card)", fontSize: 12.5 }} />
@@ -9582,7 +10143,7 @@ const PHOTO_VIDEO_STAGE_GROUP = [
         )}
       </div>
     );
-  } 
+  }
   function QCAuditTab({ division, products, qcAuditLog, onSubmit, operator, auth, initialFilter = null, onFilterConsumed }) {
     const [q, setQ] = useState("");
     const [filter, setFilter] = useState(initialFilter || "pending");
@@ -9594,6 +10155,7 @@ const PHOTO_VIDEO_STAGE_GROUP = [
       }
     }, [initialFilter]);
     const [fSetNo, setFSetNo] = useState(""); // set-wise filter (master/admin only)
+    const [fVendor, setFVendor] = useState(""); // vendor-wise filter (master/admin only)
     const isMasterOrAdmin = auth?.role === "master" || auth?.role === "admin";
     const [expanded, setExpanded] = useState({});
     const [verdicts, setVerdicts] = useState({});
@@ -9627,7 +10189,20 @@ const PHOTO_VIDEO_STAGE_GROUP = [
 
     const QC_GATE_EXCLUDED = ["scan", "qc", "finalqc"];
     const eligibleStages = STAGES.filter(s => !QC_GATE_EXCLUDED.includes(s.k));
-    const setNoOptions = useMemo(() => [...new Set(products.map(p => p.set_no).filter(Boolean))].sort(), [products]);
+    const vendorOptions = useMemo(
+      () => [...new Set(products.map(p => (p.vendor || "").trim()).filter(Boolean))].sort(),
+      [products]
+    );
+    // Set numbers narrow down to the selected vendor's sets
+    const setNoOptions = useMemo(
+      () => [...new Set(
+        products
+          .filter(p => !fVendor || (p.vendor || "").trim().toLowerCase() === fVendor.trim().toLowerCase())
+          .map(p => p.set_no)
+          .filter(Boolean)
+      )].sort(),
+      [products, fVendor]
+    );
 
 
 
@@ -9660,6 +10235,7 @@ const filtered = useMemo(() => {
   return products.filter(p => {
     const t = (p.sku + " " + p.name + " " + p.vendor).toLowerCase();
     if (q && !t.includes(q.toLowerCase())) return false;
+    if (isMasterOrAdmin && fVendor && (p.vendor || "").trim().toLowerCase() !== fVendor.trim().toLowerCase()) return false;
     if (isMasterOrAdmin && fSetNo && (p.set_no || "").trim().toLowerCase() !== fSetNo.trim().toLowerCase()) return false;
 
     const allStagesDone = eligibleStages.every(s => p.stages[s.k]?.skipped || p.stages[s.k].status === "Completed");
@@ -9675,7 +10251,7 @@ const filtered = useMemo(() => {
     if (filter === "issues") return p.verdict === "Issues Found";
     return true;
   });
-}, [products, q, filter, qcAuditLog, fSetNo, isMasterOrAdmin]);
+}, [products, q, filter, qcAuditLog, fSetNo, fVendor, isMasterOrAdmin]);
 
     const resolvedCount = products.filter(p => isResolved(p)).length;
     const pendingCount = products.filter(p => !p.verdict).length - resolvedCount;
@@ -9740,8 +10316,16 @@ const filtered = useMemo(() => {
         </div>
 
         {/* Toolbar */}
-        {isMasterOrAdmin && setNoOptions.length > 0 && (
+        {isMasterOrAdmin && (vendorOptions.length > 0 || setNoOptions.length > 0) && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+            <select
+              value={fVendor}
+              onChange={e => { setFVendor(e.target.value); setFSetNo(""); clearBulkSelect(); }}
+              style={{ border: "1px solid var(--line2)", borderRadius: 10, padding: "9px 12px", background: "var(--card)", fontSize: 13, fontWeight: 500, minWidth: 180 }}
+            >
+              <option value="">— all vendors —</option>
+              {vendorOptions.map(v => <option key={v} value={v}>{v}</option>)}
+            </select>
             <select
               value={fSetNo}
               onChange={e => setFSetNo(e.target.value)}
@@ -9750,8 +10334,8 @@ const filtered = useMemo(() => {
               <option value="">— all set no. —</option>
               {setNoOptions.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
-            {fSetNo && (
-              <button className="ghost" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => setFSetNo("")}>
+            {(fVendor || fSetNo) && (
+              <button className="ghost" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => { setFVendor(""); setFSetNo(""); }}>
                 Clear
               </button>
             )}
@@ -9798,7 +10382,7 @@ const filtered = useMemo(() => {
               ) : null;
             })()}
           </div>
-          
+
         </div>
 
         {/* Bulk selection bar */}

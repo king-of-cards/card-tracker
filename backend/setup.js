@@ -13,23 +13,23 @@ const pool = new Pool({
 
 async function setup() {
   console.log("Connecting to database...");
-  
+
   try {
     const sql = fs.readFileSync("card_tracker.sql", "utf8");
-    
+
     console.log("Running schema...");
     await pool.query(sql);
-    
+
     console.log("✅ All tables created successfully!");
-    
-    
+
+
     const result = await pool.query(`
-      SELECT table_name 
-      FROM information_schema.tables 
+      SELECT table_name
+      FROM information_schema.tables
       WHERE table_schema = 'public'
       ORDER BY table_name
     `);
-    
+
     console.log("\nTables in your database:");
     result.rows.forEach(row => {
       console.log("  ✓", row.table_name);

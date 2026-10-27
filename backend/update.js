@@ -18,10 +18,10 @@ const pool = new Pool({
     // ── STEP 1: See what vendors are currently stored ─────────────────────
     console.log("\n── Step 1: Current vendor distribution for KOC Cards ──────────────");
     const { rows: vendorDist } = await client.query(`
-      SELECT 
-        COALESCE(vendor, '(NULL)') as vendor, 
+      SELECT
+        COALESCE(vendor, '(NULL)') as vendor,
         COUNT(*) as count
-      FROM products 
+      FROM products
       WHERE division = 'KOC Cards'
       GROUP BY vendor
       ORDER BY count DESC
@@ -76,10 +76,10 @@ const pool = new Pool({
     // ── STEP 5: Final verification ────────────────────────────────────────
     console.log("\n── Step 5: Final vendor distribution for KOC Cards ─────────────────");
     const { rows: finalDist } = await client.query(`
-      SELECT 
-        COALESCE(vendor, '(NULL)') as vendor, 
+      SELECT
+        COALESCE(vendor, '(NULL)') as vendor,
         COUNT(*) as count
-      FROM products 
+      FROM products
       WHERE division = 'KOC Cards'
       GROUP BY vendor
       ORDER BY count DESC
@@ -89,7 +89,7 @@ const pool = new Pool({
     // ── STEP 6: Show vendors table ────────────────────────────────────────
     console.log("\n── Step 6: All vendors in vendors table for KOC Cards ──────────────");
     const { rows: vendorTable } = await client.query(`
-      SELECT vendor_name FROM vendors 
+      SELECT vendor_name FROM vendors
       WHERE division = 'KOC Cards'
       ORDER BY vendor_name
     `);
