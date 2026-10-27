@@ -1650,7 +1650,7 @@
 
 
    const API = "https://cardtracker.kingofcards.in"
-  //  const API = "http://localhost:8080"
+
   //  const API = "http://localhost:8080"
 const VENDOR_ISSUES_API = API;
     // const API= "https://heroism-passenger-uncharted.ngrok-free.dev"
@@ -9168,24 +9168,10 @@ function VendorIssues({ auth, selectedVendor = "" }) {
   const [error, setError] = useState("");
   const [modal, setModal] = useState(null);
   const [note, setNote] = useState("");
-  const [status, setStatus] = useState("REPORTED");
   const [saving, setSaving] = useState(false);
   const [expandedIds, setExpandedIds] = useState({});
   const toggleExpanded = (id) => setExpandedIds(prev => ({ ...prev, [id]: !prev[id] }));
 
-  const statusLabels = {
-    REPORTED: "Pending",
-    IN_PROGRESS: "Working on It",
-    RESOLVED: "Resolved"
-  };
-
-  const statusStyles = {
-    REPORTED: "c-issue",
-    IN_PROGRESS: "c-prog",
-    RESOLVED: "c-done"
-  };
-
-  const statusOptions = Object.keys(statusLabels).map(k => ({ value: k, label: statusLabels[k], cls: statusStyles[k] }));
 
   const field = (row, snake, camel) =>
     row?.[snake] ?? row?.[camel];
@@ -9287,22 +9273,22 @@ function VendorIssues({ auth, selectedVendor = "" }) {
     return ty - tx;
   });
 
-  const openAdd = () => {
-    if (!isMaster || !selectedVendor) return;
+ const openAdd = () => {
+  if (!isMaster || !selectedVendor) return;
 
-    setNote("");
-    setStatus("REPORTED");
-    setModal({ type: "add" });
-  };
+  setNote("");
+  setModal({ type: "add" });
+};
 
   const openEdit = (issue) => {
-    if (!isMaster) return;
+  if (!isMaster) return;
 
-    setNote(issue.note || "");
-    setStatus(issue.status || "REPORTED");
-    setModal({ type: "edit", id: issue.id });
-  };
-
+  setNote(issue.note || "");
+  setModal({
+    type: "edit",
+    id: String(issue.id)
+  });
+};
   const saveIssue = async () => {
     if (
       !isMaster ||
@@ -9324,14 +9310,13 @@ function VendorIssues({ auth, selectedVendor = "" }) {
         : `${VENDOR_ISSUES_API}/api/vendor-issues`;
 
       const payload = isEdit
-        ? {
-            note: note.trim(),
-            status
-          }
-        : {
-            vendorName: selectedVendor,
-            note: note.trim()
-          };
+  ? {
+      note: note.trim()
+    }
+  : {
+      vendorName: selectedVendor,
+      note: note.trim()
+    };
 
       const response = await fetch(url, {
   method: isEdit ? "PATCH" : "POST",
@@ -9606,29 +9591,6 @@ function VendorIssues({ auth, selectedVendor = "" }) {
     const [fAssignedTo, setFAssignedTo] = useState("");
     const [fCompletedFrom, setFCompletedFrom] = useState("");
     const [fCompletedTo, setFCompletedTo] = useState("");
-    // Vendor notes are kept separately for each division + vendor in this browser.
-    const [vendorNote, setVendorNote] = useState("");
-    const [vendorNoteSaving, setVendorNoteSaving] = useState(false);
-    const [vendorNoteExpanded, setVendorNoteExpanded] = useState(false);
-    const vendorNoteStorageKey = useMemo(
-      () => `cardflow-vendor-note:${division || "unknown"}:${fVendor || ""}`,
-      [division, fVendor]
-    );
-
-    useEffect(() => {
-      if (!fVendor) {
-        setVendorNote("");
-        setVendorNoteExpanded(false);
-        return;
-      }
-      try {
-        setVendorNote(window.localStorage.getItem(vendorNoteStorageKey) || "");
-      } catch (error) {
-        console.warn("Could not load vendor note from this browser:", error);
-        setVendorNote("");
-      }
-      setVendorNoteExpanded(false);
-    }, [vendorNoteStorageKey, fVendor]);
 
     useEffect(() => {
       if (initialFilter?.vendor) {
@@ -10004,69 +9966,9 @@ function VendorIssues({ auth, selectedVendor = "" }) {
               )}
             </div>
 
-
-            <div className="card pad" style={{ marginTop: 12, marginBottom: 16 }}>
-              <div className="sec-h">
-                <h3>Vendor Notes</h3>
-                <span className="hint">{fVendor || "Select a vendor"}</span>
-              </div>
-
-              {!fVendor ? (
-                <p className="hint">Select a vendor above to view or add its notes. Each vendor has a separate note.</p>
-              ) : (
-                <>
-                  <textarea
-                    value={vendorNote}
-                    onChange={(e) => setVendorNote(e.target.value)}
-                    placeholder={`Add notes for ${fVendor}...`}
-                    rows={vendorNoteExpanded ? 7 : 3}
-                    style={{
-                      width: "100%",
-                      boxSizing: "border-box",
-                      padding: 12,
-                      border: "1px solid var(--line)",
-                      borderRadius: "var(--r)",
-                      background: "var(--card)",
-                      color: "var(--ink)",
-                      resize: "vertical",
-                    }}
-                  />
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 10 }}>
-                    <button type="button" className="ghost" onClick={() => setVendorNoteExpanded(v => !v)} style={{ padding: "6px 10px", fontSize: 12 }}>
-                      {vendorNoteExpanded ? "Show less" : "Show more"}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={vendorNoteSaving}
-                      onClick={() => {
-                        setVendorNoteSaving(true);
-                        try {
-                          window.localStorage.setItem(vendorNoteStorageKey, vendorNote);
-                        } catch (error) {
-                          alert("Could not save this note in your browser. Check browser storage settings.");
-                          console.error("Vendor note save failed:", error);
-                        } finally {
-                          setVendorNoteSaving(false);
-                        }
-                      }}
-                    >
-                      {vendorNoteSaving ? "Saving..." : "Save Note"}
-                    </button>
-                  </div>
-                  <p className="hint" style={{ marginTop: 8, fontSize: 11 }}>
-                    Notes are saved separately per vendor in this browser.
-                  </p>
-                </>
-              )}
-            </div>
-
             <div className="stacked-tables" style={{ maxWidth: "none", width: "100%" }}>
               {renderFullBreakdownTable()}
             </div>
-
-<div className="stacked-tables" style={{ maxWidth: "none", width: "100%" }}>
-  {renderFullBreakdownTable()}
-</div>
 
 <VendorIssues
   auth={auth}

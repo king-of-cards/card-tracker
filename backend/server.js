@@ -2550,7 +2550,7 @@ require("dotenv").config();
 const express = require("express");
 const { BigQuery } = require("@google-cloud/bigquery");
 const cors = require("cors");
-const { randomInt } = require("node:crypto");
+const { randomUUID } = require("node:crypto");
 const app = express();
 
 app.use(cors({ origin: "*" }));
@@ -3503,11 +3503,6 @@ async function attachUserFromHeader(req, res, next) {
 }
 app.use(attachUserFromHeader);
 
-const VENDOR_ISSUE_STATUSES = [
-  "REPORTED",
-  "IN_PROGRESS",
-  "RESOLVED"
-];
 
 // These routes must be connected to verified authentication.
 // Never obtain the role or email directly from req.body.
@@ -3556,7 +3551,6 @@ app.get(
           id,
           vendor_name,
           note,
-          status,
           created_by,
           created_at,
           updated_by,
@@ -3633,24 +3627,20 @@ app.post(
           error: "Vendor not found"
         });
       }
-
-      // Numeric ID allocation must be implemented before
-      // enabling creation. BigQuery has no AUTO_INCREMENT.
       // Generate a positive numeric issue ID.
-const id = randomInt(1, 2147483647);
+const id = randomUUID();
 
 await db.query(
   `
   INSERT INTO ${T("vendor_issues")}
-    (id, vendor_name, note, status, created_by, created_at)
+    (id, vendor_name, note, created_by, created_at)
   VALUES
-    ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP())
+    ($1, $2, $3, $4, CURRENT_TIMESTAMP())
   `,
   [
     id,
     vendor,
     note.trim(),
-    "REPORTED",
     req.user.email
   ]
 );
@@ -3682,21 +3672,21 @@ app.patch(
   requireVendorIssueMaster,
   async (req, res) => {
     try {
-      const id = Number(req.params.id);
+      const id = String(req.params.id || "").trim();
 
-      if (!Number.isSafeInteger(id) || id <= 0) {
+if (!id) {
+  return res.status(400).json({
+    ok: false,
+    error: "Invalid note ID"
+  });
+}
+
+      const { note } = req.body || {};
+
+      if (note === undefined) {
         return res.status(400).json({
           ok: false,
-          error: "Invalid issue ID"
-        });
-      }
-
-      const { note, status } = req.body || {};
-
-      if (note === undefined && status === undefined) {
-        return res.status(400).json({
-          ok: false,
-          error: "Provide a note or status"
+          error: "Note is required"
         });
       }
 
@@ -3709,16 +3699,6 @@ app.patch(
         return res.status(400).json({
           ok: false,
           error: "Invalid note"
-        });
-      }
-
-      if (
-        status !== undefined &&
-        !VENDOR_ISSUE_STATUSES.includes(status)
-      ) {
-        return res.status(400).json({
-          ok: false,
-          error: "Invalid issue status"
         });
       }
 
@@ -3743,21 +3723,20 @@ app.patch(
   `
   UPDATE ${T("vendor_issues")}
   SET
-    note = COALESCE($1, note),
-    status = COALESCE($2, status),
-    updated_by = $3,
+    note = $1,
+    updated_by = $2,
     updated_at = CURRENT_TIMESTAMP()
-  WHERE id = $4
+  WHERE id = $3
   `,
   [
-    note === undefined ? null : note.trim(),
-    status === undefined ? null : status,
+    note.trim(),
     req.user.email,
     id
   ],
   {
     p1: "STRING",
-    p2: "STRING"
+    p2: "STRING",
+    p3:"STRING"
   }
 );
 
