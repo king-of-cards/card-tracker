@@ -31,7 +31,6 @@
 // //   console.error("Idle client error — pool will recover:", err.message);
 // // });
 
-
 // const db = require("./db/bq");
 // const h = (name, fn) => async (req, res) => {
 //   try { await fn(req, res); }
@@ -42,12 +41,7 @@
 //   }
 // };
 
-
-
 // const dq = require("./dispatch.bq");
-
-
-
 
 // const MAX_PRODUCTS = 100000;
 
@@ -102,8 +96,6 @@
 // //     max: 10,
 // //   });
 // // });
-
-
 
 // /* ----------------------------------------------------------------
 //    Helpers — convert a DB row shape into the nested JSON shape the
@@ -971,9 +963,6 @@
 // //   }
 // // });
 
-
-
-
 // // app.get("/api/pipelineBreakdown", async (req, res) => {
 // //   const { division, memberId, vendor, setNo } = req.query;
 // //   if (!division)
@@ -1051,7 +1040,6 @@
 // //     res.status(500).json({ ok: false, error: e.message });
 // //   }
 // // });
-
 
 // app.get("/api/pipelineBreakdown", async (req, res) => {
 //   const { division, memberId, vendor, setNo } = req.query;
@@ -2094,8 +2082,6 @@
 //   }
 // });
 
-
-
 // /* ----------------------------------------------------------------
 //    GET /api/dispatch/batch-labels?division=&vendor=
 //    Distinct batch labels already used for this vendor — dropdown source.
@@ -2113,7 +2099,6 @@
 //     res.status(500).json({ ok: false, error: e.message });
 //   }
 // });
-
 
 // /* ----------------------------------------------------------------
 //    GET /api/dispatch/set-labels?division=&vendor=&batchLabel=&branchName=
@@ -2291,7 +2276,6 @@
 //   }
 // });
 
-
 // app.post("/api/dispatch/scan-undo", async (req, res) => {
 //   const { batchId, sku } = req.body;
 //   if (!batchId || !sku) return res.status(400).json({ ok: false, error: "batchId and sku required" });
@@ -2322,9 +2306,6 @@
 //     res.status(500).json({ ok: false, error: e.message });
 //   } finally { client.release(); }
 // });
-
-
-
 
 // app.post("/api/dispatch/scan", async (req, res) => {
 //   const { division, vendor, batchLabel, setLabel, branchName, source, sku, scannedBy } = req.body;
@@ -2420,7 +2401,6 @@
 //   } finally { client.release(); }
 // });
 
-
 // app.get("/api/dispatch/scan-log", async (req, res) => {
 //   const { division, vendor, batchLabel, setLabel, branchName, source } = req.query;
 //   if (!division || !vendor || !batchLabel || !setLabel || !branchName || !source) {
@@ -2440,7 +2420,6 @@
 //     res.status(500).json({ ok: false, error: e.message });
 //   }
 // });
-
 
 // /* ----------------------------------------------------------------
 //    GET /api/dispatch/branch-pending?division=&branchName=
@@ -2504,11 +2483,9 @@
 //   }
 // });
 
-
 // const server = app.listen(process.env.PORT, () => {
 //   console.log(`Server running on http://localhost:${process.env.PORT}`);
 // });
-
 
 // let isShuttingDown = false;
 
@@ -2542,121 +2519,158 @@
 // process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 // process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 
+require('dotenv').config()
+const express = require('express')
+const { BigQuery } = require('@google-cloud/bigquery')
+const cors = require('cors')
+const { randomUUID } = require('node:crypto')
 
+const app = express()
 
+app.use(cors({ origin: '*' }))
+app.use(express.json({ limit: '25mb' }))
 
-
-require("dotenv").config();
-const express = require("express");
-const { BigQuery } = require("@google-cloud/bigquery");
-const cors = require("cors");
-const { randomUUID } = require("node:crypto");
-const app = express();
-
-app.use(cors({ origin: "*" }));
-app.use(express.json({ limit: "25mb" }));
-
-const PROJECT_ID = process.env.BIGQUERY_PROJECT_ID;
-const APP_DATASET = process.env.BQ_APP_DATASET; // card_tracker
-const DEST_DATASET = process.env.BQ_DEST_DATASET; // shared_rds_data
-const LOCATION = process.env.BQ_LOCATION;
+const PROJECT_ID = process.env.BIGQUERY_PROJECT_ID
+const APP_DATASET = process.env.BQ_APP_DATASET // card_tracker
+const DEST_DATASET = process.env.BQ_DEST_DATASET // shared_rds_data
+const LOCATION = process.env.BQ_LOCATION
 
 const bigquery = new BigQuery({
   projectId: PROJECT_ID,
-  location: LOCATION,
-});
+  location: LOCATION
+})
 
 const T = (table, dataset = DEST_DATASET) =>
-  `\`${PROJECT_ID}.${dataset}.${table}\``;
+  `\`${PROJECT_ID}.${dataset}.${table}\``
 
-function toBqParams(params = [], types = {}) {
-  const out = {};
-  const outTypes = {};
+function toBqParams (params = [], types = {}) {
+  const out = {}
+  const outTypes = {}
   params.forEach((val, i) => {
-    const key = `p${i + 1}`;
-    out[key] = val === undefined ? null : val;
-    if (types[key]) outTypes[key] = types[key];
-    else if (val === null || val === undefined) outTypes[key] = "STRING";
-  });
-  return { params: out, types: outTypes };
+    const key = `p${i + 1}`
+    out[key] = val === undefined ? null : val
+    if (types[key]) outTypes[key] = types[key]
+    else if (val === null || val === undefined) outTypes[key] = 'STRING'
+  })
+  return { params: out, types: outTypes }
 }
 
-async function runQuery(sql, params = [], types = {}) {
-  const converted = sql.replace(/\$(\d+)/g, "@p$1");
-  const { params: queryParams, types: paramTypes } = toBqParams(params, types);
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+
+// Writes are anything that changes data (scripts start with BEGIN)
+const isWrite = sql => /^\s*(INSERT|UPDATE|DELETE|MERGE|BEGIN)\b/i.test(sql)
+
+// Errors BigQuery raises when two writes collide. The failed write is rolled
+// back completely, so running it again is safe.
+const isRetryable = e =>
+  /concurrent update|aborted due to|could not serialize|rateLimitExceeded|too many (dml|concurrent)/i.test(
+    String((e && e.message) || '')
+  )
+
+async function execQuery (sql, params, types) {
+  const converted = sql.replace(/\$(\d+)/g, '@p$1')
+  const { params: queryParams, types: paramTypes } = toBqParams(params, types)
+
   const [rows] = await bigquery.query({
     query: converted,
     location: LOCATION,
     params: queryParams,
-    types: paramTypes,
-  });
-  return { rows, rowCount: rows.length };
+    types: paramTypes
+  })
+  return { rows, rowCount: rows.length }
 }
-const db = { query: runQuery };
 
-const pool = db;
+// All writes go through one queue, so this server never collides with itself.
+let writeQueue = Promise.resolve()
 
-const MAX_PRODUCTS = 100000;
+async function runQuery (sql, params = [], types = {}) {
+  if (!isWrite(sql)) return execQuery(sql, params, types) // reads run immediately
 
-async function getProductCount(client = db) {
+  const job = writeQueue.then(async () => {
+    let lastErr
+    for (let attempt = 0; attempt < 8; attempt++) {
+      try {
+        return await execQuery(sql, params, types)
+      } catch (e) {
+        lastErr = e
+        if (!isRetryable(e)) throw e
+        await sleep(1000 * (attempt + 1) + Math.random() * 500)
+      }
+    }
+    throw lastErr
+  })
+  writeQueue = job.catch(() => {}) // one failure must not block the queue
+  return job
+}
+const db = { query: runQuery }
+
+const pool = db
+
+const MAX_PRODUCTS = 100000
+
+async function getProductCount (client = db) {
   const { rows } = await client.query(
-    `SELECT COUNT(*) AS count FROM ${T("products")}`,
-  );
-  return Number(rows[0].count);
+    `SELECT COUNT(*) AS count FROM ${T('products')}`
+  )
+  return Number(rows[0].count)
 }
 const STAGE_KEYS = [
-  "barcoding",
-  "content",
-  "photography",
-  "photoedit",
-  "videography",
-  "dimensions",
-  "videoedit",
-  "images",
-  "backend",
-  "website",
-  "scan",
-  "qc",
-  "finalqc",
-];
+  'barcoding',
+  'content',
+  'photography',
+  'photoedit',
+  'videography',
+  'dimensions',
+  'videoedit',
+  'images',
+  'backend',
+  'website',
+  'scan',
+  'qc',
+  'finalqc'
+]
 const STORES = [
-  "Chamrajpet",
-  "HSR Layout",
-  "Sahakar Nagar",
-  "Hoodi",
-  "Jayanagar",
-  "Bommasandra",
-  "Hyderabad",
-  "Mysore",
-  "Vizag",
-  "Hubli",
-  "Chitradurga",
-];
-const PIPELINE_STAGE_COUNT = STAGE_KEYS.filter((k) => k !== "finalqc").length; // 11
+  'Chamrajpet',
+  'HSR Layout',
+  'Sahakar Nagar',
+  'Hoodi',
+  'Jayanagar',
+  'Bommasandra',
+  'Hyderabad',
+  'Mysore',
+  'Vizag',
+  'Hubli',
+  'Chitradurga'
+]
+const PIPELINE_STAGE_COUNT = STAGE_KEYS.filter(k => k !== 'finalqc').length // 11
 
-app.get("/", (req, res) =>
-  res.json({ message: "Card Tracker API is running!" }),
-);
+app.get('/', (req, res) =>
+  res.json({ message: 'Card Tracker API is running!' })
+)
 
-app.get("/health", async (req, res) => {
+app.get('/health', async (req, res) => {
   try {
-    await db.query("SELECT 1");
-    res.json({ ok: true, db: "connected to BigQuery successfully!" });
+    await db.query('SELECT 1')
+    res.json({
+      ok: true,
+      version: 'assignments-no-txn-2026-10-29',
+      db: 'connected to BigQuery successfully!'
+    })
   } catch (e) {
-    res.json({ ok: false, error: e.message });
+    res.json({ ok: false, error: e.message })
   }
-});
+})
 
-app.get("/health/pool", (req, res) => {
-  res.json({ type: "bigquery", pool: "not applicable (serverless)" });
-});
-async function loadFullProduct(client, productId) {
+app.get('/health/pool', (req, res) => {
+  res.json({ type: 'bigquery', pool: 'not applicable (serverless)' })
+})
+async function loadFullProduct (client, productId) {
   const { rows: prows } = await client.query(
-    `SELECT * FROM ${T("products")} WHERE id = $1`,
-    [productId],
-  );
-  if (!prows.length) return null;
-  return hydrateProducts(client, prows).then((arr) => arr[0]);
+    `SELECT * FROM ${T('products')} WHERE id = $1`,
+    [productId]
+  )
+  if (!prows.length) return null
+  return hydrateProducts(client, prows).then(arr => arr[0])
 }
 // app.get("/test/schema", async (req, res) => {
 //   try {
@@ -2694,141 +2708,141 @@ async function loadFullProduct(client, productId) {
    BigQuery value helpers
    TIMESTAMP / DATE come back as { value: "..." } objects, not Dates
 ---------------------------------------------------------------- */
-const iso = (v) => {
-  if (!v) return "";
-  const raw = v.value ?? v;
-  const d = new Date(raw);
-  return isNaN(d) ? "" : d.toISOString();
-};
+const iso = v => {
+  if (!v) return ''
+  const raw = v.value ?? v
+  const d = new Date(raw)
+  return isNaN(d) ? '' : d.toISOString()
+}
 
-const dateOnly = (v) => {
-  if (!v) return "";
-  const raw = v.value ?? v;
-  const d = new Date(raw);
-  return isNaN(d) ? String(raw).slice(0, 10) : d.toISOString().slice(0, 10);
-};
+const dateOnly = v => {
+  if (!v) return ''
+  const raw = v.value ?? v
+  const d = new Date(raw)
+  return isNaN(d) ? String(raw).slice(0, 10) : d.toISOString().slice(0, 10)
+}
 
 // Columns that were arrays/JSON in Postgres can come back as a string,
 // an array, or a JSON object. This normalises all of them.
 const parseJson = (v, fallback = null) => {
-  if (v === null || v === undefined) return fallback;
-  if (typeof v === "object" && "value" in v && typeof v.value === "string") {
-    v = v.value; // BigQuery JSON wrapper
+  if (v === null || v === undefined) return fallback
+  if (typeof v === 'object' && 'value' in v && typeof v.value === 'string') {
+    v = v.value // BigQuery JSON wrapper
   }
-  if (typeof v === "string") {
+  if (typeof v === 'string') {
     try {
-      return JSON.parse(v);
+      return JSON.parse(v)
     } catch {
-      return v;
+      return v
     }
   }
-  return v;
-};
+  return v
+}
 
 /* ----------------------------------------------------------------
    hydrateProducts
 ---------------------------------------------------------------- */
-async function hydrateProducts(client, productRows) {
-  if (productRows.length === 0) return [];
-  const ids = productRows.map((p) => String(p.id));
+async function hydrateProducts (client, productRows) {
+  if (productRows.length === 0) return []
+  const ids = productRows.map(p => String(p.id))
 
   const [{ rows: stageRows }, { rows: storeRows }] = await Promise.all([
     client.query(
-      `SELECT * FROM ${T("stage_entries")} WHERE product_id IN UNNEST($1)`,
-      [ids],
+      `SELECT * FROM ${T('stage_entries')} WHERE product_id IN UNNEST($1)`,
+      [ids]
     ),
     client.query(
-      `SELECT * FROM ${T("stores")} WHERE product_id IN UNNEST($1)`,
-      [ids],
-    ),
-  ]);
+      `SELECT * FROM ${T('stores')} WHERE product_id IN UNNEST($1)`,
+      [ids]
+    )
+  ])
 
-  const stagesByProduct = {};
-  stageRows.forEach((r) => {
-    (stagesByProduct[r.product_id] ||= {})[r.stage_key] = {
+  const stagesByProduct = {}
+  stageRows.forEach(r => {
+    ;(stagesByProduct[r.product_id] ||= {})[r.stage_key] = {
       status: r.status,
-      person: r.person || "",
-      comments: r.comments || "",
+      person: r.person || '',
+      comments: r.comments || '',
       skipped: !!r.skipped,
       at: iso(r.updated_at),
-      ...(r.stage_key === "dimensions"
+      ...(r.stage_key === 'dimensions'
         ? {
-            width: r.width_cm != null ? String(r.width_cm) : "",
-            height: r.height_cm != null ? String(r.height_cm) : "",
-            weight: r.weight_gm != null ? String(r.weight_gm) : "",
+            width: r.width_cm != null ? String(r.width_cm) : '',
+            height: r.height_cm != null ? String(r.height_cm) : '',
+            weight: r.weight_gm != null ? String(r.weight_gm) : ''
           }
-        : {}),
-    };
-  });
+        : {})
+    }
+  })
 
-  const storesByProduct = {};
-  storeRows.forEach((r) => {
-    (storesByProduct[r.product_id] ||= {})[r.store] = {
+  const storesByProduct = {}
+  storeRows.forEach(r => {
+    ;(storesByProduct[r.product_id] ||= {})[r.store] = {
       dispatched: r.dispatched,
       received: r.received,
       receivedAt: iso(r.received_at),
-      receivedBy: r.received_by || "",
+      receivedBy: r.received_by || '',
       missing: r.missing,
       damaged: r.damaged,
-      notes: r.notes || "",
-      at: iso(r.updated_at),
-    };
-  });
+      notes: r.notes || '',
+      at: iso(r.updated_at)
+    }
+  })
 
-  return productRows.map((p) => {
-    const stages = {};
-    STAGE_KEYS.forEach((k) => {
+  return productRows.map(p => {
+    const stages = {}
+    STAGE_KEYS.forEach(k => {
       stages[k] = (stagesByProduct[p.id] && stagesByProduct[p.id][k]) || {
-        status: "Not Started",
-        person: "",
-        comments: "",
-        at: "",
-      };
-      if (k === "dimensions" && !stages[k].width) {
-        stages[k].width = stages[k].width || "";
-        stages[k].height = stages[k].height || "";
-        stages[k].weight = stages[k].weight || "";
+        status: 'Not Started',
+        person: '',
+        comments: '',
+        at: ''
       }
-    });
+      if (k === 'dimensions' && !stages[k].width) {
+        stages[k].width = stages[k].width || ''
+        stages[k].height = stages[k].height || ''
+        stages[k].weight = stages[k].weight || ''
+      }
+    })
 
-    const stores = {};
-    STORES.forEach((st) => {
+    const stores = {}
+    STORES.forEach(st => {
       stores[st] = (storesByProduct[p.id] && storesByProduct[p.id][st]) || {
         dispatched: 0,
         received: false,
-        receivedAt: "",
-        receivedBy: "",
+        receivedAt: '',
+        receivedBy: '',
         missing: 0,
         damaged: 0,
-        notes: "",
-        at: "",
-      };
-    });
+        notes: '',
+        at: ''
+      }
+    })
 
     return {
       id: p.id,
       division: p.division,
       sku: p.sku,
-      name: p.name || "",
-      vendor: p.vendor || "",
+      name: p.name || '',
+      vendor: p.vendor || '',
       inward: dateOnly(p.inward),
       qty: p.qty || 0,
-      note: p.note || "",
-      set_no: p.set_no || "",
-      verdict: p.verdict || "",
-      issues: p.issues || "",
+      note: p.note || '',
+      set_no: p.set_no || '',
+      verdict: p.verdict || '',
+      issues: p.issues || '',
       stages,
       stores,
       createdAt: iso(p.created_at),
-      updatedAt: iso(p.updated_at),
-    };
-  });
+      updatedAt: iso(p.updated_at)
+    }
+  })
 }
 
 /* ----------------------------------------------------------------
    GET /api/getAll  — equivalent of gsGet() / action=getAll
 ---------------------------------------------------------------- */
-app.get("/api/getAll", async (req, res) => {
+app.get('/api/getAll', async (req, res) => {
   try {
     // Independent queries run in parallel (BigQuery has ~1s latency each)
     const [
@@ -2838,37 +2852,37 @@ app.get("/api/getAll", async (req, res) => {
       { rows: assignRows },
       { rows: qcRows },
       { rows: auditRows },
-      { rows: historyRows },
+      { rows: historyRows }
     ] = await Promise.all([
-      db.query(`SELECT * FROM ${T("products")} ORDER BY created_at DESC`),
+      db.query(`SELECT * FROM ${T('products')} ORDER BY created_at DESC`),
       db.query(
-        `SELECT division, vendor_name FROM ${T("vendors")} ORDER BY vendor_name`,
+        `SELECT division, vendor_name FROM ${T('vendors')} ORDER BY vendor_name`
       ),
-      db.query(`SELECT * FROM ${T("users")} WHERE role = 'member'`),
-      db.query(`SELECT * FROM ${T("assignments")} ORDER BY assigned_at DESC`),
-      db.query(`SELECT * FROM ${T("qc_audit")} ORDER BY audited_at DESC`),
+      db.query(`SELECT * FROM ${T('users')} WHERE role = 'member'`),
+      db.query(`SELECT * FROM ${T('assignments')} ORDER BY assigned_at DESC`),
+      db.query(`SELECT * FROM ${T('qc_audit')} ORDER BY audited_at DESC`),
       db.query(
-        `SELECT * FROM ${T("audit_log")} ORDER BY logged_at DESC LIMIT 800`,
+        `SELECT * FROM ${T('audit_log')} ORDER BY logged_at DESC LIMIT 800`
       ),
       db.query(
         `SELECT ah.*,
                 u1.name AS to_member_name,
                 u2.name AS from_member_name
-         FROM ${T("assignment_history")} ah
-         LEFT JOIN ${T("users")} u1 ON u1.id = ah.to_member_id
-         LEFT JOIN ${T("users")} u2 ON u2.id = ah.from_member_id
-         ORDER BY ah.logged_at DESC LIMIT 500`,
-      ),
-    ]);
+         FROM ${T('assignment_history')} ah
+         LEFT JOIN ${T('users')} u1 ON u1.id = ah.to_member_id
+         LEFT JOIN ${T('users')} u2 ON u2.id = ah.from_member_id
+         ORDER BY ah.logged_at DESC LIMIT 500`
+      )
+    ])
 
-    const products = await hydrateProducts(db, productRows);
+    const products = await hydrateProducts(db, productRows)
 
-    const vendors = {};
-    vendorRows.forEach((v) => {
-      (vendors[v.division] ||= []).push(v.vendor_name);
-    });
+    const vendors = {}
+    vendorRows.forEach(v => {
+      ;(vendors[v.division] ||= []).push(v.vendor_name)
+    })
 
-    const teamMembers = teamRows.map((u) => ({
+    const teamMembers = teamRows.map(u => ({
       id: u.id,
       name: u.name,
       email: u.email,
@@ -2877,20 +2891,20 @@ app.get("/api/getAll", async (req, res) => {
       stages: parseJson(u.stages, []),
       division: u.division,
       managerId: u.manager_id,
-      joinedAt: iso(u.joined_at),
-    }));
+      joinedAt: iso(u.joined_at)
+    }))
 
-    const assignments = assignRows.map((a) => ({
+    const assignments = assignRows.map(a => ({
       id: a.id,
       memberId: a.member_id,
       managerId: a.manager_id,
       sku: a.sku,
       stage: a.stage,
       division: a.division,
-      assignedAt: iso(a.assigned_at),
-    }));
+      assignedAt: iso(a.assigned_at)
+    }))
 
-    const qcAudit = qcRows.map((q) => ({
+    const qcAudit = qcRows.map(q => ({
       id: q.id,
       at: iso(q.audited_at),
       auditor: q.auditor_name,
@@ -2899,20 +2913,20 @@ app.get("/api/getAll", async (req, res) => {
       productId: q.product_id,
       verdict: q.verdict,
       comments: q.comments,
-      stagesSentBack: parseJson(q.stages_sent_back, []),
-    }));
+      stagesSentBack: parseJson(q.stages_sent_back, [])
+    }))
 
-    const audit = auditRows.map((a) => ({
+    const audit = auditRows.map(a => ({
       id: a.id,
       at: iso(a.logged_at),
       actor: a.actor_name,
       action: a.action,
       entity: a.entity,
       detail: a.detail,
-      division: a.division,
-    }));
+      division: a.division
+    }))
 
-    const assignmentHistory = historyRows.map((r) => ({
+    const assignmentHistory = historyRows.map(r => ({
       id: r.id,
       action: r.action,
       sku: r.sku,
@@ -2924,8 +2938,8 @@ app.get("/api/getAll", async (req, res) => {
       managerId: r.manager_id,
       stage: r.stage,
       note: r.note,
-      at: iso(r.logged_at),
-    }));
+      at: iso(r.logged_at)
+    }))
 
     res.json({
       products,
@@ -2934,22 +2948,22 @@ app.get("/api/getAll", async (req, res) => {
       assignments,
       qcAudit,
       audit,
-      assignmentHistory,
-    });
+      assignmentHistory
+    })
   } catch (e) {
-    console.error("getAll error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('getAll error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/getUsers
 ---------------------------------------------------------------- */
-app.get("/api/getUsers", async (req, res) => {
+app.get('/api/getUsers', async (req, res) => {
   try {
-    const { rows } = await db.query(`SELECT * FROM ${T("users")}`);
+    const { rows } = await db.query(`SELECT * FROM ${T('users')}`)
     res.json(
-      rows.map((u) => ({
+      rows.map(u => ({
         id: u.id,
         name: u.name,
         email: u.email,
@@ -2958,14 +2972,14 @@ app.get("/api/getUsers", async (req, res) => {
         stages: parseJson(u.stages, []),
         division: u.division,
         managerId: u.manager_id,
-        joinedAt: iso(u.joined_at),
-      })),
-    );
+        joinedAt: iso(u.joined_at)
+      }))
+    )
   } catch (e) {
-    console.error("getUsers error", e);
-    res.status(500).json([]);
+    console.error('getUsers error', e)
+    res.status(500).json([])
   }
-});
+})
 
 /* ----------------------------------------------------------------
    POST /api/batchUpsertProducts
@@ -2978,88 +2992,88 @@ app.get("/api/getUsers", async (req, res) => {
    - The three MERGEs run inside one transaction script, so a chunk is
      all-or-nothing.
 ---------------------------------------------------------------- */
-const UPSERT_CHUNK_SIZE = 100;
+const UPSERT_CHUNK_SIZE = 100
 
-app.post("/api/batchUpsertProducts", async (req, res) => {
-  const input = req.body;
+app.post('/api/batchUpsertProducts', async (req, res) => {
+  const input = req.body
   if (!Array.isArray(input))
-    return res.status(400).json({ ok: false, error: "expected array" });
-  if (input.length === 0) return res.json({ ok: true, count: 0 });
+    return res.status(400).json({ ok: false, error: 'expected array' })
+  if (input.length === 0) return res.json({ ok: true, count: 0 })
 
   try {
     // De-duplicate by id (MERGE fails if two source rows hit the same target row)
-    const byId = new Map();
-    input.forEach((p) => {
-      if (p && p.id) byId.set(String(p.id), p);
-    });
-    const products = [...byId.values()];
-    const nowIso = new Date().toISOString();
+    const byId = new Map()
+    input.forEach(p => {
+      if (p && p.id) byId.set(String(p.id), p)
+    })
+    const products = [...byId.values()]
+    const nowIso = new Date().toISOString()
 
     // ---- Cap check ----
-    const currentCount = await getProductCount(db);
+    const currentCount = await getProductCount(db)
     const { rows: existingIdCheck } = await db.query(
-      `SELECT id FROM ${T("products")} WHERE id IN UNNEST($1)`,
-      [[...byId.keys()]],
-    );
-    const existingIdSet = new Set(existingIdCheck.map((r) => String(r.id)));
+      `SELECT id FROM ${T('products')} WHERE id IN UNNEST($1)`,
+      [[...byId.keys()]]
+    )
+    const existingIdSet = new Set(existingIdCheck.map(r => String(r.id)))
     const newCount = products.filter(
-      (p) => !existingIdSet.has(String(p.id)),
-    ).length;
+      p => !existingIdSet.has(String(p.id))
+    ).length
 
     if (currentCount + newCount > MAX_PRODUCTS) {
       return res.status(400).json({
         ok: false,
-        error: `Product cap of ${MAX_PRODUCTS} would be exceeded. Currently ${currentCount}, trying to add ${newCount} new products.`,
-      });
+        error: `Product cap of ${MAX_PRODUCTS} would be exceeded. Currently ${currentCount}, trying to add ${newCount} new products.`
+      })
     }
 
-    const numOrNull = (v) => (v ? Number(v) || null : null);
+    const numOrNull = v => (v ? Number(v) || null : null)
 
     // ---- Apply in chunks ----
     for (let i = 0; i < products.length; i += UPSERT_CHUNK_SIZE) {
-      const chunk = products.slice(i, i + UPSERT_CHUNK_SIZE);
+      const chunk = products.slice(i, i + UPSERT_CHUNK_SIZE)
 
-      const productRows = [];
-      const stageRows = [];
-      const storeRows = [];
+      const productRows = []
+      const stageRows = []
+      const storeRows = []
 
       for (const p of chunk) {
         productRows.push({
           id: String(p.id),
           division: p.division ?? null,
           sku: p.sku ?? null,
-          name: p.name || "",
+          name: p.name || '',
           vendor: p.vendor || null,
           inward: p.inward || null,
           qty: p.qty || 0,
-          note: p.note || "",
+          note: p.note || '',
           set_no: p.set_no || null,
           verdict: p.verdict || null,
-          issues: p.issues || "",
+          issues: p.issues || '',
           created_at: p.createdAt || nowIso,
-          updated_at: p.updatedAt || nowIso,
-        });
+          updated_at: p.updatedAt || nowIso
+        })
 
         if (p.stages) {
           for (const key of Object.keys(p.stages)) {
-            const s = p.stages[key] || {};
+            const s = p.stages[key] || {}
             stageRows.push({
               product_id: String(p.id),
               stage_key: key,
-              status: s.status || "Not Started",
+              status: s.status || 'Not Started',
               person: s.person || null,
-              comments: s.comments || "",
+              comments: s.comments || '',
               updated_at: s.at || nowIso,
               width_cm: numOrNull(s.width),
               height_cm: numOrNull(s.height),
-              weight_gm: numOrNull(s.weight),
-            });
+              weight_gm: numOrNull(s.weight)
+            })
           }
         }
 
         if (p.stores) {
           for (const store of Object.keys(p.stores)) {
-            const s = p.stores[store] || {};
+            const s = p.stores[store] || {}
             storeRows.push({
               product_id: String(p.id),
               store,
@@ -3069,9 +3083,9 @@ app.post("/api/batchUpsertProducts", async (req, res) => {
               received_by: s.receivedBy || null,
               missing: s.missing || 0,
               damaged: s.damaged || 0,
-              notes: s.notes || "",
-              updated_at: s.at || nowIso,
-            });
+              notes: s.notes || '',
+              updated_at: s.at || nowIso
+            })
           }
         }
       }
@@ -3079,7 +3093,7 @@ app.post("/api/batchUpsertProducts", async (req, res) => {
       const script = `
 BEGIN TRANSACTION;
 
-MERGE ${T("products")} t
+MERGE ${T('products')} t
 USING (
   SELECT
     JSON_VALUE(j, '$.id') AS id,
@@ -3107,7 +3121,7 @@ WHEN NOT MATCHED THEN INSERT
 VALUES
   (s.id, s.division, s.sku, s.name, s.vendor, s.inward, s.qty, s.note, s.set_no, s.verdict, s.issues, s.created_at, s.updated_at);
 
-MERGE ${T("stage_entries")} t
+MERGE ${T('stage_entries')} t
 USING (
   SELECT
     JSON_VALUE(j, '$.product_id') AS product_id,
@@ -3131,7 +3145,7 @@ WHEN NOT MATCHED THEN INSERT
 VALUES
   (s.product_id, s.stage_key, s.status, s.person, s.comments, s.updated_at, s.width_cm, s.height_cm, s.weight_gm);
 
-MERGE ${T("stores")} t
+MERGE ${T('stores')} t
 USING (
   SELECT
     JSON_VALUE(j, '$.product_id') AS product_id,
@@ -3157,40 +3171,40 @@ VALUES
   (s.product_id, s.store, s.dispatched, s.received, s.received_at, s.received_by, s.missing, s.damaged, s.notes, s.updated_at);
 
 COMMIT TRANSACTION;
-`;
+`
 
       // Empty arrays are sent as "[]" so the param type is always STRING
       await db.query(script, [
         JSON.stringify(productRows),
         JSON.stringify(stageRows),
-        JSON.stringify(storeRows),
-      ]);
+        JSON.stringify(storeRows)
+      ])
     }
 
-    res.json({ ok: true, count: products.length });
+    res.json({ ok: true, count: products.length })
   } catch (e) {
-    console.error("batchUpsertProducts error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('batchUpsertProducts error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    POST /api/batchPatchStage   body: { ids, stageKey, patch }
    One MERGE for all ids instead of 2 queries per product.
 ---------------------------------------------------------------- */
-app.post("/api/batchPatchStage", async (req, res) => {
-  const { ids, stageKey, patch } = req.body;
+app.post('/api/batchPatchStage', async (req, res) => {
+  const { ids, stageKey, patch } = req.body
   if (!Array.isArray(ids) || !stageKey || !patch)
-    return res.status(400).json({ ok: false, error: "bad payload" });
-  if (ids.length === 0) return res.json({ ok: true, count: 0 });
+    return res.status(400).json({ ok: false, error: 'bad payload' })
+  if (ids.length === 0) return res.json({ ok: true, count: 0 })
 
   try {
-    const uniqueIds = [...new Set(ids.map((i) => String(i)))];
+    const uniqueIds = [...new Set(ids.map(i => String(i)))]
 
     const script = `
 BEGIN TRANSACTION;
 
-MERGE ${T("stage_entries")} t
+MERGE ${T('stage_entries')} t
 USING (SELECT id AS product_id FROM UNNEST($1) AS id) s
 ON t.product_id = s.product_id AND t.stage_key = $2
 WHEN MATCHED THEN UPDATE SET
@@ -3204,12 +3218,12 @@ WHEN NOT MATCHED THEN INSERT
 VALUES
   (s.product_id, $2, COALESCE($3, 'Not Started'), $4, $5, COALESCE($6, FALSE), CURRENT_TIMESTAMP());
 
-UPDATE ${T("products")}
+UPDATE ${T('products')}
 SET updated_at = CURRENT_TIMESTAMP()
 WHERE id IN UNNEST($1);
 
 COMMIT TRANSACTION;
-`;
+`
 
     await db.query(
       script,
@@ -3218,84 +3232,84 @@ COMMIT TRANSACTION;
         String(stageKey),
         patch.status || null,
         patch.person ?? null,
-        patch.comments ?? "",
-        patch.skipped ?? null,
+        patch.comments ?? '',
+        patch.skipped ?? null
       ],
-      { p6: "BOOL" },
-    );
+      { p6: 'BOOL' }
+    )
 
-    res.json({ ok: true, count: ids.length });
+    res.json({ ok: true, count: ids.length })
   } catch (e) {
-    console.error("batchPatchStage error", e.message);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('batchPatchStage error', e.message)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    POST /api/patchQCVerdict   body: { id, verdict, issues }
 ---------------------------------------------------------------- */
-app.post("/api/patchQCVerdict", async (req, res) => {
-  const { id, verdict, issues } = req.body;
+app.post('/api/patchQCVerdict', async (req, res) => {
+  const { id, verdict, issues } = req.body
   try {
     await db.query(
-      `UPDATE ${T("products")}
+      `UPDATE ${T('products')}
        SET verdict = $2, issues = $3, updated_at = CURRENT_TIMESTAMP()
        WHERE id = $1`,
-      [String(id), verdict || null, issues || ""],
-    );
-    res.json({ ok: true });
+      [String(id), verdict || null, issues || '']
+    )
+    res.json({ ok: true })
   } catch (e) {
-    console.error("patchQCVerdict error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('patchQCVerdict error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    POST /api/appendQCAudit   body: full qc audit entry
 ---------------------------------------------------------------- */
-app.post("/api/appendQCAudit", async (req, res) => {
-  const e = req.body;
+app.post('/api/appendQCAudit', async (req, res) => {
+  const e = req.body
   try {
     // stages_sent_back: arrays are stored as a JSON string
     const sentBack = Array.isArray(e.stagesSentBack)
       ? JSON.stringify(e.stagesSentBack)
-      : e.stagesSentBack || "";
+      : e.stagesSentBack || ''
 
     await db.query(
-      `INSERT INTO ${T("qc_audit")}
+      `INSERT INTO ${T('qc_audit')}
          (id, audited_at, auditor_name, product_id, sku, division, verdict, comments, stages_sent_back)
        VALUES ($1, TIMESTAMP($2), $3, $4, $5, $6, $7, $8, $9)`,
       [
-        e.id ? String(e.id) : require("crypto").randomUUID(),
+        e.id ? String(e.id) : require('crypto').randomUUID(),
         e.at || new Date().toISOString(),
-        e.auditor || "",
+        e.auditor || '',
         e.productId ?? null,
         e.sku ?? null,
         e.division ?? null,
         e.verdict ?? null,
-        e.comments || "",
-        sentBack,
-      ],
-    );
-    res.json({ ok: true });
+        e.comments || '',
+        sentBack
+      ]
+    )
+    res.json({ ok: true })
   } catch (err) {
-    console.error("appendQCAudit error", err);
-    res.status(500).json({ ok: false, error: err.message });
+    console.error('appendQCAudit error', err)
+    res.status(500).json({ ok: false, error: err.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    POST /api/upsertStore   body: { productId, store, division, sku, storeData }
 ---------------------------------------------------------------- */
-app.post("/api/upsertStore", async (req, res) => {
-  const { productId, store, storeData } = req.body;
+app.post('/api/upsertStore', async (req, res) => {
+  const { productId, store, storeData } = req.body
   if (!productId || !store || !storeData)
-    return res.status(400).json({ ok: false, error: "bad payload" });
+    return res.status(400).json({ ok: false, error: 'bad payload' })
   try {
     const script = `
 BEGIN TRANSACTION;
 
-MERGE ${T("stores")} t
+MERGE ${T('stores')} t
 USING (
   SELECT
     $1 AS product_id,
@@ -3318,10 +3332,10 @@ WHEN NOT MATCHED THEN INSERT
 VALUES
   (s.product_id, s.store, s.dispatched, s.received, s.received_at, s.received_by, s.missing, s.damaged, s.notes, CURRENT_TIMESTAMP());
 
-UPDATE ${T("products")} SET updated_at = CURRENT_TIMESTAMP() WHERE id = $1;
+UPDATE ${T('products')} SET updated_at = CURRENT_TIMESTAMP() WHERE id = $1;
 
 COMMIT TRANSACTION;
-`;
+`
     await db.query(
       script,
       [
@@ -3333,136 +3347,173 @@ COMMIT TRANSACTION;
         storeData.receivedBy || null,
         Math.trunc(Number(storeData.missing) || 0),
         Math.trunc(Number(storeData.damaged) || 0),
-        storeData.notes || "",
+        storeData.notes || ''
       ],
-      { p3: "INT64", p4: "BOOL", p7: "INT64", p8: "INT64" },
-    );
-    res.json({ ok: true });
+      { p3: 'INT64', p4: 'BOOL', p7: 'INT64', p8: 'INT64' }
+    )
+    res.json({ ok: true })
   } catch (e) {
-    console.error("upsertStore error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('upsertStore error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    POST /api/appendAssignmentHistory
 ---------------------------------------------------------------- */
-app.post("/api/appendAssignmentHistory", async (req, res) => {
-  const e = req.body;
+app.post('/api/appendAssignmentHistory', async (req, res) => {
+  const e = req.body
   try {
     await db.query(
-      `INSERT INTO ${T("assignment_history")}
+      `INSERT INTO ${T('assignment_history')}
          (id, action, sku, division, from_member_id, to_member_id, manager_id, stage, note, logged_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TIMESTAMP($10))`,
       [
-        e.id ? String(e.id) : require("crypto").randomUUID(),
+        e.id ? String(e.id) : require('crypto').randomUUID(),
         e.action ?? null,
         e.sku ?? null,
         e.division ?? null,
         e.fromMemberId || null,
         e.toMemberId ?? null,
         e.managerId ?? null,
-        e.stage || "",
-        e.note || "",
-        e.at || new Date().toISOString(),
-      ],
-    );
-    res.json({ ok: true });
+        e.stage || '',
+        e.note || '',
+        e.at || new Date().toISOString()
+      ]
+    )
+    res.json({ ok: true })
   } catch (err) {
-    console.error("appendAssignmentHistory error", err);
-    res.status(500).json({ ok: false, error: err.message });
+    console.error('appendAssignmentHistory error', err)
+    res.status(500).json({ ok: false, error: err.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
-   GET /api/assignmentHistory?division=KOC Cards
+   POST /api/appendAssignmentHistoryBatch   body: array of history entries
+   One INSERT for all rows instead of one request per row.
 ---------------------------------------------------------------- */
-app.get("/api/assignmentHistory", async (req, res) => {
+app.post('/api/appendAssignmentHistoryBatch', async (req, res) => {
+  const list = Array.isArray(req.body) ? req.body : []
+  if (list.length === 0) return res.json({ ok: true, count: 0 })
   try {
-    const { division } = req.query;
+    const rows = list.map(e => ({
+      id: e.id ? String(e.id) : require('crypto').randomUUID(),
+      action: e.action ?? null,
+      sku: e.sku ?? null,
+      division: e.division ?? null,
+      from_member_id: e.fromMemberId || null,
+      to_member_id: e.toMemberId ?? null,
+      manager_id: e.managerId ?? null,
+      stage: e.stage || '',
+      note: e.note || '',
+      logged_at: e.at || new Date().toISOString()
+    }))
+    await db.query(
+      `INSERT INTO ${T('assignment_history')}
+         (id, action, sku, division, from_member_id, to_member_id, manager_id, stage, note, logged_at)
+       SELECT
+         JSON_VALUE(j, '$.id'), JSON_VALUE(j, '$.action'), JSON_VALUE(j, '$.sku'),
+         JSON_VALUE(j, '$.division'), JSON_VALUE(j, '$.from_member_id'),
+         JSON_VALUE(j, '$.to_member_id'), JSON_VALUE(j, '$.manager_id'),
+         JSON_VALUE(j, '$.stage'), JSON_VALUE(j, '$.note'),
+         SAFE_CAST(JSON_VALUE(j, '$.logged_at') AS TIMESTAMP)
+       FROM UNNEST(JSON_QUERY_ARRAY($1)) AS j`,
+      [JSON.stringify(rows)]
+    )
+    res.json({ ok: true, count: rows.length })
+  } catch (err) {
+    console.error('appendAssignmentHistoryBatch error', err)
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
+app.get('/api/assignmentHistory', async (req, res) => {
+  try {
+    const { division } = req.query
     const { rows } = await db.query(
       `SELECT ah.*,
               u1.name AS to_member_name,
               u2.name AS from_member_name,
               u3.name AS manager_name
-       FROM ${T("assignment_history")} ah
-       LEFT JOIN ${T("users")} u1 ON u1.id = ah.to_member_id
-       LEFT JOIN ${T("users")} u2 ON u2.id = ah.from_member_id
-       LEFT JOIN ${T("users")} u3 ON u3.id = ah.manager_id
+       FROM ${T('assignment_history')} ah
+       LEFT JOIN ${T('users')} u1 ON u1.id = ah.to_member_id
+       LEFT JOIN ${T('users')} u2 ON u2.id = ah.from_member_id
+       LEFT JOIN ${T('users')} u3 ON u3.id = ah.manager_id
        WHERE ($1 IS NULL OR ah.division = $1)
        ORDER BY ah.logged_at DESC
        LIMIT 1000`,
-      [division || null],
-    );
-    res.json(rows.map((r) => ({ ...r, logged_at: iso(r.logged_at) })));
+      [division || null]
+    )
+    res.json(rows.map(r => ({ ...r, logged_at: iso(r.logged_at) })))
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    POST /api/deleteProduct   body: { id }
 ---------------------------------------------------------------- */
-app.post("/api/deleteProduct", async (req, res) => {
-  const { id } = req.body;
-  if (!id) return res.status(400).json({ ok: false, error: "id required" });
+app.post('/api/deleteProduct', async (req, res) => {
+  const { id } = req.body
+  if (!id) return res.status(400).json({ ok: false, error: 'id required' })
   try {
+    // No transaction: each DELETE waits its turn. The product row is deleted
+    // last, so if a step fails the product still exists and the delete can
+    // simply be run again.
     const script = `
-BEGIN TRANSACTION;
-DELETE FROM ${T("stage_entries")} WHERE product_id = $1;
-DELETE FROM ${T("stores")} WHERE product_id = $1;
-DELETE FROM ${T("assignments")} WHERE product_id = $1;
-DELETE FROM ${T("qc_audit")} WHERE product_id = $1;
-DELETE FROM ${T("products")} WHERE id = $1;
-COMMIT TRANSACTION;
-`;
-    await db.query(script, [String(id)]);
-    res.json({ ok: true });
+DELETE FROM ${T('stage_entries')} WHERE product_id = $1;
+DELETE FROM ${T('stores')} WHERE product_id = $1;
+DELETE FROM ${T('assignments')} WHERE product_id = $1;
+DELETE FROM ${T('qc_audit')} WHERE product_id = $1;
+DELETE FROM ${T('products')} WHERE id = $1;
+`
+    await db.query(script, [String(id)])
+    res.json({ ok: true })
   } catch (e) {
-    console.error("deleteProduct error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('deleteProduct error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/checkStage?productId=..&stageKey=..
 ---------------------------------------------------------------- */
-app.get("/api/checkStage", async (req, res) => {
-  const { productId, stageKey } = req.query;
+app.get('/api/checkStage', async (req, res) => {
+  const { productId, stageKey } = req.query
   try {
     const { rows } = await db.query(
-      `SELECT status, updated_at FROM ${T("stage_entries")}
+      `SELECT status, updated_at FROM ${T('stage_entries')}
        WHERE product_id = $1 AND stage_key = $2`,
-      [String(productId), String(stageKey)],
-    );
+      [String(productId), String(stageKey)]
+    )
     const row = rows[0]
       ? { status: rows[0].status, updated_at: iso(rows[0].updated_at) }
-      : null;
-    res.json({ ok: true, row });
+      : null
+    res.json({ ok: true, row })
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    POST /api/setVendors   body: { "KOC Cards": [...], "Bombay Cards": [...] }
 ---------------------------------------------------------------- */
-app.post("/api/setVendors", async (req, res) => {
+app.post('/api/setVendors', async (req, res) => {
   try {
-    const seen = new Set();
-    const rows = [];
+    const seen = new Set()
+    const rows = []
     for (const division of Object.keys(req.body || {})) {
       for (const vendorName of req.body[division] || []) {
-        const key = `${division}||${vendorName}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        rows.push({ division, vendor_name: vendorName });
+        const key = `${division}||${vendorName}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        rows.push({ division, vendor_name: vendorName })
       }
     }
-    if (rows.length === 0) return res.json({ ok: true });
+    if (rows.length === 0) return res.json({ ok: true })
 
     await db.query(
-      `MERGE ${T("vendors")} t
+      `MERGE ${T('vendors')} t
        USING (
          SELECT
            JSON_VALUE(j, '$.division') AS division,
@@ -3472,328 +3523,225 @@ app.post("/api/setVendors", async (req, res) => {
        ON t.division = s.division AND t.vendor_name = s.vendor_name
        WHEN NOT MATCHED THEN INSERT (division, vendor_name)
        VALUES (s.division, s.vendor_name)`,
-      [JSON.stringify(rows)],
-    );
-    res.json({ ok: true });
+      [JSON.stringify(rows)]
+    )
+    res.json({ ok: true })
   } catch (e) {
-    console.error("setVendors error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('setVendors error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ============================================================
-   VENDOR ISSUES APIs
-   Table: shared_rds_data.vendor_issues
+   VENDOR ISSUES APIs   (table: shared_rds_data.vendor_issues)
 ============================================================ */
 
-// Looks up the caller's role in the DB from the x-user-email header
-async function attachUserFromHeader(req, res, next) {
+// Reads the caller's role from the x-user-email header.
+// Attached only to the write routes, so other requests don't pay for it.
+async function attachUserFromHeader (req, res, next) {
   try {
-    const email = String(req.headers["x-user-email"] || "").trim().toLowerCase();
-    if (!email) return next();
-    const { rows } = await db.query(
-      `SELECT email, role FROM ${T("users")} WHERE LOWER(email) = $1 LIMIT 1`,
-      [email]
-    );
-    if (rows.length) req.user = { email: rows[0].email, role: rows[0].role };
-    next();
-  } catch (e) {
-    next(e);
-  }
-}
-app.use(attachUserFromHeader);
-
-
-// These routes must be connected to verified authentication.
-// Never obtain the role or email directly from req.body.
-function requireVendorIssueUser(req, res, next) {
-  if (!req.user || !req.user.email || !req.user.role) {
-    return res.status(401).json({
-      ok: false,
-      error: "Authentication required"
-    });
-  }
-
-  next();
-}
-
-function requireVendorIssueMaster(req, res, next) {
-  if (String(req.user.role).toLowerCase() !== "master") {
-    return res.status(403).json({
-      ok: false,
-      error: "Only Masters can modify vendor issues"
-    });
-  }
-
-  next();
-}
-
-/* ------------------------------------------------------------
-   GET /api/vendor-issues?vendor=VendorName
------------------------------------------------------------- */
-
-app.get(
-  "/api/vendor-issues",
-  async (req, res) => {
-    try {
-      const vendor = String(req.query.vendor || "").trim();
-
-      if (!vendor) {
-        return res.status(400).json({
-          ok: false,
-          error: "Vendor name is required"
-        });
-      }
-
+    const email = String(req.headers['x-user-email'] || '')
+      .trim()
+      .toLowerCase()
+    if (email) {
       const { rows } = await db.query(
-        `
-        SELECT
-          id,
-          vendor_name,
-          note,
-          created_by,
-          created_at,
-          updated_by,
-          updated_at
-        FROM ${T("vendor_issues")}
-        WHERE vendor_name = $1
-        ORDER BY created_at DESC
-        `,
-        [vendor]
-      );
-
-      return res.json({
-        ok: true,
-        issues: rows
-      });
-    } catch (error) {
-      console.error("getVendorIssues error:", error);
-
-      return res.status(500).json({
-        ok: false,
-        error: "Failed to fetch vendor issues"
-      });
+        `SELECT email, role FROM ${T('users')} WHERE LOWER(email) = $1 LIMIT 1`,
+        [email]
+      )
+      if (rows.length) req.user = { email: rows[0].email, role: rows[0].role }
     }
+    next()
+  } catch (e) {
+    console.error('attachUserFromHeader error:', e)
+    res.status(500).json({ ok: false, error: 'Could not verify user' })
   }
-);
+}
 
-/* ------------------------------------------------------------
-   POST /api/vendor-issues
------------------------------------------------------------- */
+function requireVendorIssueUser (req, res, next) {
+  if (!req.user || !req.user.email || !req.user.role) {
+    return res.status(401).json({ ok: false, error: 'Authentication required' })
+  }
+  next()
+}
 
+function requireVendorIssueMaster (req, res, next) {
+  if (String(req.user.role).toLowerCase() !== 'master') {
+    return res
+      .status(403)
+      .json({ ok: false, error: 'Only Masters can modify vendor issues' })
+  }
+  next()
+}
+
+// GET /api/vendor-issues?vendor=VendorName
+app.get('/api/vendor-issues', async (req, res) => {
+  try {
+    const vendor = String(req.query.vendor || '').trim()
+    if (!vendor) {
+      return res
+        .status(400)
+        .json({ ok: false, error: 'Vendor name is required' })
+    }
+    const { rows } = await db.query(
+      `SELECT id, vendor_name, note, created_by, created_at, updated_by, updated_at
+       FROM ${T('vendor_issues')}
+       WHERE vendor_name = $1
+       ORDER BY created_at DESC`,
+      [vendor]
+    )
+    res.json({
+      ok: true,
+      issues: rows.map(r => ({
+        ...r,
+        created_at: iso(r.created_at) || null,
+        updated_at: iso(r.updated_at) || null
+      }))
+    })
+  } catch (error) {
+    console.error('getVendorIssues error:', error)
+    res.status(500).json({ ok: false, error: 'Failed to fetch vendor issues' })
+  }
+})
+
+// POST /api/vendor-issues   body: { vendorName, note }
 app.post(
-  "/api/vendor-issues",
+  '/api/vendor-issues',
+  attachUserFromHeader,
   requireVendorIssueUser,
   requireVendorIssueMaster,
   async (req, res) => {
     try {
-      const { vendorName, note } = req.body || {};
-
+      const { vendorName, note } = req.body || {}
       if (
-        typeof vendorName !== "string" ||
+        typeof vendorName !== 'string' ||
         !vendorName.trim() ||
-        typeof note !== "string" ||
+        typeof note !== 'string' ||
         !note.trim()
       ) {
-        return res.status(400).json({
-          ok: false,
-          error: "Vendor name and note are required"
-        });
+        return res
+          .status(400)
+          .json({ ok: false, error: 'Vendor name and note are required' })
       }
-
       if (note.trim().length > 5000) {
-        return res.status(400).json({
-          ok: false,
-          error: "Note cannot exceed 5000 characters"
-        });
+        return res
+          .status(400)
+          .json({ ok: false, error: 'Note cannot exceed 5000 characters' })
       }
 
-      const vendor = vendorName.trim();
-
-      // Verify that the vendor exists.
+      const vendor = vendorName.trim()
       const { rows: vendors } = await db.query(
-        `
-        SELECT vendor_name
-        FROM ${T("vendors")}
-        WHERE vendor_name = $1
-        LIMIT 1
-        `,
+        `SELECT vendor_name FROM ${T(
+          'vendors'
+        )} WHERE vendor_name = $1 LIMIT 1`,
         [vendor]
-      );
-
+      )
       if (!vendors.length) {
-        return res.status(404).json({
-          ok: false,
-          error: "Vendor not found"
-        });
+        return res.status(404).json({ ok: false, error: 'Vendor not found' })
       }
-      // Generate a positive numeric issue ID.
-const id = randomUUID();
 
-await db.query(
-  `
-  INSERT INTO ${T("vendor_issues")}
-    (id, vendor_name, note, created_by, created_at)
-  VALUES
-    ($1, $2, $3, $4, CURRENT_TIMESTAMP())
-  `,
-  [
-    id,
-    vendor,
-    note.trim(),
-    req.user.email
-  ]
-);
-
-return res.status(201).json({
-  ok: true,
-  message: "Vendor issue created successfully",
-  id
-});
-
+      const id = randomUUID()
+      await db.query(
+        `INSERT INTO ${T('vendor_issues')}
+           (id, vendor_name, note, created_by, created_at)
+         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP())`,
+        [id, vendor, note.trim(), req.user.email]
+      )
+      res
+        .status(201)
+        .json({ ok: true, message: 'Vendor issue created successfully', id })
     } catch (error) {
-      console.error("createVendorIssue error:", error);
-
-      return res.status(500).json({
-        ok: false,
-        error: "Failed to create vendor issue"
-      });
+      console.error('createVendorIssue error:', error)
+      res
+        .status(500)
+        .json({ ok: false, error: 'Failed to create vendor issue' })
     }
   }
-);
+)
 
-/* ------------------------------------------------------------
-   PATCH /api/vendor-issues/:id
------------------------------------------------------------- */
-
+// PATCH /api/vendor-issues/:id   body: { note }
 app.patch(
-  "/api/vendor-issues/:id",
+  '/api/vendor-issues/:id',
+  attachUserFromHeader,
   requireVendorIssueUser,
   requireVendorIssueMaster,
   async (req, res) => {
     try {
-      const id = String(req.params.id || "").trim();
-
-if (!id) {
-  return res.status(400).json({
-    ok: false,
-    error: "Invalid note ID"
-  });
-}
-
-      const { note } = req.body || {};
-
-      if (note === undefined) {
-        return res.status(400).json({
-          ok: false,
-          error: "Note is required"
-        });
+      const id = String(req.params.id || '').trim()
+      if (!id) {
+        return res.status(400).json({ ok: false, error: 'Invalid note ID' })
       }
-
+      const { note } = req.body || {}
       if (
-        note !== undefined &&
-        (typeof note !== "string" ||
-          !note.trim() ||
-          note.trim().length > 5000)
+        typeof note !== 'string' ||
+        !note.trim() ||
+        note.trim().length > 5000
       ) {
-        return res.status(400).json({
-          ok: false,
-          error: "Invalid note"
-        });
+        return res.status(400).json({ ok: false, error: 'Invalid note' })
       }
 
       const { rows: existing } = await db.query(
-        `
-        SELECT id
-        FROM ${T("vendor_issues")}
-        WHERE id = $1
-        LIMIT 1
-        `,
+        `SELECT id FROM ${T('vendor_issues')} WHERE id = $1 LIMIT 1`,
         [id]
-      );
-
+      )
       if (!existing.length) {
-        return res.status(404).json({
-          ok: false,
-          error: "Vendor issue not found"
-        });
+        return res
+          .status(404)
+          .json({ ok: false, error: 'Vendor issue not found' })
       }
 
       await db.query(
-  `
-  UPDATE ${T("vendor_issues")}
-  SET
-    note = $1,
-    updated_by = $2,
-    updated_at = CURRENT_TIMESTAMP()
-  WHERE id = $3
-  `,
-  [
-    note.trim(),
-    req.user.email,
-    id
-  ],
-  {
-    p1: "STRING",
-    p2: "STRING",
-    p3:"STRING"
-  }
-);
-
-      return res.json({
-        ok: true,
-        message: "Vendor issue updated successfully"
-      });
-
+        `UPDATE ${T('vendor_issues')}
+         SET note = $1, updated_by = $2, updated_at = CURRENT_TIMESTAMP()
+         WHERE id = $3`,
+        [note.trim(), req.user.email, id]
+      )
+      res.json({ ok: true, message: 'Vendor issue updated successfully' })
     } catch (error) {
-      console.error("updateVendorIssue error:", error);
-
-      return res.status(500).json({
-        ok: false,
-        error: "Failed to update vendor issue"
-      });
+      console.error('updateVendorIssue error:', error)
+      res
+        .status(500)
+        .json({ ok: false, error: 'Failed to update vendor issue' })
     }
   }
-);
-
+)
 
 /* ----------------------------------------------------------------
    Helper: stages may arrive as an array or a string.
    Stored as a string in BigQuery (arrays are saved as JSON text).
 ---------------------------------------------------------------- */
-const stagesToStr = (v) => (Array.isArray(v) ? JSON.stringify(v) : v || "");
+const stagesToStr = v => (Array.isArray(v) ? JSON.stringify(v) : v || '')
 
 /* ----------------------------------------------------------------
    POST /api/setTeamMembers   body: array of members
    One MERGE for all members. joined_at is only set on insert,
    same as the old ON CONFLICT clause.
 ---------------------------------------------------------------- */
-app.post("/api/setTeamMembers", async (req, res) => {
-  const members = req.body;
+app.post('/api/setTeamMembers', async (req, res) => {
+  const members = req.body
   if (!Array.isArray(members))
-    return res.status(400).json({ ok: false, error: "expected array" });
-  if (members.length === 0) return res.json({ ok: true });
+    return res.status(400).json({ ok: false, error: 'expected array' })
+  if (members.length === 0) return res.json({ ok: true })
 
   try {
-    const nowIso = new Date().toISOString();
-    const byId = new Map();
-    members.forEach((m) => {
-      if (!m || !m.id) return;
+    const nowIso = new Date().toISOString()
+    const byId = new Map()
+    members.forEach(m => {
+      if (!m || !m.id) return
       byId.set(String(m.id), {
         id: String(m.id),
         name: m.name ?? null,
         email: m.email ?? null,
-        password: m.password || "",
-        role: m.role || "member",
+        password: m.password || '',
+        role: m.role || 'member',
         stages: stagesToStr(m.stages),
         division: m.division || null,
         manager_id: m.managerId || null,
-        joined_at: m.joinedAt || nowIso,
-      });
-    });
+        joined_at: m.joinedAt || nowIso
+      })
+    })
 
     await db.query(
-      `MERGE ${T("users")} t
+      `MERGE ${T('users')} t
        USING (
          SELECT
            JSON_VALUE(j, '$.id') AS id,
@@ -3815,53 +3763,53 @@ app.post("/api/setTeamMembers", async (req, res) => {
          (id, name, email, password, role, stages, division, manager_id, joined_at)
        VALUES
          (s.id, s.name, s.email, s.password, s.role, s.stages, s.division, s.manager_id, s.joined_at)`,
-      [JSON.stringify([...byId.values()])],
-    );
-    res.json({ ok: true });
+      [JSON.stringify([...byId.values()])]
+    )
+    res.json({ ok: true })
   } catch (e) {
-    console.error("setTeamMembers error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('setTeamMembers error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    POST /api/saveUsers   body: array of {email, password, name, role, stages}
    Full replace-by-email semantics:
    users whose email is not in the payload are DELETED.
 ---------------------------------------------------------------- */
-app.post("/api/saveUsers", async (req, res) => {
-  const users = req.body;
+app.post('/api/saveUsers', async (req, res) => {
+  const users = req.body
   if (!Array.isArray(users))
-    return res.status(400).json({ ok: false, error: "expected array" });
+    return res.status(400).json({ ok: false, error: 'expected array' })
 
   try {
-    const byId = new Map();
-    users.forEach((u) => {
-      if (!u || !u.email) return;
+    const byId = new Map()
+    users.forEach(u => {
+      if (!u || !u.email) return
       const id = String(u.name || u.email)
         .toLowerCase()
-        .replace(/\s+/g, "_");
+        .replace(/\s+/g, '_')
       byId.set(id, {
         id,
         name: u.name || u.email,
         email: u.email,
-        password: u.password || "",
-        role: u.role || "member",
-        stages: stagesToStr(u.stages),
-      });
-    });
-    const rows = [...byId.values()];
+        password: u.password || '',
+        role: u.role || 'member',
+        stages: stagesToStr(u.stages)
+      })
+    })
+    const rows = [...byId.values()]
 
     const script = `
 BEGIN TRANSACTION;
 
-DELETE FROM ${T("users")}
+DELETE FROM ${T('users')}
 WHERE LOWER(email) NOT IN (
   SELECT LOWER(JSON_VALUE(j, '$.email'))
   FROM UNNEST(JSON_QUERY_ARRAY(@p1)) AS j
 );
 
-MERGE ${T("users")} t
+MERGE ${T('users')} t
 USING (
   SELECT
     JSON_VALUE(j, '$.id') AS id,
@@ -3880,64 +3828,66 @@ WHEN NOT MATCHED THEN INSERT (id, name, email, password, role, stages)
 VALUES (s.id, s.name, s.email, s.password, s.role, s.stages);
 
 COMMIT TRANSACTION;
-`;
-    await db.query(script, [JSON.stringify(rows)]);
-    res.json({ ok: true });
+`
+    await db.query(script, [JSON.stringify(rows)])
+    res.json({ ok: true })
   } catch (e) {
-    console.error("saveUsers error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('saveUsers error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    POST /api/setAssignments
    - plain array            -> full sync per division (with safety guards)
    - { mode:"add", assignments:[...] } -> insert/update only, never deletes
 ---------------------------------------------------------------- */
-app.post("/api/setAssignments", async (req, res) => {
-  const isAddMode = !Array.isArray(req.body) && req.body?.mode === "add";
-  const assignments = isAddMode ? req.body.assignments : req.body;
+app.post('/api/setAssignments', async (req, res) => {
+  const isAddMode = !Array.isArray(req.body) && req.body?.mode === 'add'
+  const assignments = isAddMode ? req.body.assignments : req.body
 
   if (!Array.isArray(assignments)) {
     return res.status(400).json({
       ok: false,
-      error: "expected array (or { mode: 'add', assignments: [...] })",
-    });
+      error: "expected array (or { mode: 'add', assignments: [...] })"
+    })
   }
   if (isAddMode && assignments.length === 0) {
     return res
       .status(400)
-      .json({ ok: false, error: "assignments array is empty" });
+      .json({ ok: false, error: 'assignments array is empty' })
   }
 
-  const divisionsInPayload = [...new Set(assignments.map((a) => a.division))];
+  const divisionsInPayload = [...new Set(assignments.map(a => a.division))]
 
   try {
     // ---- Per-division safety guards (skipped in add mode) ----
     if (!isAddMode) {
       const counts = await Promise.all(
-        divisionsInPayload.map((div) =>
+        divisionsInPayload.map(div =>
           db.query(
-            `SELECT COUNT(*) AS count FROM ${T("assignments")} WHERE division = $1`,
-            [div ?? null],
-          ),
-        ),
-      );
+            `SELECT COUNT(*) AS count FROM ${T(
+              'assignments'
+            )} WHERE division = $1`,
+            [div ?? null]
+          )
+        )
+      )
 
       for (let i = 0; i < divisionsInPayload.length; i++) {
-        const div = divisionsInPayload[i];
-        const currentCount = Number(counts[i].rows[0].count);
+        const div = divisionsInPayload[i]
+        const currentCount = Number(counts[i].rows[0].count)
         const incomingCountForDiv = assignments.filter(
-          (a) => a.division === div,
-        ).length;
+          a => a.division === div
+        ).length
 
         if (incomingCountForDiv === 0 && currentCount > 0) {
           return res.status(400).json({
             ok: false,
-            error: `Refusing to clear ${currentCount} existing assignments for "${div}" via empty payload.`,
-          });
+            error: `Refusing to clear ${currentCount} existing assignments for "${div}" via empty payload.`
+          })
         }
-        const SHRINK_THRESHOLD = 0.5;
+        const SHRINK_THRESHOLD = 0.5
         if (
           currentCount > 20 &&
           incomingCountForDiv < currentCount * SHRINK_THRESHOLD
@@ -3947,43 +3897,42 @@ app.post("/api/setAssignments", async (req, res) => {
             error: `Payload has ${incomingCountForDiv} rows for "${div}" but ${currentCount} currently exist — looks like a stale/partial payload.`,
             division: div,
             currentCount,
-            incomingCount: incomingCountForDiv,
-          });
+            incomingCount: incomingCountForDiv
+          })
         }
       }
     }
 
     // ---- Resolve product ids from (division, sku) ----
-    const prodMap = {};
+    const prodMap = {}
     if (assignments.length > 0) {
       const skusLower = [
-        ...new Set(assignments.map((a) => String(a.sku || "").toLowerCase())),
-      ];
+        ...new Set(assignments.map(a => String(a.sku || '').toLowerCase()))
+      ]
       const { rows: prodRows } = await db.query(
         `SELECT id, division, LOWER(sku) AS sku_lower
-         FROM ${T("products")}
+         FROM ${T('products')}
          WHERE LOWER(sku) IN UNNEST($1)`,
-        [skusLower],
-      );
-      prodRows.forEach((r) => {
-        prodMap[r.division + "||" + r.sku_lower] = String(r.id);
-      });
+        [skusLower]
+      )
+      prodRows.forEach(r => {
+        prodMap[r.division + '||' + r.sku_lower] = String(r.id)
+      })
     }
 
     // ---- Build rows (deduplicated by id) ----
-    const nowIso = new Date().toISOString();
-    const rowsById = new Map();
-    const skipped = [];
-    const validIdsByDivision = {};
+    const nowIso = new Date().toISOString()
+    const rowsById = new Map()
+    const skipped = []
+    const validIdsByDivision = {}
 
-    assignments.forEach((a) => {
-      const pid =
-        prodMap[a.division + "||" + String(a.sku || "").toLowerCase()];
+    assignments.forEach(a => {
+      const pid = prodMap[a.division + '||' + String(a.sku || '').toLowerCase()]
       if (!pid) {
-        skipped.push({ sku: a.sku, division: a.division });
-        return;
+        skipped.push({ sku: a.sku, division: a.division })
+        return
       }
-      const id = a.id ? String(a.id) : require("crypto").randomUUID();
+      const id = a.id ? String(a.id) : require('crypto').randomUUID()
       rowsById.set(id, {
         id,
         member_id: a.memberId ?? null,
@@ -3992,29 +3941,30 @@ app.post("/api/setAssignments", async (req, res) => {
         sku: a.sku ?? null,
         division: a.division ?? null,
         stage: a.stage ?? null,
-        assigned_at: a.assignedAt || nowIso,
-      });
-    });
-    const rows = [...rowsById.values()];
+        assigned_at: a.assignedAt || nowIso
+      })
+    })
+    const rows = [...rowsById.values()]
 
     if (isAddMode && rows.length === 0) {
       return res.status(400).json({
         ok: false,
         error: `No matching product found for ${skipped.length} SKU(s) — check division/SKU spelling.`,
-        skipped,
-      });
+        skipped
+      })
     }
 
-    // Keep-list per division (only divisions that have at least one valid row,
-    // same as the old "keepIds.length > 0" check)
-    const keepRows = rows.map((r) => ({ id: r.id, division: r.division }));
-
-    // ---- One transaction: MERGE + (optional) scoped delete ----
-    let script = `BEGIN TRANSACTION;\n`;
-
+    // ---- ONE statement, no transaction ----
+    // MERGE upserts the payload. In full-sync mode, WHEN NOT MATCHED BY SOURCE
+    // also deletes rows of the SAME divisions that are not in the payload.
     if (rows.length > 0) {
-      script += `
-MERGE ${T("assignments")} t
+      const divisionsWithRows = [
+        ...new Set(rows.map(r => r.division).filter(Boolean))
+      ]
+      const withDelete = !isAddMode && divisionsWithRows.length > 0
+
+      const sql = `
+MERGE ${T('assignments')} t
 USING (
   SELECT
     JSON_VALUE(j, '$.id') AS id,
@@ -4034,85 +3984,75 @@ WHEN MATCHED THEN UPDATE SET
 WHEN NOT MATCHED THEN INSERT
   (id, member_id, manager_id, product_id, sku, division, stage, assigned_at)
 VALUES
-  (s.id, s.member_id, s.manager_id, s.product_id, s.sku, s.division, s.stage, s.assigned_at);
-`;
+  (s.id, s.member_id, s.manager_id, s.product_id, s.sku, s.division, s.stage, s.assigned_at)
+${
+  withDelete
+    ? 'WHEN NOT MATCHED BY SOURCE AND t.division IN UNNEST(@p2) THEN DELETE'
+    : ''
+}`
+
+      await db.query(
+        sql,
+        withDelete
+          ? [JSON.stringify(rows), divisionsWithRows]
+          : [JSON.stringify(rows)]
+      )
     }
 
-    if (!isAddMode && rows.length > 0) {
-      // Delete only rows NOT in the payload, scoped to the divisions in the payload
-      script += `
-DELETE FROM ${T("assignments")} t
-WHERE t.division IN (
-    SELECT DISTINCT JSON_VALUE(k, '$.division')
-    FROM UNNEST(JSON_QUERY_ARRAY(@p2)) AS k
-  )
-  AND t.id NOT IN (
-    SELECT JSON_VALUE(k, '$.id')
-    FROM UNNEST(JSON_QUERY_ARRAY(@p2)) AS k
-  );
-`;
-    }
-
-    script += `COMMIT TRANSACTION;`;
-
-    if (rows.length > 0) {
-      await db.query(script, [JSON.stringify(rows), JSON.stringify(keepRows)]);
-    }
-
-    res.json({ ok: true, upserted: rows.length, skipped });
+    res.json({ ok: true, upserted: rows.length, skipped })
   } catch (e) {
-    console.error("setAssignments error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('setAssignments error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    POST /api/clearAssignments   body: { confirm: true }
 ---------------------------------------------------------------- */
-app.post("/api/clearAssignments", async (req, res) => {
+app.post('/api/clearAssignments', async (req, res) => {
   if (req.body?.confirm !== true) {
     return res.status(400).json({
       ok: false,
-      error: "Must pass { confirm: true } to clear all assignments.",
-    });
+      error: 'Must pass { confirm: true } to clear all assignments.'
+    })
   }
   try {
     const { rows } = await db.query(
-      `SELECT COUNT(*) AS count FROM ${T("assignments")}`,
-    );
-    await db.query(`DELETE FROM ${T("assignments")} WHERE TRUE`);
-    res.json({ ok: true, deleted: Number(rows[0].count) });
+      `SELECT COUNT(*) AS count FROM ${T('assignments')}`
+    )
+    await db.query(`DELETE FROM ${T('assignments')} WHERE TRUE`)
+    res.json({ ok: true, deleted: Number(rows[0].count) })
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    POST /api/appendAudit   body: full audit entry
 ---------------------------------------------------------------- */
-app.post("/api/appendAudit", async (req, res) => {
-  const e = req.body;
+app.post('/api/appendAudit', async (req, res) => {
+  const e = req.body
   try {
     await db.query(
-      `INSERT INTO ${T("audit_log")}
+      `INSERT INTO ${T('audit_log')}
          (id, logged_at, actor_name, action, entity, detail, division)
        VALUES ($1, TIMESTAMP($2), $3, $4, $5, $6, $7)`,
       [
-        e.id ? String(e.id) : require("crypto").randomUUID(),
+        e.id ? String(e.id) : require('crypto').randomUUID(),
         e.at || new Date().toISOString(),
-        e.actor || "Unattributed",
+        e.actor || 'Unattributed',
         e.action ?? null,
         e.entity ?? null,
-        e.detail || "",
-        e.division || null,
-      ],
-    );
-    res.json({ ok: true });
+        e.detail || '',
+        e.division || null
+      ]
+    )
+    res.json({ ok: true })
   } catch (err) {
-    console.error("appendAudit error", err);
-    res.status(500).json({ ok: false, error: err.message });
+    console.error('appendAudit error', err)
+    res.status(500).json({ ok: false, error: err.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/memberStats?memberId=chitra&division=Bombay Cards
@@ -4120,23 +4060,23 @@ app.post("/api/appendAudit", async (req, res) => {
      COUNT(*) FILTER (WHERE x)  ->  COUNTIF(x)
      bool_or(x)                 ->  LOGICAL_OR(x)
 ---------------------------------------------------------------- */
-app.get("/api/memberStats", async (req, res) => {
-  const { memberId, division } = req.query;
+app.get('/api/memberStats', async (req, res) => {
+  const { memberId, division } = req.query
   if (!memberId || !division)
     return res
       .status(400)
-      .json({ ok: false, error: "memberId and division required" });
+      .json({ ok: false, error: 'memberId and division required' })
   try {
     const { rows } = await db.query(
       `
       WITH member_skus AS (
         SELECT DISTINCT sku
-        FROM ${T("assignments")}
+        FROM ${T('assignments')}
         WHERE member_id = $1 AND division = $2
       ),
       pushed_skus AS (
         SELECT DISTINCT sku
-        FROM ${T("assignments")}
+        FROM ${T('assignments')}
         WHERE manager_id = $1
           AND member_id != $1
           AND division = $2
@@ -4147,8 +4087,8 @@ app.get("/api/memberStats", async (req, res) => {
       ),
       target_assignments AS (
         SELECT DISTINCT p.id AS product_id, a.stage AS assigned_stage
-        FROM ${T("assignments")} a
-        JOIN ${T("products")} p ON p.sku = a.sku AND p.division = a.division
+        FROM ${T('assignments')} a
+        JOIN ${T('products')} p ON p.sku = a.sku AND p.division = a.division
         WHERE a.member_id = $1 AND a.division = $2
       ),
       card_level AS (
@@ -4161,7 +4101,7 @@ app.get("/api/memberStats", async (req, res) => {
             OR COALESCE(se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%', FALSE)
           ) AS has_open_issue
         FROM target_assignments ta
-        LEFT JOIN ${T("stage_entries")} se
+        LEFT JOIN ${T('stage_entries')} se
           ON se.product_id = ta.product_id
           AND se.stage_key = ta.assigned_stage
         GROUP BY ta.product_id
@@ -4174,10 +4114,10 @@ app.get("/api/memberStats", async (req, res) => {
         (SELECT COUNT(*) FROM card_level WHERE stages_completed < stages_owned AND NOT has_open_issue) AS pending,
         (SELECT COUNT(*) FROM card_level WHERE has_open_issue) AS issues
     `,
-      [String(memberId), String(division)],
-    );
+      [String(memberId), String(division)]
+    )
 
-    const r = rows[0] || {};
+    const r = rows[0] || {}
     res.json({
       ok: true,
       total_assigned: Number(r.total_assigned || 0),
@@ -4185,28 +4125,28 @@ app.get("/api/memberStats", async (req, res) => {
       kept_by_manager: Number(r.kept_by_manager || 0),
       completed: Number(r.completed || 0),
       pending: Number(r.pending || 0),
-      issues: Number(r.issues || 0),
-    });
+      issues: Number(r.issues || 0)
+    })
   } catch (e) {
-    console.error("memberStats error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('memberStats error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/allMemberStats?division=KOC Cards
 ---------------------------------------------------------------- */
-app.get("/api/allMemberStats", async (req, res) => {
-  const { division } = req.query;
+app.get('/api/allMemberStats', async (req, res) => {
+  const { division } = req.query
   if (!division)
-    return res.status(400).json({ ok: false, error: "division required" });
+    return res.status(400).json({ ok: false, error: 'division required' })
   try {
     const { rows } = await db.query(
       `
       WITH target_assignments AS (
         SELECT DISTINCT a.member_id, p.id AS product_id, a.stage AS assigned_stage
-        FROM ${T("assignments")} a
-        JOIN ${T("products")} p ON p.sku = a.sku AND p.division = a.division
+        FROM ${T('assignments')} a
+        JOIN ${T('products')} p ON p.sku = a.sku AND p.division = a.division
         WHERE a.division = $1
       ),
       card_level AS (
@@ -4220,7 +4160,7 @@ app.get("/api/allMemberStats", async (req, res) => {
             OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
           ) AS has_open_issue
         FROM target_assignments ta
-        JOIN ${T("stage_entries")} se
+        JOIN ${T('stage_entries')} se
           ON se.product_id = ta.product_id
           AND se.stage_key = ta.assigned_stage
         GROUP BY ta.member_id, ta.product_id
@@ -4233,46 +4173,46 @@ app.get("/api/allMemberStats", async (req, res) => {
         COUNTIF(cl.stages_completed < cl.stages_owned AND NOT cl.has_open_issue) AS pending,
         COUNTIF(cl.has_open_issue) AS issues
       FROM card_level cl
-      JOIN ${T("users")} u ON u.id = cl.member_id
+      JOIN ${T('users')} u ON u.id = cl.member_id
       GROUP BY u.id, u.name
       ORDER BY u.name
     `,
-      [String(division)],
-    );
+      [String(division)]
+    )
 
     res.json({
       ok: true,
-      members: rows.map((r) => ({
+      members: rows.map(r => ({
         memberId: r.member_id,
         memberName: r.member_name,
         total: Number(r.total_assigned),
         completed: Number(r.completed),
         pending: Number(r.pending),
-        issues: Number(r.issues),
-      })),
-    });
+        issues: Number(r.issues)
+      }))
+    })
   } catch (e) {
-    console.error("allMemberStats error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('allMemberStats error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/pipelineStats?memberId=chitra&division=KOC Cards
 ---------------------------------------------------------------- */
-app.get("/api/pipelineStats", async (req, res) => {
-  const { memberId, division } = req.query;
+app.get('/api/pipelineStats', async (req, res) => {
+  const { memberId, division } = req.query
   if (!memberId || !division)
     return res
       .status(400)
-      .json({ ok: false, error: "memberId and division required" });
+      .json({ ok: false, error: 'memberId and division required' })
   try {
     const { rows } = await db.query(
       `
       WITH member_skus AS (
         SELECT DISTINCT p.id AS product_id, a.stage AS assigned_stage
-        FROM ${T("assignments")} a
-        JOIN ${T("products")} p ON p.sku = a.sku AND p.division = a.division
+        FROM ${T('assignments')} a
+        JOIN ${T('products')} p ON p.sku = a.sku AND p.division = a.division
         WHERE a.member_id = $1
           AND a.division = $2
       )
@@ -4288,43 +4228,43 @@ app.get("/api/pipelineStats", async (req, res) => {
           OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
         ) AS issue
       FROM member_skus ms
-      JOIN ${T("stage_entries")} se
+      JOIN ${T('stage_entries')} se
         ON se.product_id = ms.product_id
        AND se.stage_key = ms.assigned_stage
       GROUP BY se.stage_key
     `,
-      [String(memberId), String(division)],
-    );
+      [String(memberId), String(division)]
+    )
 
-    const stages = {};
-    rows.forEach((r) => {
+    const stages = {}
+    rows.forEach(r => {
       stages[r.stage_key] = {
         notStarted: Number(r.not_started),
         inProgress: Number(r.in_progress),
         completed: Number(r.completed),
-        issue: Number(r.issue),
-      };
-    });
+        issue: Number(r.issue)
+      }
+    })
 
-    res.json({ ok: true, stages });
+    res.json({ ok: true, stages })
   } catch (e) {
-    console.error("pipelineStats error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('pipelineStats error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    Helpers for /api/exportProducts
    updated_at is converted to a JS Date so the code that consumes
    these rows (the export route) keeps working unchanged.
 ---------------------------------------------------------------- */
-const toDate = (v) => {
-  if (!v) return null;
-  const d = new Date(v.value ?? v);
-  return isNaN(d) ? null : d;
-};
+const toDate = v => {
+  if (!v) return null
+  const d = new Date(v.value ?? v)
+  return isNaN(d) ? null : d
+}
 
-async function getExportRowsForDivision(client, division, scope) {
+async function getExportRowsForDivision (client, division, scope) {
   const { rows } = await client.query(
     `
     WITH stage_counts AS (
@@ -4333,15 +4273,15 @@ async function getExportRowsForDivision(client, division, scope) {
         COUNTIF(se.status = 'Completed') AS completed_stages,
         COUNTIF(se.status = 'Issue') AS issue_stages,
         MIN(CASE WHEN se.status IS DISTINCT FROM 'Completed' THEN se.stage_key END) AS next_pending_stage
-      FROM ${T("products")} p
-      LEFT JOIN ${T("stage_entries")} se
+      FROM ${T('products')} p
+      LEFT JOIN ${T('stage_entries')} se
         ON se.product_id = p.id AND se.stage_key != 'finalqc'
       WHERE p.division = $1
       GROUP BY p.id
     )
     SELECT p.sku, p.name, p.vendor, p.division, p.qty, p.verdict, p.updated_at,
            sc.completed_stages, sc.issue_stages, sc.next_pending_stage
-    FROM ${T("products")} p
+    FROM ${T('products')} p
     JOIN stage_counts sc ON sc.product_id = p.id
     WHERE p.division = $1
       AND (
@@ -4353,22 +4293,22 @@ async function getExportRowsForDivision(client, division, scope) {
     ORDER BY p.sku
   `,
     [String(division), String(scope), PIPELINE_STAGE_COUNT],
-    { p3: "INT64" },
-  );
-  return rows.map((r) => ({
+    { p3: 'INT64' }
+  )
+  return rows.map(r => ({
     ...r,
     updated_at: toDate(r.updated_at),
     completed_stages: Number(r.completed_stages),
-    issue_stages: Number(r.issue_stages),
-  }));
+    issue_stages: Number(r.issue_stages)
+  }))
 }
 
-async function getExportRowsForMember(client, division, memberId, scope) {
+async function getExportRowsForMember (client, division, memberId, scope) {
   const { rows } = await client.query(
     `
     WITH my_assignments AS (
       SELECT DISTINCT a.sku, a.stage
-      FROM ${T("assignments")} a
+      FROM ${T('assignments')} a
       WHERE a.member_id = $1 AND a.division = $2
     ),
     card_level AS (
@@ -4380,8 +4320,10 @@ async function getExportRowsForMember(client, division, memberId, scope) {
         COUNTIF(se.status = 'Issue') AS stages_issue,
         MIN(CASE WHEN se.status IS DISTINCT FROM 'Completed' THEN ma.stage END) AS next_pending_stage
       FROM my_assignments ma
-      JOIN ${T("products")} p ON p.sku = ma.sku AND p.division = $2
-      LEFT JOIN ${T("stage_entries")} se ON se.product_id = p.id AND se.stage_key = ma.stage
+      JOIN ${T('products')} p ON p.sku = ma.sku AND p.division = $2
+      LEFT JOIN ${T(
+        'stage_entries'
+      )} se ON se.product_id = p.id AND se.stage_key = ma.stage
       GROUP BY p.id, p.sku, p.name, p.vendor, p.division, p.qty, p.verdict, p.updated_at
     )
     SELECT * FROM card_level
@@ -4392,32 +4334,32 @@ async function getExportRowsForMember(client, division, memberId, scope) {
       OR ($3 = 'issues'    AND (verdict = 'Issues Found' OR stages_issue > 0))
     ORDER BY sku
   `,
-    [String(memberId), String(division), String(scope)],
-  );
-  return rows.map((r) => ({
+    [String(memberId), String(division), String(scope)]
+  )
+  return rows.map(r => ({
     ...r,
     updated_at: toDate(r.updated_at),
     stages_owned: Number(r.stages_owned),
     stages_completed: Number(r.stages_completed),
-    stages_issue: Number(r.stages_issue),
-  }));
+    stages_issue: Number(r.stages_issue)
+  }))
 }
 
-function normStatusServer(v) {
-  if (!v) return null;
+function normStatusServer (v) {
+  if (!v) return null
   const m = {
-    "not started": "Not Started",
-    "in progress": "In Progress",
-    wip: "In Progress",
-    pending: "In Progress",
-    completed: "Completed",
-    complete: "Completed",
-    done: "Completed",
-    approved: "Completed",
-    issue: "Issue",
-    issues: "Issue",
-  };
-  return m[String(v).trim().toLowerCase()] || null;
+    'not started': 'Not Started',
+    'in progress': 'In Progress',
+    wip: 'In Progress',
+    pending: 'In Progress',
+    completed: 'Completed',
+    complete: 'Completed',
+    done: 'Completed',
+    approved: 'Completed',
+    issue: 'Issue',
+    issues: 'Issue'
+  }
+  return m[String(v).trim().toLowerCase()] || null
 }
 
 /* ----------------------------------------------------------------
@@ -4429,74 +4371,74 @@ function normStatusServer(v) {
    - Each chunk (products + stage_entries + verdicts) runs as one
      transaction, so a chunk is all-or-nothing.
 ---------------------------------------------------------------- */
-const IMPORT_CHUNK_SIZE = 200;
+const IMPORT_CHUNK_SIZE = 200
 
-app.post("/api/bulkImportProducts", async (req, res) => {
-  const rows = req.body;
+app.post('/api/bulkImportProducts', async (req, res) => {
+  const rows = req.body
   if (!Array.isArray(rows))
-    return res.status(400).json({ ok: false, error: "expected array" });
+    return res.status(400).json({ ok: false, error: 'expected array' })
 
-  const validRows = rows.filter((r) => {
-    const sku = String(r.sku || "").trim();
-    return sku && !sku.toUpperCase().includes("EXAMPLE");
-  });
+  const validRows = rows.filter(r => {
+    const sku = String(r.sku || '').trim()
+    return sku && !sku.toUpperCase().includes('EXAMPLE')
+  })
 
-  const results = { total: rows.length, created: 0, updated: 0, failed: [] };
-  if (validRows.length === 0) return res.json({ ok: true, ...results });
+  const results = { total: rows.length, created: 0, updated: 0, failed: [] }
+  if (validRows.length === 0) return res.json({ ok: true, ...results })
 
   try {
     // ---- De-duplicate by (division, sku); last row wins ----
-    const keyOf = (r) =>
-      (r.division || "") + "||" + String(r.sku).trim().toLowerCase();
-    const byKey = new Map();
-    validRows.forEach((r) => byKey.set(keyOf(r), r));
-    const uniqueRows = [...byKey.values()];
+    const keyOf = r =>
+      (r.division || '') + '||' + String(r.sku).trim().toLowerCase()
+    const byKey = new Map()
+    validRows.forEach(r => byKey.set(keyOf(r), r))
+    const uniqueRows = [...byKey.values()]
 
     // ---- Look up existing products for these divisions ----
     const divisionsInBatch = [
-      ...new Set(uniqueRows.map((r) => r.division).filter(Boolean)),
-    ];
-    const existingIdByKey = new Map();
+      ...new Set(uniqueRows.map(r => r.division).filter(Boolean))
+    ]
+    const existingIdByKey = new Map()
     if (divisionsInBatch.length > 0) {
       const { rows: existing } = await db.query(
         `SELECT id, division, LOWER(sku) AS sku_lower
-         FROM ${T("products")}
+         FROM ${T('products')}
          WHERE division IN UNNEST($1)`,
-        [divisionsInBatch],
-      );
-      existing.forEach((r) =>
-        existingIdByKey.set(r.division + "||" + r.sku_lower, String(r.id)),
-      );
+        [divisionsInBatch]
+      )
+      existing.forEach(r =>
+        existingIdByKey.set(r.division + '||' + r.sku_lower, String(r.id))
+      )
     }
 
     // ---- Cap check ----
-    const currentCount = await getProductCount(db);
+    const currentCount = await getProductCount(db)
     const newRowsCount = uniqueRows.filter(
-      (r) => !existingIdByKey.has(keyOf(r)),
-    ).length;
+      r => !existingIdByKey.has(keyOf(r))
+    ).length
     if (currentCount + newRowsCount > MAX_PRODUCTS) {
       return res.status(400).json({
         ok: false,
-        error: `Import would exceed max product cap (${MAX_PRODUCTS}). Currently ${currentCount}, trying to add ${newRowsCount} new SKUs.`,
-      });
+        error: `Import would exceed max product cap (${MAX_PRODUCTS}). Currently ${currentCount}, trying to add ${newRowsCount} new SKUs.`
+      })
     }
 
     // ---- 1. Vendors (deduped, ONE MERGE) ----
-    const vendorSeen = new Set();
-    const vendorRows = [];
-    uniqueRows.forEach((r) => {
+    const vendorSeen = new Set()
+    const vendorRows = []
+    uniqueRows.forEach(r => {
       if (r.vendor && String(r.vendor).trim()) {
-        const division = r.division || "";
-        const vendor_name = String(r.vendor).trim();
-        const k = division + "||" + vendor_name;
-        if (vendorSeen.has(k)) return;
-        vendorSeen.add(k);
-        vendorRows.push({ division, vendor_name });
+        const division = r.division || ''
+        const vendor_name = String(r.vendor).trim()
+        const k = division + '||' + vendor_name
+        if (vendorSeen.has(k)) return
+        vendorSeen.add(k)
+        vendorRows.push({ division, vendor_name })
       }
-    });
+    })
     if (vendorRows.length > 0) {
       await db.query(
-        `MERGE ${T("vendors")} t
+        `MERGE ${T('vendors')} t
          USING (
            SELECT
              JSON_VALUE(j, '$.division') AS division,
@@ -4506,53 +4448,53 @@ app.post("/api/bulkImportProducts", async (req, res) => {
          ON t.division = s.division AND t.vendor_name = s.vendor_name
          WHEN NOT MATCHED THEN INSERT (division, vendor_name)
          VALUES (s.division, s.vendor_name)`,
-        [JSON.stringify(vendorRows)],
-      );
+        [JSON.stringify(vendorRows)]
+      )
     }
 
     // ---- 2. Products + stages + verdicts, chunk by chunk ----
     for (let i = 0; i < uniqueRows.length; i += IMPORT_CHUNK_SIZE) {
-      const chunk = uniqueRows.slice(i, i + IMPORT_CHUNK_SIZE);
+      const chunk = uniqueRows.slice(i, i + IMPORT_CHUNK_SIZE)
 
-      const productRows = [];
-      const stageRows = [];
-      const verdictRows = [];
-      let chunkCreated = 0;
-      let chunkUpdated = 0;
+      const productRows = []
+      const stageRows = []
+      const verdictRows = []
+      let chunkCreated = 0
+      let chunkUpdated = 0
 
       for (const r of chunk) {
-        const key = keyOf(r);
-        let productId = existingIdByKey.get(key);
+        const key = keyOf(r)
+        let productId = existingIdByKey.get(key)
         if (productId) {
-          chunkUpdated++;
+          chunkUpdated++
         } else {
-          productId = require("crypto").randomUUID();
-          chunkCreated++;
+          productId = require('crypto').randomUUID()
+          chunkCreated++
         }
 
         productRows.push({
           id: productId,
           division: r.division || null,
           sku: String(r.sku).trim(),
-          name: r.name || "",
+          name: r.name || '',
           vendor: r.vendor ? String(r.vendor).trim() : null,
           inward: r.inward ? String(r.inward) : null,
           qty: Number(r.qty) || 0,
-          note: r.note || "",
-          set_no: r.set_no || null,
-        });
+          note: r.note || '',
+          set_no: r.set_no || null
+        })
 
         // One row per stage (except finalqc), even when blank, so every SKU
         // always has stage_entries rows and shows up in the stats queries.
         for (const s of STAGE_KEYS) {
-          if (s === "finalqc") continue;
-          const isDim = s === "dimensions";
+          if (s === 'finalqc') continue
+          const isDim = s === 'dimensions'
           stageRows.push({
             product_id: productId,
             stage_key: s,
-            status: normStatusServer(r[s + "_status"]),
-            person: r[s + "_person"] || "",
-            comments: r[s + "_comments"] || "",
+            status: normStatusServer(r[s + '_status']),
+            person: r[s + '_person'] || '',
+            comments: r[s + '_comments'] || '',
             width_cm:
               isDim && r.dimensions_width
                 ? Number(r.dimensions_width) || null
@@ -4564,29 +4506,29 @@ app.post("/api/bulkImportProducts", async (req, res) => {
             weight_gm:
               isDim && r.dimensions_weight
                 ? Number(r.dimensions_weight) || null
-                : null,
-          });
+                : null
+          })
         }
 
         if (r.qc_verdict) {
           const v = /appro/i.test(r.qc_verdict)
-            ? "Approved"
+            ? 'Approved'
             : /issue/i.test(r.qc_verdict)
-              ? "Issues Found"
-              : null;
+            ? 'Issues Found'
+            : null
           if (v)
             verdictRows.push({
               id: productId,
               verdict: v,
-              issues: r.qc_issues || "",
-            });
+              issues: r.qc_issues || ''
+            })
         }
       }
 
       const script = `
 BEGIN TRANSACTION;
 
-MERGE ${T("products")} t
+MERGE ${T('products')} t
 USING (
   SELECT
     JSON_VALUE(j, '$.id') AS id,
@@ -4615,7 +4557,7 @@ VALUES
   (s.id, s.division, s.sku, s.name, s.vendor, s.inward, s.qty, s.note, s.set_no,
    CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP());
 
-MERGE ${T("stage_entries")} t
+MERGE ${T('stage_entries')} t
 USING (
   SELECT
     JSON_VALUE(j, '$.product_id') AS product_id,
@@ -4643,7 +4585,7 @@ VALUES
   (s.product_id, s.stage_key, COALESCE(s.status, 'Not Started'), s.person, s.comments,
    CURRENT_TIMESTAMP(), s.width_cm, s.height_cm, s.weight_gm);
 
-UPDATE ${T("products")} t
+UPDATE ${T('products')} t
 SET verdict = s.verdict, issues = s.issues, updated_at = CURRENT_TIMESTAMP()
 FROM (
   SELECT
@@ -4655,63 +4597,63 @@ FROM (
 WHERE t.id = s.id;
 
 COMMIT TRANSACTION;
-`;
+`
 
       await db.query(script, [
         JSON.stringify(productRows),
         JSON.stringify(stageRows),
-        JSON.stringify(verdictRows),
-      ]);
+        JSON.stringify(verdictRows)
+      ])
 
       // Only count a chunk once it has been committed
-      results.created += chunkCreated;
-      results.updated += chunkUpdated;
+      results.created += chunkCreated
+      results.updated += chunkUpdated
     }
 
-    res.json({ ok: true, ...results });
+    res.json({ ok: true, ...results })
   } catch (e) {
-    console.error("bulkImportProducts error", e);
-    res.status(500).json({ ok: false, error: e.message, ...results });
+    console.error('bulkImportProducts error', e)
+    res.status(500).json({ ok: false, error: e.message, ...results })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/exportProducts?division=KOC Cards&scope=pending&memberId=chitra
    scope: "pending" | "completed" | "issues" | "all"
    memberId optional — omit for master/admin (whole division)
 ---------------------------------------------------------------- */
-app.get("/api/exportProducts", async (req, res) => {
-  const { division, scope, memberId } = req.query;
+app.get('/api/exportProducts', async (req, res) => {
+  const { division, scope, memberId } = req.query
   if (!division)
-    return res.status(400).json({ ok: false, error: "division required" });
-  if (!["pending", "completed", "issues", "all"].includes(scope)) {
-    return res.status(400).json({ ok: false, error: "invalid scope" });
+    return res.status(400).json({ ok: false, error: 'division required' })
+  if (!['pending', 'completed', 'issues', 'all'].includes(scope)) {
+    return res.status(400).json({ ok: false, error: 'invalid scope' })
   }
   try {
     const rows = memberId
       ? await getExportRowsForMember(db, division, memberId, scope)
-      : await getExportRowsForDivision(db, division, scope);
+      : await getExportRowsForDivision(db, division, scope)
 
-    res.json({ ok: true, scope, count: rows.length, rows });
+    res.json({ ok: true, scope, count: rows.length, rows })
   } catch (e) {
-    console.error("exportProducts error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('exportProducts error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/stageIssueStats?division=KOC Cards
 ---------------------------------------------------------------- */
-app.get("/api/stageIssueStats", async (req, res) => {
-  const { division } = req.query;
+app.get('/api/stageIssueStats', async (req, res) => {
+  const { division } = req.query
   if (!division)
-    return res.status(400).json({ ok: false, error: "division required" });
+    return res.status(400).json({ ok: false, error: 'division required' })
   try {
     const { rows } = await db.query(
       `
       SELECT se.stage_key, COUNT(*) AS issue_count
-      FROM ${T("stage_entries")} se
-      JOIN ${T("products")} p ON p.id = se.product_id
+      FROM ${T('stage_entries')} se
+      JOIN ${T('products')} p ON p.id = se.product_id
       WHERE p.division = $1
         AND (
           se.status = 'Issue'
@@ -4719,19 +4661,19 @@ app.get("/api/stageIssueStats", async (req, res) => {
         )
       GROUP BY se.stage_key
     `,
-      [String(division)],
-    );
+      [String(division)]
+    )
 
-    const stages = {};
-    rows.forEach((r) => {
-      stages[r.stage_key] = Number(r.issue_count);
-    });
-    res.json({ ok: true, stages });
+    const stages = {}
+    rows.forEach(r => {
+      stages[r.stage_key] = Number(r.issue_count)
+    })
+    res.json({ ok: true, stages })
   } catch (e) {
-    console.error("stageIssueStats error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('stageIssueStats error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/pipelineBreakdown?division=..&memberId=..&vendor=..&setNo=..
@@ -4739,20 +4681,20 @@ app.get("/api/stageIssueStats", async (req, res) => {
      COUNT(*) FILTER (WHERE x) -> COUNTIF(x)
      $3::text IS NULL          -> @p3 IS NULL (null params are sent as STRING)
 ---------------------------------------------------------------- */
-app.get("/api/pipelineBreakdown", async (req, res) => {
-  const { division, memberId, vendor, setNo } = req.query;
+app.get('/api/pipelineBreakdown', async (req, res) => {
+  const { division, memberId, vendor, setNo } = req.query
   if (!division)
-    return res.status(400).json({ ok: false, error: "division required" });
+    return res.status(400).json({ ok: false, error: 'division required' })
 
   try {
-    let rows;
+    let rows
     if (memberId) {
       const { rows: r } = await db.query(
         `
         WITH member_scope AS (
           SELECT DISTINCT p.id AS product_id, a.stage AS stage_key, p.vendor AS vendor
-          FROM ${T("assignments")} a
-          JOIN ${T("products")} p
+          FROM ${T('assignments')} a
+          JOIN ${T('products')} p
             ON p.sku = a.sku AND p.division = a.division
           WHERE a.member_id = $1
             AND a.division = $2
@@ -4770,7 +4712,7 @@ app.get("/api/pipelineBreakdown", async (req, res) => {
             OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
           ) AS issue
         FROM member_scope ms
-        LEFT JOIN ${T("stage_entries")} se
+        LEFT JOIN ${T('stage_entries')} se
           ON se.product_id = ms.product_id AND se.stage_key = ms.stage_key
         GROUP BY ms.stage_key, ms.vendor
         ORDER BY ms.vendor, ms.stage_key
@@ -4779,10 +4721,10 @@ app.get("/api/pipelineBreakdown", async (req, res) => {
           String(memberId),
           String(division),
           vendor ? String(vendor) : null,
-          setNo ? String(setNo) : null,
-        ],
-      );
-      rows = r;
+          setNo ? String(setNo) : null
+        ]
+      )
+      rows = r
     } else {
       const { rows: r } = await db.query(
         `
@@ -4796,8 +4738,8 @@ app.get("/api/pipelineBreakdown", async (req, res) => {
             se.status = 'Issue'
             OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
           ) AS issue
-        FROM ${T("stage_entries")} se
-        JOIN ${T("products")} p ON p.id = se.product_id
+        FROM ${T('stage_entries')} se
+        JOIN ${T('products')} p ON p.id = se.product_id
         WHERE p.division = $1
           AND se.stage_key != 'finalqc'
           AND ($2 IS NULL OR p.vendor = $2)
@@ -4808,177 +4750,176 @@ app.get("/api/pipelineBreakdown", async (req, res) => {
         [
           String(division),
           vendor ? String(vendor) : null,
-          setNo ? String(setNo) : null,
-        ],
-      );
-      rows = r;
+          setNo ? String(setNo) : null
+        ]
+      )
+      rows = r
     }
 
     // `stages`   - aggregated across all vendors (backward compatible)
     // `byVendor` - { vendorName: { stageKey: {...} } }
-    const stages = {};
-    const byVendor = {};
+    const stages = {}
+    const byVendor = {}
 
-    rows.forEach((r) => {
-      const vendorKey = r.vendor || "—";
+    rows.forEach(r => {
+      const vendorKey = r.vendor || '—'
       const cell = {
         notStarted: Number(r.not_started),
         inProgress: Number(r.in_progress),
         completed: Number(r.completed),
-        issue: Number(r.issue),
-      };
+        issue: Number(r.issue)
+      }
 
       if (!stages[r.stage_key]) {
         stages[r.stage_key] = {
           notStarted: 0,
           inProgress: 0,
           completed: 0,
-          issue: 0,
-        };
+          issue: 0
+        }
       }
-      stages[r.stage_key].notStarted += cell.notStarted;
-      stages[r.stage_key].inProgress += cell.inProgress;
-      stages[r.stage_key].completed += cell.completed;
-      stages[r.stage_key].issue += cell.issue;
+      stages[r.stage_key].notStarted += cell.notStarted
+      stages[r.stage_key].inProgress += cell.inProgress
+      stages[r.stage_key].completed += cell.completed
+      stages[r.stage_key].issue += cell.issue
 
-      if (!byVendor[vendorKey]) byVendor[vendorKey] = {};
-      byVendor[vendorKey][r.stage_key] = cell;
-    });
+      if (!byVendor[vendorKey]) byVendor[vendorKey] = {}
+      byVendor[vendorKey][r.stage_key] = cell
+    })
 
-    res.json({ ok: true, stages, byVendor });
+    res.json({ ok: true, stages, byVendor })
   } catch (e) {
-    console.error("pipelineBreakdown error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('pipelineBreakdown error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/stageSpeedStats?division=KOC Cards
    Average time-to-complete per stage, computed from audit_log.
 ---------------------------------------------------------------- */
-app.get("/api/stageSpeedStats", async (req, res) => {
-  const { division } = req.query;
+app.get('/api/stageSpeedStats', async (req, res) => {
+  const { division } = req.query
   if (!division)
-    return res.status(400).json({ ok: false, error: "division required" });
+    return res.status(400).json({ ok: false, error: 'division required' })
   try {
     const { rows } = await db.query(
-      `SELECT entity, detail, logged_at FROM ${T("audit_log")}
+      `SELECT entity, detail, logged_at FROM ${T('audit_log')}
        WHERE action = 'Stage update' AND division = $1
        ORDER BY entity, logged_at ASC`,
-      [String(division)],
-    );
+      [String(division)]
+    )
 
     // entity+stage -> { firstInProgress, firstCompleted }
-    const track = {};
-    rows.forEach((r) => {
-      const m = String(r.detail || "").match(/^(.+?)\s*→\s*([^·]+?)(?:\s*·|$)/);
-      if (!m) return;
-      const stageName = m[1].trim();
-      const status = m[2].trim();
-      const key = r.entity + "||" + stageName;
-      const at = toDate(r.logged_at);
+    const track = {}
+    rows.forEach(r => {
+      const m = String(r.detail || '').match(/^(.+?)\s*→\s*([^·]+?)(?:\s*·|$)/)
+      if (!m) return
+      const stageName = m[1].trim()
+      const status = m[2].trim()
+      const key = r.entity + '||' + stageName
+      const at = toDate(r.logged_at)
       if (!track[key])
-        track[key] = { stageName, firstInProgress: null, firstCompleted: null };
-      const t = track[key];
-      if (status === "In Progress" && !t.firstInProgress)
-        t.firstInProgress = at;
-      if (status === "Completed" && !t.firstCompleted && t.firstInProgress)
-        t.firstCompleted = at;
-    });
+        track[key] = { stageName, firstInProgress: null, firstCompleted: null }
+      const t = track[key]
+      if (status === 'In Progress' && !t.firstInProgress) t.firstInProgress = at
+      if (status === 'Completed' && !t.firstCompleted && t.firstInProgress)
+        t.firstCompleted = at
+    })
 
-    const byStage = {};
-    Object.values(track).forEach((t) => {
-      if (!t.firstInProgress || !t.firstCompleted) return;
-      const hours = (t.firstCompleted - t.firstInProgress) / 3600000;
-      if (hours < 0 || hours > 24 * 60) return; // discard bad/outlier data
-      (byStage[t.stageName] ||= []).push(hours);
-    });
+    const byStage = {}
+    Object.values(track).forEach(t => {
+      if (!t.firstInProgress || !t.firstCompleted) return
+      const hours = (t.firstCompleted - t.firstInProgress) / 3600000
+      if (hours < 0 || hours > 24 * 60) return // discard bad/outlier data
+      ;(byStage[t.stageName] ||= []).push(hours)
+    })
 
     const stats = Object.entries(byStage)
       .map(([stageName, durations]) => ({
         stageName,
         avgHours: durations.reduce((a, b) => a + b, 0) / durations.length,
-        sampleCount: durations.length,
+        sampleCount: durations.length
       }))
-      .sort((a, b) => a.avgHours - b.avgHours);
+      .sort((a, b) => a.avgHours - b.avgHours)
 
-    res.json({ ok: true, stats });
+    res.json({ ok: true, stats })
   } catch (e) {
-    console.error("stageSpeedStats error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('stageSpeedStats error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/memberSpeedStats?division=KOC Cards
    Per-member turnaround speed + issue rate, computed from audit_log.
 ---------------------------------------------------------------- */
-app.get("/api/memberSpeedStats", async (req, res) => {
-  const { division } = req.query;
+app.get('/api/memberSpeedStats', async (req, res) => {
+  const { division } = req.query
   if (!division)
-    return res.status(400).json({ ok: false, error: "division required" });
+    return res.status(400).json({ ok: false, error: 'division required' })
   try {
     const { rows } = await db.query(
-      `SELECT entity, detail, logged_at, actor_name FROM ${T("audit_log")}
+      `SELECT entity, detail, logged_at, actor_name FROM ${T('audit_log')}
        WHERE action = 'Stage update' AND division = $1
        ORDER BY entity, logged_at ASC`,
-      [String(division)],
-    );
+      [String(division)]
+    )
 
-    const lastInProgress = {}; // "sku||stageName" -> Date
-    const byMember = {}; // person name -> accumulator
+    const lastInProgress = {} // "sku||stageName" -> Date
+    const byMember = {} // person name -> accumulator
 
-    const touch = (name) =>
+    const touch = name =>
       (byMember[name] ||= {
         durations: [],
         completions: 0,
         issues: 0,
-        byStage: {},
-      });
+        byStage: {}
+      })
 
-    rows.forEach((r) => {
-      const m = String(r.detail || "").match(
-        /^(.+?)\s*→\s*([^·]+?)(?:\s*·\s*(.+))?$/,
-      );
-      if (!m) return;
-      const stageName = m[1].trim();
-      const status = m[2].trim();
-      const person = (m[3] || "").trim() || (r.actor_name || "").trim();
-      const key = r.entity + "||" + stageName;
-      const at = toDate(r.logged_at);
+    rows.forEach(r => {
+      const m = String(r.detail || '').match(
+        /^(.+?)\s*→\s*([^·]+?)(?:\s*·\s*(.+))?$/
+      )
+      if (!m) return
+      const stageName = m[1].trim()
+      const status = m[2].trim()
+      const person = (m[3] || '').trim() || (r.actor_name || '').trim()
+      const key = r.entity + '||' + stageName
+      const at = toDate(r.logged_at)
 
-      if (status === "In Progress") {
-        lastInProgress[key] = at;
-      } else if (status === "Completed") {
-        const startedAt = lastInProgress[key];
+      if (status === 'In Progress') {
+        lastInProgress[key] = at
+      } else if (status === 'Completed') {
+        const startedAt = lastInProgress[key]
         if (startedAt && at && person) {
-          const hours = (at - startedAt) / 3600000;
+          const hours = (at - startedAt) / 3600000
           // discard bad/stalled outliers (>60 days)
           if (hours > 0 && hours < 24 * 60) {
-            const acc = touch(person);
-            acc.durations.push(hours);
-            acc.completions++;
-            (acc.byStage[stageName] ||= []).push(hours);
+            const acc = touch(person)
+            acc.durations.push(hours)
+            acc.completions++
+            ;(acc.byStage[stageName] ||= []).push(hours)
           }
         }
-        delete lastInProgress[key];
-      } else if (status === "Issue" && person) {
-        touch(person).issues++;
+        delete lastInProgress[key]
+      } else if (status === 'Issue' && person) {
+        touch(person).issues++
       }
-    });
+    })
 
     const members = Object.entries(byMember)
       .map(([name, m]) => {
         const avgHours = m.durations.length
           ? m.durations.reduce((a, b) => a + b, 0) / m.durations.length
-          : null;
+          : null
         const stageBreakdown = Object.entries(m.byStage)
           .map(([stageName, arr]) => ({
             stageName,
             avgHours: arr.reduce((a, b) => a + b, 0) / arr.length,
-            count: arr.length,
+            count: arr.length
           }))
-          .sort((a, b) => a.avgHours - b.avgHours);
+          .sort((a, b) => a.avgHours - b.avgHours)
         return {
           name,
           completions: m.completions,
@@ -4990,18 +4931,18 @@ app.get("/api/memberSpeedStats", async (req, res) => {
               : 0,
           fastestStage: stageBreakdown[0] || null,
           slowestStage: stageBreakdown[stageBreakdown.length - 1] || null,
-          stageBreakdown,
-        };
+          stageBreakdown
+        }
       })
-      .filter((x) => x.completions > 0)
-      .sort((a, b) => a.avgHours - b.avgHours); // fastest first
+      .filter(x => x.completions > 0)
+      .sort((a, b) => a.avgHours - b.avgHours) // fastest first
 
-    res.json({ ok: true, members });
+    res.json({ ok: true, members })
   } catch (e) {
-    console.error("memberSpeedStats error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('memberSpeedStats error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/teamStageStats?division=...&vendor=&set_no=&dateFrom=&dateTo=
@@ -5009,139 +4950,139 @@ app.get("/api/memberSpeedStats", async (req, res) => {
    Photography & Videography team, with optional filters.
 ---------------------------------------------------------------- */
 const TEAM_BACKEND_STAGE_KEYS = [
-  "content",
-  "dimensions",
-  "images",
-  "backend",
-  "website",
-];
+  'content',
+  'dimensions',
+  'images',
+  'backend',
+  'website'
+]
 const TEAM_PHOTO_STAGE_KEYS = [
-  "photography",
-  "photoedit",
-  "videography",
-  "videoedit",
-];
+  'photography',
+  'photoedit',
+  'videography',
+  'videoedit'
+]
 
-app.get("/api/teamStageStats", async (req, res) => {
-  const { division, vendor, set_no, dateFrom, dateTo } = req.query;
+app.get('/api/teamStageStats', async (req, res) => {
+  const { division, vendor, set_no, dateFrom, dateTo } = req.query
   if (!division)
-    return res.status(400).json({ ok: false, error: "division required" });
+    return res.status(400).json({ ok: false, error: 'division required' })
 
   try {
-    const allStageKeys = [...TEAM_BACKEND_STAGE_KEYS, ...TEAM_PHOTO_STAGE_KEYS];
+    const allStageKeys = [...TEAM_BACKEND_STAGE_KEYS, ...TEAM_PHOTO_STAGE_KEYS]
 
     const { rows: userRows } = await db.query(
-      `SELECT id, manager_id FROM ${T("users")}`,
-    );
-    const managerIdOf = {};
-    userRows.forEach((u) => {
-      managerIdOf[u.id] = u.manager_id;
-    });
+      `SELECT id, manager_id FROM ${T('users')}`
+    )
+    const managerIdOf = {}
+    userRows.forEach(u => {
+      managerIdOf[u.id] = u.manager_id
+    })
 
     // Postgres: a.stage = ANY($2)   ->   BigQuery: a.stage IN UNNEST($2)
-    const conditions = ["a.division = $1", "a.stage IN UNNEST($2)"];
-    const params = [String(division), allStageKeys];
+    const conditions = ['a.division = $1', 'a.stage IN UNNEST($2)']
+    const params = [String(division), allStageKeys]
 
     if (vendor) {
-      params.push(String(vendor));
-      conditions.push(`p.vendor = $${params.length}`);
+      params.push(String(vendor))
+      conditions.push(`p.vendor = $${params.length}`)
     }
     if (set_no) {
-      params.push(String(set_no));
-      conditions.push(`p.set_no = $${params.length}`);
+      params.push(String(set_no))
+      conditions.push(`p.set_no = $${params.length}`)
     }
     // assigned_at is a TIMESTAMP, so string params are converted with TIMESTAMP()
     if (dateFrom) {
-      params.push(String(dateFrom));
-      conditions.push(`a.assigned_at >= TIMESTAMP($${params.length})`);
+      params.push(String(dateFrom))
+      conditions.push(`a.assigned_at >= TIMESTAMP($${params.length})`)
     }
     if (dateTo) {
-      params.push(dateTo + " 23:59:59");
-      conditions.push(`a.assigned_at <= TIMESTAMP($${params.length})`);
+      params.push(dateTo + ' 23:59:59')
+      conditions.push(`a.assigned_at <= TIMESTAMP($${params.length})`)
     }
     // NOTE: status is intentionally NOT added to `conditions` — it must not
     // shrink the row set, or Total Assigned would change with it.
 
     const { rows } = await db.query(
       `SELECT a.member_id, u.name AS member_name, a.stage, a.sku, se.status AS stage_status
-       FROM ${T("assignments")} a
-       JOIN ${T("users")} u ON u.id = a.member_id
-       JOIN ${T("products")} p ON p.id = a.product_id
-       LEFT JOIN ${T("stage_entries")} se
+       FROM ${T('assignments')} a
+       JOIN ${T('users')} u ON u.id = a.member_id
+       JOIN ${T('products')} p ON p.id = a.product_id
+       LEFT JOIN ${T('stage_entries')} se
          ON se.product_id = a.product_id AND se.stage_key = a.stage
-       WHERE ${conditions.join(" AND ")}`,
-      params,
-    );
+       WHERE ${conditions.join(' AND ')}`,
+      params
+    )
 
-    const buildGroup = (stageKeys) => {
-      const byMember = {};
-      rows.forEach((r) => {
-        if (!stageKeys.includes(r.stage)) return;
+    const buildGroup = stageKeys => {
+      const byMember = {}
+      rows.forEach(r => {
+        if (!stageKeys.includes(r.stage)) return
         const acc = (byMember[r.member_id] ||= {
           memberName: r.member_name,
           skus: new Set(),
-          skuStage: {},
-        });
+          skuStage: {}
+        })
 
-        acc.skus.add(r.sku);
-        (acc.skuStage[r.sku] ||= {})[r.stage] = r.stage_status;
-      });
+        acc.skus.add(r.sku)
+        ;(acc.skuStage[r.sku] ||= {})[r.stage] = r.stage_status
+      })
 
       // Subtract reports' skus from their manager's set — same as totalAssigned.
-      Object.keys(byMember).forEach((managerId) => {
+      Object.keys(byMember).forEach(managerId => {
         const reportIds = Object.keys(byMember).filter(
-          (id) => managerIdOf[id] === managerId,
-        );
-        if (reportIds.length === 0) return;
-        const managerSkus = byMember[managerId].skus;
-        reportIds.forEach((repId) => {
-          byMember[repId].skus.forEach((sku) => managerSkus.delete(sku));
-        });
-      });
+          id => managerIdOf[id] === managerId
+        )
+        if (reportIds.length === 0) return
+        const managerSkus = byMember[managerId].skus
+        reportIds.forEach(repId => {
+          byMember[repId].skus.forEach(sku => managerSkus.delete(sku))
+        })
+      })
 
       return Object.entries(byMember)
         .map(([memberId, m]) => {
           const perStage = stageKeys.reduce(
             (o, k) => ({ ...o, [k]: { completed: 0, pending: 0, issue: 0 } }),
-            {},
-          );
-          m.skus.forEach((sku) => {
-            const stagesForSku = m.skuStage[sku] || {};
-            stageKeys.forEach((stageKey) => {
-              if (!(stageKey in stagesForSku)) return;
-              const status = stagesForSku[stageKey];
-              if (status === "Completed") perStage[stageKey].completed++;
-              else if (status === "Issue") perStage[stageKey].issue++;
-              else perStage[stageKey].pending++;
-            });
-          });
+            {}
+          )
+          m.skus.forEach(sku => {
+            const stagesForSku = m.skuStage[sku] || {}
+            stageKeys.forEach(stageKey => {
+              if (!(stageKey in stagesForSku)) return
+              const status = stagesForSku[stageKey]
+              if (status === 'Completed') perStage[stageKey].completed++
+              else if (status === 'Issue') perStage[stageKey].issue++
+              else perStage[stageKey].pending++
+            })
+          })
 
           // Never assigned that stage -> null so the frontend shows "—"
-          stageKeys.forEach((k) => {
-            const s = perStage[k];
-            if (s.completed + s.pending + s.issue === 0) perStage[k] = null;
-          });
+          stageKeys.forEach(k => {
+            const s = perStage[k]
+            if (s.completed + s.pending + s.issue === 0) perStage[k] = null
+          })
 
           return {
             memberId,
             memberName: m.memberName,
             totalAssigned: m.skus.size,
-            perStage,
-          };
+            perStage
+          }
         })
-        .sort((a, b) => b.totalAssigned - a.totalAssigned);
-    };
+        .sort((a, b) => b.totalAssigned - a.totalAssigned)
+    }
 
     res.json({
       ok: true,
       backendTeam: buildGroup(TEAM_BACKEND_STAGE_KEYS),
-      photoTeam: buildGroup(TEAM_PHOTO_STAGE_KEYS),
-    });
+      photoTeam: buildGroup(TEAM_PHOTO_STAGE_KEYS)
+    })
   } catch (e) {
-    console.error("teamStageStats error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('teamStageStats error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/memberStageDetail?division=&completedFrom=&completedTo=&vendor=
@@ -5155,8 +5096,8 @@ app.get("/api/teamStageStats", async (req, res) => {
      MAX(x) FILTER (WHERE c)     -> MAX(IF(c, x, NULL))
      COUNT(DISTINCT x) FILTER    -> COUNT(DISTINCT IF(c, x, NULL))
 ---------------------------------------------------------------- */
-app.get("/api/memberStageDetail", async (req, res) => {
-  const { division, completedFrom, completedTo, vendor } = req.query;
+app.get('/api/memberStageDetail', async (req, res) => {
+  const { division, completedFrom, completedTo, vendor } = req.query
 
   try {
     const { rows } = await db.query(
@@ -5164,8 +5105,8 @@ app.get("/api/memberStageDetail", async (req, res) => {
       WITH target_assignments AS (
           SELECT DISTINCT a.member_id, a.manager_id, a.division, a.stage AS assigned_stage,
                  p.id AS product_id, a.sku, a.assigned_at
-          FROM ${T("assignments")} a
-          JOIN ${T("products")} p ON p.sku = a.sku AND p.division = a.division
+          FROM ${T('assignments')} a
+          JOIN ${T('products')} p ON p.sku = a.sku AND p.division = a.division
           WHERE a.division IN ('KOC Cards', 'Bombay Cards')
             AND ($1 IS NULL OR a.division = $1)
             AND ($4 IS NULL OR p.vendor = $4)
@@ -5218,7 +5159,7 @@ app.get("/api/memberStageDetail", async (req, res) => {
                   e.sku, NULL
               )) AS issue_skus
           FROM effective e
-          LEFT JOIN ${T("stage_entries")} se
+          LEFT JOIN ${T('stage_entries')} se
               ON se.product_id = e.product_id
              AND se.stage_key = e.assigned_stage
           GROUP BY e.member_id, e.division, e.assigned_stage
@@ -5242,7 +5183,7 @@ app.get("/api/memberStageDetail", async (req, res) => {
           ps.not_started_skus,
           ps.issue_skus
       FROM totals t
-      JOIN ${T("users")} u ON u.id = t.member_id
+      JOIN ${T('users')} u ON u.id = t.member_id
       JOIN per_stage ps ON ps.member_id = t.member_id AND ps.division = t.division
       ORDER BY t.division, u.name, ps.stage
       `,
@@ -5250,12 +5191,12 @@ app.get("/api/memberStageDetail", async (req, res) => {
         division || null,
         completedFrom || null,
         completedTo || null,
-        vendor || null,
-      ],
-    );
+        vendor || null
+      ]
+    )
 
     // Flat rows with timestamps/counts converted to plain JSON values
-    const flatRows = rows.map((r) => ({
+    const flatRows = rows.map(r => ({
       ...r,
       total_assigned_skus: Number(r.total_assigned_skus),
       assigned_skus: Number(r.assigned_skus),
@@ -5264,21 +5205,21 @@ app.get("/api/memberStageDetail", async (req, res) => {
       not_started_skus: Number(r.not_started_skus),
       issue_skus: Number(r.issue_skus),
       last_assigned_at: iso(r.last_assigned_at) || null,
-      last_completed_at: iso(r.last_completed_at) || null,
-    }));
+      last_completed_at: iso(r.last_completed_at) || null
+    }))
 
     // Reshape into a nested per-member structure
-    const byKey = {};
-    flatRows.forEach((r) => {
-      const key = r.member_id + "||" + r.division;
+    const byKey = {}
+    flatRows.forEach(r => {
+      const key = r.member_id + '||' + r.division
       if (!byKey[key]) {
         byKey[key] = {
           memberId: r.member_id,
           memberName: r.member_name,
           division: r.division,
           totalAssignedSkus: r.total_assigned_skus,
-          stages: [],
-        };
+          stages: []
+        }
       }
       byKey[key].stages.push({
         stage: r.stage,
@@ -5288,20 +5229,20 @@ app.get("/api/memberStageDetail", async (req, res) => {
         completedSkus: r.completed_skus,
         inProgressSkus: r.in_progress_skus,
         notStartedSkus: r.not_started_skus,
-        issueSkus: r.issue_skus,
-      });
-    });
+        issueSkus: r.issue_skus
+      })
+    })
 
     res.json({
       ok: true,
       rows: flatRows, // raw rows, in case the frontend wants the flat shape
-      members: Object.values(byKey),
-    });
+      members: Object.values(byKey)
+    })
   } catch (e) {
-    console.error("memberStageDetail error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('memberStageDetail error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/memberDailyActivity?person=..&division=..&from=..&to=..
@@ -5310,10 +5251,10 @@ app.get("/api/memberStageDetail", async (req, res) => {
      date_trunc('day', ts) -> DATE(ts)
      $n::timestamptz       -> SAFE_CAST($n AS TIMESTAMP)
 ---------------------------------------------------------------- */
-app.get("/api/memberDailyActivity", async (req, res) => {
-  const { person, division, from, to } = req.query;
+app.get('/api/memberDailyActivity', async (req, res) => {
+  const { person, division, from, to } = req.query
   if (!person)
-    return res.status(400).json({ ok: false, error: "person required" });
+    return res.status(400).json({ ok: false, error: 'person required' })
   try {
     const { rows } = await db.query(
       `SELECT
@@ -5321,8 +5262,8 @@ app.get("/api/memberDailyActivity", async (req, res) => {
          se.stage_key,
          COUNT(*) AS completed_count,
          ARRAY_AGG(p.sku ORDER BY se.updated_at) AS skus
-       FROM ${T("stage_entries")} se
-       JOIN ${T("products")} p ON p.id = se.product_id
+       FROM ${T('stage_entries')} se
+       JOIN ${T('products')} p ON p.id = se.product_id
        WHERE LOWER(se.person) LIKE LOWER($1)
          AND se.status = 'Completed'
          AND ($2 IS NULL OR p.division = $2)
@@ -5334,37 +5275,37 @@ app.get("/api/memberDailyActivity", async (req, res) => {
         String(person),
         division ? String(division) : null,
         from ? String(from) : null,
-        to ? String(to) : null,
-      ],
-    );
+        to ? String(to) : null
+      ]
+    )
     res.json({
       ok: true,
-      rows: rows.map((r) => ({
+      rows: rows.map(r => ({
         date: dateOnly(r.work_date),
         stage: r.stage_key,
         completed: Number(r.completed_count),
-        skus: r.skus,
-      })),
-    });
+        skus: r.skus
+      }))
+    })
   } catch (e) {
-    console.error("memberDailyActivity error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('memberDailyActivity error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/teamStageActivity?division=KOC Cards&from=..&to=..
 ---------------------------------------------------------------- */
-app.get("/api/teamStageActivity", async (req, res) => {
-  const { division, from, to } = req.query;
+app.get('/api/teamStageActivity', async (req, res) => {
+  const { division, from, to } = req.query
   if (!division)
-    return res.status(400).json({ ok: false, error: "division required" });
+    return res.status(400).json({ ok: false, error: 'division required' })
   try {
     const params = [
       String(division),
       from ? String(from) : null,
-      to ? String(to) : null,
-    ];
+      to ? String(to) : null
+    ]
 
     const [{ rows }, { rows: totalsRows }] = await Promise.all([
       db.query(
@@ -5372,8 +5313,8 @@ app.get("/api/teamStageActivity", async (req, res) => {
            se.person AS member_name,
            se.stage_key,
            COUNT(*) AS completed_count
-         FROM ${T("stage_entries")} se
-         JOIN ${T("products")} p ON p.id = se.product_id
+         FROM ${T('stage_entries')} se
+         JOIN ${T('products')} p ON p.id = se.product_id
          WHERE p.division = $1
            AND se.status = 'Completed'
            AND se.person IS NOT NULL AND se.person != ''
@@ -5381,90 +5322,92 @@ app.get("/api/teamStageActivity", async (req, res) => {
            AND (SAFE_CAST($3 AS TIMESTAMP) IS NULL OR se.updated_at < SAFE_CAST($3 AS TIMESTAMP))
          GROUP BY se.person, se.stage_key
          ORDER BY se.person, se.stage_key`,
-        params,
+        params
       ),
       // Distinct cards touched per person in this window
       db.query(
         `SELECT se.person AS member_name, COUNT(DISTINCT p.id) AS total_cards
-         FROM ${T("stage_entries")} se
-         JOIN ${T("products")} p ON p.id = se.product_id
+         FROM ${T('stage_entries')} se
+         JOIN ${T('products')} p ON p.id = se.product_id
          WHERE p.division = $1
            AND se.status = 'Completed'
            AND se.person IS NOT NULL AND se.person != ''
            AND (SAFE_CAST($2 AS TIMESTAMP) IS NULL OR se.updated_at >= SAFE_CAST($2 AS TIMESTAMP))
            AND (SAFE_CAST($3 AS TIMESTAMP) IS NULL OR se.updated_at < SAFE_CAST($3 AS TIMESTAMP))
          GROUP BY se.person`,
-        params,
-      ),
-    ]);
+        params
+      )
+    ])
 
-    const totalsByPerson = {};
-    totalsRows.forEach((r) => {
-      totalsByPerson[r.member_name] = Number(r.total_cards);
-    });
+    const totalsByPerson = {}
+    totalsRows.forEach(r => {
+      totalsByPerson[r.member_name] = Number(r.total_cards)
+    })
 
-    const byMember = {};
-    rows.forEach((r) => {
+    const byMember = {}
+    rows.forEach(r => {
       if (!byMember[r.member_name]) {
         byMember[r.member_name] = {
           memberName: r.member_name,
           totalCards: totalsByPerson[r.member_name] || 0,
-          stages: [],
-        };
+          stages: []
+        }
       }
       byMember[r.member_name].stages.push({
         stage: r.stage_key,
         completedSkus: Number(r.completed_count),
         inProgressSkus: 0,
         notStartedSkus: 0,
-        issueSkus: 0,
-      });
-    });
+        issueSkus: 0
+      })
+    })
 
-    res.json({ ok: true, members: Object.values(byMember) });
+    res.json({ ok: true, members: Object.values(byMember) })
   } catch (e) {
-    console.error("teamStageActivity error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('teamStageActivity error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/store-list — for populating the branch dropdown
 ---------------------------------------------------------------- */
-app.get("/api/store-list", async (req, res) => {
+app.get('/api/store-list', async (req, res) => {
   try {
     const { rows } = await db.query(
       `SELECT TRIM(string_field_0) AS store_name
-       FROM ${T("store_list")}
+       FROM ${T('store_list')}
        WHERE string_field_0 IS NOT NULL
          AND TRIM(string_field_0) != ''
          AND LOWER(TRIM(string_field_0)) NOT IN ('store_name', 'store', 'name', 'branch_name')
-       ORDER BY store_name`,
-    );
-    res.json({ ok: true, stores: rows.map((r) => r.store_name) });
+       ORDER BY store_name`
+    )
+    res.json({ ok: true, stores: rows.map(r => r.store_name) })
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    Dispatch helpers
 ---------------------------------------------------------------- */
-async function dispatchValidate(division, vendor, branchName) {
+async function dispatchValidate (division, vendor, branchName) {
   const [{ rows: vcheck }, { rows: scheck }] = await Promise.all([
     db.query(
-      `SELECT 1 FROM ${T("vendors")} WHERE division = $1 AND vendor_name = $2`,
-      [String(division), String(vendor)],
+      `SELECT 1 FROM ${T('vendors')} WHERE division = $1 AND vendor_name = $2`,
+      [String(division), String(vendor)]
     ),
     db.query(
-      `SELECT 1 FROM ${T("store_list")} WHERE TRIM(string_field_0) = $1 LIMIT 1`,
-      [String(branchName).trim()],
-    ),
-  ]);
+      `SELECT 1 FROM ${T(
+        'store_list'
+      )} WHERE TRIM(string_field_0) = $1 LIMIT 1`,
+      [String(branchName).trim()]
+    )
+  ])
   if (vcheck.length === 0)
-    return `Vendor "${vendor}" not found for ${division}.`;
-  if (scheck.length === 0) return `Unknown branch "${branchName}".`;
-  return null;
+    return `Vendor "${vendor}" not found for ${division}.`
+  if (scheck.length === 0) return `Unknown branch "${branchName}".`
+  return null
 }
 
 /* ----------------------------------------------------------------
@@ -5473,7 +5416,7 @@ async function dispatchValidate(division, vendor, branchName) {
    if it exists it is updated, otherwise inserted with a generated id.
    Items are MERGEd (scan_count is added to, like the old ON CONFLICT).
 ---------------------------------------------------------------- */
-app.post("/api/dispatch/admin-upload", async (req, res) => {
+app.post('/api/dispatch/admin-upload', async (req, res) => {
   const {
     division,
     vendor,
@@ -5482,8 +5425,8 @@ app.post("/api/dispatch/admin-upload", async (req, res) => {
     branchName,
     uploadedBy,
     filename,
-    skus,
-  } = req.body;
+    skus
+  } = req.body
   if (
     !division ||
     !vendor ||
@@ -5496,15 +5439,15 @@ app.post("/api/dispatch/admin-upload", async (req, res) => {
     return res.status(400).json({
       ok: false,
       error:
-        "division, vendor, batchLabel, setLabel, branchName and skus[] required",
-    });
+        'division, vendor, batchLabel, setLabel, branchName and skus[] required'
+    })
   }
   try {
-    const problem = await dispatchValidate(division, vendor, branchName);
-    if (problem) return res.status(400).json({ ok: false, error: problem });
+    const problem = await dispatchValidate(division, vendor, branchName)
+    if (problem) return res.status(400).json({ ok: false, error: problem })
 
     const { rows: existing } = await db.query(
-      `SELECT id FROM ${T("dispatch_batches")}
+      `SELECT id FROM ${T('dispatch_batches')}
        WHERE division = $1 AND vendor = $2 AND batch_label = $3
          AND set_label = $4 AND branch_name = $5 AND source = 'dispatched'
        LIMIT 1`,
@@ -5513,40 +5456,40 @@ app.post("/api/dispatch/admin-upload", async (req, res) => {
         String(vendor),
         String(batchLabel),
         String(setLabel),
-        String(branchName),
-      ],
-    );
-    const isNew = existing.length === 0;
+        String(branchName)
+      ]
+    )
+    const isNew = existing.length === 0
     const batchId = isNew
-      ? require("crypto").randomUUID()
-      : String(existing[0].id);
+      ? require('crypto').randomUUID()
+      : String(existing[0].id)
 
-    const counts = {};
-    skus.forEach((s) => {
-      const k = String(s.sku || s).trim();
-      if (k) counts[k] = (counts[k] || 0) + (Number(s.qty) || 1);
-    });
-    const itemRows = Object.keys(counts).map((sku) => ({
+    const counts = {}
+    skus.forEach(s => {
+      const k = String(s.sku || s).trim()
+      if (k) counts[k] = (counts[k] || 0) + (Number(s.qty) || 1)
+    })
+    const itemRows = Object.keys(counts).map(sku => ({
       sku,
-      qty: counts[sku],
-    }));
+      qty: counts[sku]
+    }))
 
     const batchStmt = isNew
-      ? `INSERT INTO ${T("dispatch_batches")}
+      ? `INSERT INTO ${T('dispatch_batches')}
             (id, division, vendor, batch_label, set_label, branch_name,
             source, uploaded_by, source_filename, uploaded_at, updated_at)
          VALUES (@p1, @p2, @p3, @p4, @p5, @p6, 'dispatched', @p7, @p8,
                  CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP());`
-      : `UPDATE ${T("dispatch_batches")}
+      : `UPDATE ${T('dispatch_batches')}
          SET uploaded_by = @p7, source_filename = @p8, updated_at = CURRENT_TIMESTAMP()
-         WHERE id = @p1;`;
+         WHERE id = @p1;`
 
     const script = `
 BEGIN TRANSACTION;
 
 ${batchStmt}
 
-MERGE ${T("dispatch_batch_items")} t
+MERGE ${T('dispatch_batch_items')} t
 USING (
   SELECT
     JSON_VALUE(j, '$.sku') AS sku,
@@ -5564,7 +5507,7 @@ VALUES
    CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP());
 
 COMMIT TRANSACTION;
-`;
+`
     await db.query(script, [
       batchId,
       String(division),
@@ -5572,24 +5515,24 @@ COMMIT TRANSACTION;
       String(batchLabel),
       String(setLabel),
       String(branchName),
-      uploadedBy || "Unattributed",
+      uploadedBy || 'Unattributed',
       filename || null,
-      JSON.stringify(itemRows),
-    ]);
+      JSON.stringify(itemRows)
+    ])
 
-    res.json({ ok: true, batchId, skuCount: itemRows.length });
+    res.json({ ok: true, batchId, skuCount: itemRows.length })
   } catch (e) {
-    console.error("admin-upload error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('admin-upload error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 // /* ----------------------------------------------------------------
 //    POST /api/dispatch/branch-upload — branch's received set (auto set_number)
 //    Items are replaced (DELETE + INSERT) in one transaction.
 // ---------------------------------------------------------------- */
 
-app.post("/api/dispatch/branch-upload", async (req, res) => {
+app.post('/api/dispatch/branch-upload', async (req, res) => {
   const {
     division,
     vendor,
@@ -5597,8 +5540,8 @@ app.post("/api/dispatch/branch-upload", async (req, res) => {
     branchName,
     uploadedBy,
     filename,
-    skus,
-  } = req.body;
+    skus
+  } = req.body
   if (
     !division ||
     !vendor ||
@@ -5609,72 +5552,69 @@ app.post("/api/dispatch/branch-upload", async (req, res) => {
   ) {
     return res.status(400).json({
       ok: false,
-      error: "division, vendor, batchLabel, branchName and skus[] required",
-    });
+      error: 'division, vendor, batchLabel, branchName and skus[] required'
+    })
   }
   try {
-    const problem = await dispatchValidate(division, vendor, branchName);
-    if (problem) return res.status(400).json({ ok: false, error: problem });
+    const problem = await dispatchValidate(division, vendor, branchName)
+    if (problem) return res.status(400).json({ ok: false, error: problem })
 
     const { rows: existing } = await db.query(
-      `SELECT id, set_label FROM ${T("dispatch_batches")}
+      `SELECT id, set_label FROM ${T('dispatch_batches')}
        WHERE division = $1 AND vendor = $2 AND batch_label = $3 AND branch_name = $4
        LIMIT 1`,
-      [
-        String(division),
-        String(vendor),
-        String(batchLabel),
-        String(branchName),
-      ],
-    );
+      [String(division), String(vendor), String(batchLabel), String(branchName)]
+    )
 
-    const isNew = existing.length === 0;
-    let batchId, setLabel;
+    const isNew = existing.length === 0
+    let batchId, setLabel
     if (!isNew) {
-      batchId = String(existing[0].id);
-      setLabel = existing[0].set_label || null;
+      batchId = String(existing[0].id)
+      setLabel = existing[0].set_label || null
     } else {
       // no set_number column in BigQuery: the number lives in set_label as "Set N"
       const { rows: cntRow } = await db.query(
-        `SELECT COUNT(*) AS n FROM ${T("dispatch_batches")}
+        `SELECT COUNT(*) AS n FROM ${T('dispatch_batches')}
          WHERE division = $1 AND vendor = $2 AND batch_label = $3`,
-        [String(division), String(vendor), String(batchLabel)],
-      );
-      setLabel = `Set ${Number(cntRow[0].n) + 1}`;
-      batchId = require("crypto").randomUUID();
+        [String(division), String(vendor), String(batchLabel)]
+      )
+      setLabel = `Set ${Number(cntRow[0].n) + 1}`
+      batchId = require('crypto').randomUUID()
     }
     const setNumber = setLabel
       ? Number((setLabel.match(/\d+/) || [])[0]) || null
-      : null;
+      : null
 
-    const qtyMap = {};
-    skus.forEach((s) => {
-      const k = String(s.sku || s).trim();
-      if (k) qtyMap[k] = Number(s.qty) || 1;
-    });
-    const itemRows = Object.keys(qtyMap).map((sku) => ({
+    const qtyMap = {}
+    skus.forEach(s => {
+      const k = String(s.sku || s).trim()
+      if (k) qtyMap[k] = Number(s.qty) || 1
+    })
+    const itemRows = Object.keys(qtyMap).map(sku => ({
       sku,
-      qty: qtyMap[sku],
-    }));
+      qty: qtyMap[sku]
+    }))
 
     const batchStmt = isNew
-      ? `INSERT INTO ${T("dispatch_batches")}
+      ? `INSERT INTO ${T('dispatch_batches')}
            (id, division, vendor, batch_label, set_label, branch_name,
             source, uploaded_by, source_filename, uploaded_at, updated_at)
          VALUES (@p1, @p2, @p3, @p4, @p5, @p6, 'received', @p7, @p8,
                  CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP());`
-      : `UPDATE ${T("dispatch_batches")}
+      : `UPDATE ${T('dispatch_batches')}
          SET uploaded_by = @p7, source_filename = @p8, updated_at = CURRENT_TIMESTAMP()
-         WHERE id = @p1;`;
+         WHERE id = @p1;`
 
     const script = `
 BEGIN TRANSACTION;
 
 ${batchStmt}
 
-DELETE FROM ${T("dispatch_batch_items")} WHERE batch_id = @p1;
+DELETE FROM ${T('dispatch_batch_items')} WHERE batch_id = @p1;
 
-INSERT INTO ${T("dispatch_batch_items")} (id, batch_id, sku, qty, scan_count, first_scanned_at, last_scanned_at)
+INSERT INTO ${T(
+      'dispatch_batch_items'
+    )} (id, batch_id, sku, qty, scan_count, first_scanned_at, last_scanned_at)
 SELECT
   ABS(FARM_FINGERPRINT(CONCAT(@p1, '|', JSON_VALUE(j, '$.sku')))),
   @p1,
@@ -5686,7 +5626,7 @@ SELECT
 FROM UNNEST(JSON_QUERY_ARRAY(@p9)) AS j;
 
 COMMIT TRANSACTION;
-`;
+`
     await db.query(script, [
       batchId,
       String(division),
@@ -5694,17 +5634,17 @@ COMMIT TRANSACTION;
       String(batchLabel),
       setLabel,
       String(branchName),
-      uploadedBy || "Unattributed",
+      uploadedBy || 'Unattributed',
       filename || null,
-      JSON.stringify(itemRows),
-    ]);
+      JSON.stringify(itemRows)
+    ])
 
-    res.json({ ok: true, batchId, setNumber, skuCount: itemRows.length });
+    res.json({ ok: true, batchId, setNumber, skuCount: itemRows.length })
   } catch (e) {
-    console.error("branch-upload error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('branch-upload error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/dispatch/comparison?division=&vendor=&batchLabel=
@@ -5712,18 +5652,18 @@ COMMIT TRANSACTION;
      array_agg(DISTINCT x) FILTER (WHERE x IS NOT NULL)
        -> ARRAY_AGG(DISTINCT x IGNORE NULLS)
 ---------------------------------------------------------------- */
-app.get("/api/dispatch/comparison", async (req, res) => {
-  const { division, vendor, batchLabel, setLabel, branchName } = req.query;
+app.get('/api/dispatch/comparison', async (req, res) => {
+  const { division, vendor, batchLabel, setLabel, branchName } = req.query
   if (!division || !vendor || !batchLabel)
     return res
       .status(400)
-      .json({ ok: false, error: "division, vendor, batchLabel required" });
+      .json({ ok: false, error: 'division, vendor, batchLabel required' })
   try {
     const { rows } = await db.query(
       `SELECT b.branch_name, b.source, b.uploaded_by, b.uploaded_at,
               ARRAY_AGG(DISTINCT i.sku IGNORE NULLS) AS skus
-       FROM ${T("dispatch_batches")} b
-       LEFT JOIN ${T("dispatch_batch_items")} i ON i.batch_id = b.id
+       FROM ${T('dispatch_batches')} b
+       LEFT JOIN ${T('dispatch_batch_items')} i ON i.batch_id = b.id
        WHERE b.division = $1 AND b.vendor = $2 AND b.batch_label = $3
          AND ($4 IS NULL OR b.set_label = $4)
          AND ($5 IS NULL OR b.branch_name = $5)
@@ -5733,24 +5673,24 @@ app.get("/api/dispatch/comparison", async (req, res) => {
         String(vendor),
         String(batchLabel),
         setLabel ? String(setLabel) : null,
-        branchName ? String(branchName) : null,
-      ],
-    );
+        branchName ? String(branchName) : null
+      ]
+    )
 
-    const byBranch = {};
-    rows.forEach((r) => {
-      (byBranch[r.branch_name] ||= {})[r.source] = r;
-    });
+    const byBranch = {}
+    rows.forEach(r => {
+      ;(byBranch[r.branch_name] ||= {})[r.source] = r
+    })
 
     const results = Object.entries(byBranch).map(([branch, sides]) => {
       const dispatched = new Set(
-        (sides.dispatched?.skus || []).map((s) => s.toLowerCase()),
-      );
+        (sides.dispatched?.skus || []).map(s => s.toLowerCase())
+      )
       const received = new Set(
-        (sides.received?.skus || []).map((s) => s.toLowerCase()),
-      );
-      const missing = [...dispatched].filter((s) => !received.has(s));
-      const extra = [...received].filter((s) => !dispatched.has(s));
+        (sides.received?.skus || []).map(s => s.toLowerCase())
+      )
+      const missing = [...dispatched].filter(s => !received.has(s))
+      const extra = [...received].filter(s => !dispatched.has(s))
       return {
         branchName: branch,
         dispatchedCount: dispatched.size,
@@ -5766,83 +5706,83 @@ app.get("/api/dispatch/comparison", async (req, res) => {
         hasDispatch: !!sides.dispatched,
         hasReceipt: !!sides.received,
         dispatchedAt: iso(sides.dispatched?.uploaded_at) || null,
-        receivedAt: iso(sides.received?.uploaded_at) || null,
-      };
-    });
+        receivedAt: iso(sides.received?.uploaded_at) || null
+      }
+    })
 
-    res.json({ ok: true, branches: results });
+    res.json({ ok: true, branches: results })
   } catch (e) {
-    console.error("comparison error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('comparison error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/dispatch/groups?division=
 ---------------------------------------------------------------- */
-app.get("/api/dispatch/groups", async (req, res) => {
-  const { division } = req.query;
+app.get('/api/dispatch/groups', async (req, res) => {
+  const { division } = req.query
   if (!division)
-    return res.status(400).json({ ok: false, error: "division required" });
+    return res.status(400).json({ ok: false, error: 'division required' })
   try {
     const { rows } = await db.query(
       `SELECT vendor, batch_label,
               COUNT(DISTINCT IF(source = 'dispatched', branch_name, NULL)) AS dispatched_branches,
               COUNT(DISTINCT IF(source = 'received', branch_name, NULL)) AS received_branches
-       FROM ${T("dispatch_batches")}
+       FROM ${T('dispatch_batches')}
        WHERE division = $1
        GROUP BY vendor, batch_label
        ORDER BY vendor, batch_label DESC`,
-      [String(division)],
-    );
+      [String(division)]
+    )
     res.json({
       ok: true,
-      groups: rows.map((r) => ({
+      groups: rows.map(r => ({
         ...r,
         dispatched_branches: Number(r.dispatched_branches),
-        received_branches: Number(r.received_branches),
-      })),
-    });
+        received_branches: Number(r.received_branches)
+      }))
+    })
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/dispatch/batch-labels?division=&vendor=
 ---------------------------------------------------------------- */
-app.get("/api/dispatch/batch-labels", async (req, res) => {
-  const { division, vendor } = req.query;
+app.get('/api/dispatch/batch-labels', async (req, res) => {
+  const { division, vendor } = req.query
   if (!division || !vendor)
     return res
       .status(400)
-      .json({ ok: false, error: "division and vendor required" });
+      .json({ ok: false, error: 'division and vendor required' })
   try {
     const { rows } = await db.query(
-      `SELECT DISTINCT batch_label FROM ${T("dispatch_batches")}
+      `SELECT DISTINCT batch_label FROM ${T('dispatch_batches')}
        WHERE division = $1 AND vendor = $2
        ORDER BY batch_label DESC`,
-      [String(division), String(vendor)],
-    );
-    res.json({ ok: true, batchLabels: rows.map((r) => r.batch_label) });
+      [String(division), String(vendor)]
+    )
+    res.json({ ok: true, batchLabels: rows.map(r => r.batch_label) })
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/dispatch/set-labels?division=&vendor=&batchLabel=&branchName=
 ---------------------------------------------------------------- */
-app.get("/api/dispatch/set-labels", async (req, res) => {
-  const { division, vendor, batchLabel, branchName } = req.query;
+app.get('/api/dispatch/set-labels', async (req, res) => {
+  const { division, vendor, batchLabel, branchName } = req.query
   if (!division || !vendor || !batchLabel) {
     return res
       .status(400)
-      .json({ ok: false, error: "division, vendor, batchLabel required" });
+      .json({ ok: false, error: 'division, vendor, batchLabel required' })
   }
   try {
     const { rows } = await db.query(
-      `SELECT DISTINCT set_label FROM ${T("dispatch_batches")}
+      `SELECT DISTINCT set_label FROM ${T('dispatch_batches')}
        WHERE division = $1 AND vendor = $2 AND batch_label = $3
          AND source = 'dispatched'
          AND ($4 IS NULL OR branch_name = $4)
@@ -5851,47 +5791,47 @@ app.get("/api/dispatch/set-labels", async (req, res) => {
         String(division),
         String(vendor),
         String(batchLabel),
-        branchName ? String(branchName) : null,
-      ],
-    );
-    res.json({ ok: true, setLabels: rows.map((r) => r.set_label) });
+        branchName ? String(branchName) : null
+      ]
+    )
+    res.json({ ok: true, setLabels: rows.map(r => r.set_label) })
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/dispatch/set-summary?division=&vendor=&batchLabel=
    The old correlated COUNT subquery is now a LEFT JOIN + GROUP BY.
 ---------------------------------------------------------------- */
-app.get("/api/dispatch/set-summary", async (req, res) => {
-  const { division, vendor, batchLabel } = req.query;
+app.get('/api/dispatch/set-summary', async (req, res) => {
+  const { division, vendor, batchLabel } = req.query
   if (!division || !vendor || !batchLabel) {
     return res
       .status(400)
-      .json({ ok: false, error: "division, vendor, batchLabel required" });
+      .json({ ok: false, error: 'division, vendor, batchLabel required' })
   }
   try {
     const { rows } = await db.query(
       `SELECT b.set_label, b.branch_name, b.source, b.uploaded_at,
               COUNT(i.sku) AS sku_count
-       FROM ${T("dispatch_batches")} b
-       LEFT JOIN ${T("dispatch_batch_items")} i ON i.batch_id = b.id
+       FROM ${T('dispatch_batches')} b
+       LEFT JOIN ${T('dispatch_batch_items')} i ON i.batch_id = b.id
        WHERE b.division = $1 AND b.vendor = $2 AND b.batch_label = $3
        GROUP BY b.id, b.set_label, b.branch_name, b.source, b.uploaded_at
        ORDER BY b.set_label, b.branch_name, b.source`,
-      [String(division), String(vendor), String(batchLabel)],
-    );
+      [String(division), String(vendor), String(batchLabel)]
+    )
 
-    const bySet = {};
-    rows.forEach((r) => {
-      const set = (bySet[r.set_label] ||= {});
-      const branch = (set[r.branch_name] ||= {});
+    const bySet = {}
+    rows.forEach(r => {
+      const set = (bySet[r.set_label] ||= {})
+      const branch = (set[r.branch_name] ||= {})
       branch[r.source] = {
         uploadedAt: iso(r.uploaded_at) || null,
-        skuCount: Number(r.sku_count),
-      };
-    });
+        skuCount: Number(r.sku_count)
+      }
+    })
 
     const sets = Object.entries(bySet).map(([setLabel, branches]) => ({
       setLabel,
@@ -5902,168 +5842,166 @@ app.get("/api/dispatch/set-summary", async (req, res) => {
         receivedAt: sides.received?.uploadedAt || null,
         receivedCount: sides.received?.skuCount || 0,
         status: !sides.dispatched
-          ? "not_dispatched"
+          ? 'not_dispatched'
           : !sides.received
-            ? "awaiting_receipt"
-            : "received",
-      })),
-    }));
+          ? 'awaiting_receipt'
+          : 'received'
+      }))
+    }))
 
-    res.json({ ok: true, sets });
+    res.json({ ok: true, sets })
   } catch (e) {
-    console.error("set-summary error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('set-summary error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    POST /api/dispatch/delete-batch   body: { batchId }
    BigQuery has no DELETE ... RETURNING, so the row is read first.
 ---------------------------------------------------------------- */
-app.post("/api/dispatch/delete-batch", async (req, res) => {
-  const { batchId } = req.body;
+app.post('/api/dispatch/delete-batch', async (req, res) => {
+  const { batchId } = req.body
   if (!batchId)
-    return res.status(400).json({ ok: false, error: "batchId required" });
+    return res.status(400).json({ ok: false, error: 'batchId required' })
   try {
     const { rows } = await db.query(
-      `SELECT * FROM ${T("dispatch_batches")} WHERE id = $1`,
-      [String(batchId)],
-    );
+      `SELECT * FROM ${T('dispatch_batches')} WHERE id = $1`,
+      [String(batchId)]
+    )
     if (!rows.length)
-      return res.status(404).json({ ok: false, error: "Batch not found" });
+      return res.status(404).json({ ok: false, error: 'Batch not found' })
 
     await db.query(
       `BEGIN TRANSACTION;
-       DELETE FROM ${T("dispatch_batch_items")} WHERE batch_id = @p1;
-       DELETE FROM ${T("dispatch_batches")} WHERE id = @p1;
+       DELETE FROM ${T('dispatch_batch_items')} WHERE batch_id = @p1;
+       DELETE FROM ${T('dispatch_batches')} WHERE id = @p1;
        COMMIT TRANSACTION;`,
-      [String(batchId)],
-    );
+      [String(batchId)]
+    )
 
-    const b = rows[0];
+    const b = rows[0]
     res.json({
       ok: true,
       deleted: {
         ...b,
         uploaded_at: iso(b.uploaded_at) || null,
-        updated_at: iso(b.updated_at) || null,
-      },
-    });
+        updated_at: iso(b.updated_at) || null
+      }
+    })
   } catch (e) {
-    console.error("delete-batch error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('delete-batch error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/dispatch/batches?division=&vendor=&batchLabel=
 ---------------------------------------------------------------- */
-app.get("/api/dispatch/batches", async (req, res) => {
-  const { division, vendor, batchLabel } = req.query;
+app.get('/api/dispatch/batches', async (req, res) => {
+  const { division, vendor, batchLabel } = req.query
   if (!division || !vendor || !batchLabel)
     return res
       .status(400)
-      .json({ ok: false, error: "division, vendor, batchLabel required" });
+      .json({ ok: false, error: 'division, vendor, batchLabel required' })
   try {
     const { rows } = await db.query(
       `SELECT b.id, b.branch_name, b.source, b.uploaded_by, b.uploaded_at,
               COUNT(i.sku) AS sku_count,
               COALESCE(SUM(i.scan_count), 0) AS total_scans
-       FROM ${T("dispatch_batches")} b
-       LEFT JOIN ${T("dispatch_batch_items")} i ON i.batch_id = b.id
+       FROM ${T('dispatch_batches')} b
+       LEFT JOIN ${T('dispatch_batch_items')} i ON i.batch_id = b.id
        WHERE b.division = $1 AND b.vendor = $2 AND b.batch_label = $3
        GROUP BY b.id, b.branch_name, b.source, b.uploaded_by, b.uploaded_at
        ORDER BY b.branch_name ASC, b.source ASC`,
-      [String(division), String(vendor), String(batchLabel)],
-    );
+      [String(division), String(vendor), String(batchLabel)]
+    )
     res.json({
       ok: true,
-      batches: rows.map((r) => ({
+      batches: rows.map(r => ({
         ...r,
         uploaded_at: iso(r.uploaded_at) || null,
         sku_count: Number(r.sku_count),
-        total_scans: Number(r.total_scans),
-      })),
-    });
+        total_scans: Number(r.total_scans)
+      }))
+    })
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    POST /api/dispatch/rename-batch
    body: { division, vendor, oldBatchLabel, newBatchLabel }
 ---------------------------------------------------------------- */
-app.post("/api/dispatch/rename-batch", async (req, res) => {
-  const { division, vendor, oldBatchLabel, newBatchLabel } = req.body;
+app.post('/api/dispatch/rename-batch', async (req, res) => {
+  const { division, vendor, oldBatchLabel, newBatchLabel } = req.body
   if (!division || !vendor || !oldBatchLabel || !newBatchLabel) {
     return res.status(400).json({
       ok: false,
-      error: "division, vendor, oldBatchLabel, newBatchLabel required",
-    });
+      error: 'division, vendor, oldBatchLabel, newBatchLabel required'
+    })
   }
   if (oldBatchLabel === newBatchLabel) {
     return res
       .status(400)
-      .json({ ok: false, error: "New label is the same as the old one" });
+      .json({ ok: false, error: 'New label is the same as the old one' })
   }
   try {
     const { rows: clash } = await db.query(
-      `SELECT 1 FROM ${T("dispatch_batches")}
+      `SELECT 1 FROM ${T('dispatch_batches')}
        WHERE division = $1 AND vendor = $2 AND batch_label = $3 LIMIT 1`,
-      [String(division), String(vendor), String(newBatchLabel)],
-    );
+      [String(division), String(vendor), String(newBatchLabel)]
+    )
     if (clash.length > 0) {
       return res.status(400).json({
         ok: false,
-        error: `A batch named "${newBatchLabel}" already exists for this vendor — pick a different name or delete it first.`,
-      });
+        error: `A batch named "${newBatchLabel}" already exists for this vendor — pick a different name or delete it first.`
+      })
     }
 
     const { rows: cnt } = await db.query(
-      `SELECT COUNT(*) AS n FROM ${T("dispatch_batches")}
+      `SELECT COUNT(*) AS n FROM ${T('dispatch_batches')}
        WHERE division = $1 AND vendor = $2 AND batch_label = $3`,
-      [String(division), String(vendor), String(oldBatchLabel)],
-    );
+      [String(division), String(vendor), String(oldBatchLabel)]
+    )
 
     await db.query(
-      `UPDATE ${T("dispatch_batches")}
+      `UPDATE ${T('dispatch_batches')}
        SET batch_label = $4, updated_at = CURRENT_TIMESTAMP()
        WHERE division = $1 AND vendor = $2 AND batch_label = $3`,
       [
         String(division),
         String(vendor),
         String(oldBatchLabel),
-        String(newBatchLabel),
-      ],
-    );
-    res.json({ ok: true, renamed: Number(cnt[0].n) });
+        String(newBatchLabel)
+      ]
+    )
+    res.json({ ok: true, renamed: Number(cnt[0].n) })
   } catch (e) {
-    console.error("rename-batch error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('rename-batch error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    Retry helper: BigQuery DML on the same table can collide when two
    scans arrive at once ("concurrent update" / "could not serialize").
 ---------------------------------------------------------------- */
-async function withRetry(fn, tries = 3) {
-  let lastErr;
+async function withRetry (fn, tries = 3) {
+  let lastErr
   for (let i = 0; i < tries; i++) {
     try {
-      return await fn();
+      return await fn()
     } catch (e) {
-      lastErr = e;
-      const msg = String(e.message || "");
+      lastErr = e
+      const msg = String(e.message || '')
       if (!/concurrent|serialize|conflict|rateLimit|too many/i.test(msg))
-        throw e;
-      await new Promise((r) =>
-        setTimeout(r, 400 * (i + 1) + Math.random() * 300),
-      );
+        throw e
+      await new Promise(r => setTimeout(r, 400 * (i + 1) + Math.random() * 300))
     }
   }
-  throw lastErr;
+  throw lastErr
 }
 
 /* ----------------------------------------------------------------
@@ -6071,46 +6009,48 @@ async function withRetry(fn, tries = 3) {
    No UPDATE ... RETURNING in BigQuery: read the count, then either
    decrement or delete inside one transaction.
 ---------------------------------------------------------------- */
-app.post("/api/dispatch/scan-undo", async (req, res) => {
-  const { batchId, sku } = req.body;
+app.post('/api/dispatch/scan-undo', async (req, res) => {
+  const { batchId, sku } = req.body
   if (!batchId || !sku)
     return res
       .status(400)
-      .json({ ok: false, error: "batchId and sku required" });
+      .json({ ok: false, error: 'batchId and sku required' })
   try {
     const { rows } = await db.query(
-      `SELECT scan_count FROM ${T("dispatch_batch_items")}
+      `SELECT scan_count FROM ${T('dispatch_batch_items')}
        WHERE batch_id = $1 AND sku = $2 AND scan_count > 0`,
-      [String(batchId), String(sku)],
-    );
+      [String(batchId), String(sku)]
+    )
     if (!rows.length)
-      return res.status(404).json({ ok: false, error: "Item not found" });
+      return res.status(404).json({ ok: false, error: 'Item not found' })
 
-    const scanCount = Number(rows[0].scan_count) - 1;
-    const removed = scanCount <= 0;
+    const scanCount = Number(rows[0].scan_count) - 1
+    const removed = scanCount <= 0
 
     await withRetry(() =>
       db.query(
         removed
-          ? `DELETE FROM ${T("dispatch_batch_items")} WHERE batch_id = $1 AND sku = $2`
-          : `UPDATE ${T("dispatch_batch_items")}
+          ? `DELETE FROM ${T(
+              'dispatch_batch_items'
+            )} WHERE batch_id = $1 AND sku = $2`
+          : `UPDATE ${T('dispatch_batch_items')}
              SET scan_count = scan_count - 1, last_scanned_at = CURRENT_TIMESTAMP()
              WHERE batch_id = $1 AND sku = $2`,
-        [String(batchId), String(sku)],
-      ),
-    );
+        [String(batchId), String(sku)]
+      )
+    )
 
-    res.json({ ok: true, scanCount: Math.max(scanCount, 0), removed });
+    res.json({ ok: true, scanCount: Math.max(scanCount, 0), removed })
   } catch (e) {
-    console.error("scan-undo error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('scan-undo error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    POST /api/dispatch/scan
 ---------------------------------------------------------------- */
-app.post("/api/dispatch/scan", async (req, res) => {
+app.post('/api/dispatch/scan', async (req, res) => {
   const {
     division,
     vendor,
@@ -6119,8 +6059,8 @@ app.post("/api/dispatch/scan", async (req, res) => {
     branchName,
     source,
     sku,
-    scannedBy,
-  } = req.body;
+    scannedBy
+  } = req.body
   if (
     !division ||
     !vendor ||
@@ -6133,85 +6073,85 @@ app.post("/api/dispatch/scan", async (req, res) => {
     return res.status(400).json({
       ok: false,
       error:
-        "division, vendor, batchLabel, setLabel, branchName, source, sku required",
-    });
+        'division, vendor, batchLabel, setLabel, branchName, source, sku required'
+    })
   }
-  if (!["dispatched", "received"].includes(source)) {
+  if (!['dispatched', 'received'].includes(source)) {
     return res
       .status(400)
-      .json({ ok: false, error: "source must be 'dispatched' or 'received'" });
+      .json({ ok: false, error: "source must be 'dispatched' or 'received'" })
   }
 
   try {
-    const problem = await dispatchValidate(division, vendor, branchName);
-    if (problem) return res.status(400).json({ ok: false, error: problem });
+    const problem = await dispatchValidate(division, vendor, branchName)
+    if (problem) return res.status(400).json({ ok: false, error: problem })
 
-    const cleanSku = String(sku).trim();
+    const cleanSku = String(sku).trim()
     const keyParams = [
       String(division),
       String(vendor),
       String(batchLabel),
       String(setLabel),
-      String(branchName),
-    ];
+      String(branchName)
+    ]
 
     // A "received" scan must match something that was actually dispatched
-    if (source === "received") {
+    if (source === 'received') {
       const { rows: dcheck } = await db.query(
-        `SELECT id FROM ${T("dispatch_batches")}
+        `SELECT id FROM ${T('dispatch_batches')}
          WHERE division = $1 AND vendor = $2 AND batch_label = $3
            AND set_label = $4 AND branch_name = $5 AND source = 'dispatched'
          LIMIT 1`,
-        keyParams,
-      );
+        keyParams
+      )
       if (!dcheck.length) {
         return res.status(400).json({
           ok: false,
-          error: `${setLabel} was never dispatched to ${branchName} for this batch.`,
-        });
+          error: `${setLabel} was never dispatched to ${branchName} for this batch.`
+        })
       }
       const { rows: skuCheck } = await db.query(
-        `SELECT 1 FROM ${T("dispatch_batch_items")}
+        `SELECT 1 FROM ${T('dispatch_batch_items')}
          WHERE batch_id = $1 AND LOWER(sku) = LOWER($2) LIMIT 1`,
-        [String(dcheck[0].id), cleanSku],
-      );
+        [String(dcheck[0].id), cleanSku]
+      )
       if (!skuCheck.length) {
         return res.status(400).json({
           ok: false,
-          error: `SKU "${sku}" was not part of the dispatched list for ${setLabel} → ${branchName}.`,
-        });
+          error: `SKU "${sku}" was not part of the dispatched list for ${setLabel} → ${branchName}.`
+        })
       }
     }
 
     // Find (or create) this side's batch
     const { rows: batchRows } = await db.query(
-      `SELECT id FROM ${T("dispatch_batches")}
+      `SELECT id FROM ${T('dispatch_batches')}
        WHERE division = $1 AND vendor = $2 AND batch_label = $3
          AND set_label = $4 AND branch_name = $5 AND source = $6
        LIMIT 1`,
-      [...keyParams, String(source)],
-    );
-    const isNew = batchRows.length === 0;
+      [...keyParams, String(source)]
+    )
+    const isNew = batchRows.length === 0
     const batchId = isNew
-      ? require("crypto").randomUUID()
-      : String(batchRows[0].id);
+      ? require('crypto').randomUUID()
+      : String(batchRows[0].id)
 
     const batchStmt = isNew
-      ? `INSERT INTO ${T("dispatch_batches")}
+      ? `INSERT INTO ${T('dispatch_batches')}
            (id, division, vendor, batch_label, set_label, branch_name, source,
             uploaded_by, uploaded_at, updated_at)
          VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8,
                  CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP());`
-      : `UPDATE ${T("dispatch_batches")}
+      : `UPDATE ${T('dispatch_batches')}
          SET updated_at = CURRENT_TIMESTAMP(), uploaded_by = @p8
-         WHERE id = @p1;`;
+         WHERE id = @p1;`
 
     const script = `
 BEGIN TRANSACTION;
 
 ${batchStmt}
 
-MERGE ${T("dispatch_batch_items")} t
+MERGE ${T('dispatch_batch_items')} t
 USING (SELECT @p1 AS batch_id, @p9 AS sku) s
 ON t.batch_id = s.batch_id AND t.sku = s.sku
 WHEN MATCHED THEN UPDATE SET
@@ -6224,17 +6164,17 @@ VALUES
    CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP());
 
 COMMIT TRANSACTION;
-`;
+`
 
     await withRetry(() =>
       db.query(script, [
         batchId,
         ...keyParams.slice(0, 5),
         String(source),
-        scannedBy || "Unattributed",
-        cleanSku,
-      ]),
-    );
+        scannedBy || 'Unattributed',
+        cleanSku
+      ])
+    )
 
     // One read for the scanned SKU's count plus the batch totals
     const { rows } = await db.query(
@@ -6242,11 +6182,11 @@ COMMIT TRANSACTION;
          IFNULL(SUM(IF(sku = $2, scan_count, 0)), 0) AS scan_count,
          COUNT(*) AS unique_skus,
          IFNULL(SUM(scan_count), 0) AS total_scans
-       FROM ${T("dispatch_batch_items")}
+       FROM ${T('dispatch_batch_items')}
        WHERE batch_id = $1`,
-      [batchId, cleanSku],
-    );
-    const scanCount = Number(rows[0].scan_count);
+      [batchId, cleanSku]
+    )
+    const scanCount = Number(rows[0].scan_count)
 
     res.json({
       ok: true,
@@ -6255,20 +6195,20 @@ COMMIT TRANSACTION;
       scanCount,
       isDuplicate: scanCount > 1,
       uniqueSkus: Number(rows[0].unique_skus),
-      totalScans: Number(rows[0].total_scans),
-    });
+      totalScans: Number(rows[0].total_scans)
+    })
   } catch (e) {
-    console.error("dispatch/scan error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('dispatch/scan error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/dispatch/scan-log
 ---------------------------------------------------------------- */
-app.get("/api/dispatch/scan-log", async (req, res) => {
+app.get('/api/dispatch/scan-log', async (req, res) => {
   const { division, vendor, batchLabel, setLabel, branchName, source } =
-    req.query;
+    req.query
   if (
     !division ||
     !vendor ||
@@ -6277,13 +6217,13 @@ app.get("/api/dispatch/scan-log", async (req, res) => {
     !branchName ||
     !source
   ) {
-    return res.status(400).json({ ok: false, error: "all params required" });
+    return res.status(400).json({ ok: false, error: 'all params required' })
   }
   try {
     const { rows } = await db.query(
       `SELECT i.sku, i.scan_count, i.first_scanned_at, i.last_scanned_at, b.id AS batch_id
-       FROM ${T("dispatch_batch_items")} i
-       JOIN ${T("dispatch_batches")} b ON b.id = i.batch_id
+       FROM ${T('dispatch_batch_items')} i
+       JOIN ${T('dispatch_batches')} b ON b.id = i.batch_id
        WHERE b.division = $1 AND b.vendor = $2 AND b.batch_label = $3
          AND b.set_label = $4 AND b.branch_name = $5 AND b.source = $6
        ORDER BY i.last_scanned_at DESC`,
@@ -6293,41 +6233,41 @@ app.get("/api/dispatch/scan-log", async (req, res) => {
         String(batchLabel),
         String(setLabel),
         String(branchName),
-        String(source),
-      ],
-    );
+        String(source)
+      ]
+    )
     res.json({
       ok: true,
-      items: rows.map((r) => ({
+      items: rows.map(r => ({
         ...r,
         scan_count: Number(r.scan_count),
         first_scanned_at: iso(r.first_scanned_at) || null,
-        last_scanned_at: iso(r.last_scanned_at) || null,
+        last_scanned_at: iso(r.last_scanned_at) || null
       })),
-      batchId: rows.length ? rows[0].batch_id : null,
-    });
+      batchId: rows.length ? rows[0].batch_id : null
+    })
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    GET /api/dispatch/branch-pending?division=&branchName=
    SKU arrays are built per batch in CTEs first, then joined, so the
    dispatched x received item lists are never cross-multiplied.
 ---------------------------------------------------------------- */
-app.get("/api/dispatch/branch-pending", async (req, res) => {
-  const { division, branchName } = req.query;
+app.get('/api/dispatch/branch-pending', async (req, res) => {
+  const { division, branchName } = req.query
   if (!division || !branchName) {
     return res
       .status(400)
-      .json({ ok: false, error: "division and branchName required" });
+      .json({ ok: false, error: 'division and branchName required' })
   }
   try {
     const { rows } = await db.query(
       `WITH skus_by_batch AS (
          SELECT batch_id, ARRAY_AGG(DISTINCT sku IGNORE NULLS) AS skus
-         FROM ${T("dispatch_batch_items")}
+         FROM ${T('dispatch_batch_items')}
          GROUP BY batch_id
        )
        SELECT
@@ -6337,26 +6277,26 @@ app.get("/api/dispatch/branch-pending", async (req, res) => {
          r.id AS received_batch_id,
          r.uploaded_at AS received_at,
          rs.skus AS received_skus
-       FROM ${T("dispatch_batches")} d
+       FROM ${T('dispatch_batches')} d
        LEFT JOIN skus_by_batch ds ON ds.batch_id = d.id
-       LEFT JOIN ${T("dispatch_batches")} r
+       LEFT JOIN ${T('dispatch_batches')} r
          ON r.division = d.division AND r.vendor = d.vendor
         AND r.batch_label = d.batch_label AND r.set_label = d.set_label
         AND r.branch_name = d.branch_name AND r.source = 'received'
        LEFT JOIN skus_by_batch rs ON rs.batch_id = r.id
        WHERE d.division = $1 AND d.branch_name = $2 AND d.source = 'dispatched'
        ORDER BY d.uploaded_at DESC`,
-      [String(division), String(branchName)],
-    );
+      [String(division), String(branchName)]
+    )
 
-    const result = rows.map((r) => {
+    const result = rows.map(r => {
       const dispatchedSet = new Set(
-        (r.dispatched_skus || []).map((s) => s.toLowerCase()),
-      );
+        (r.dispatched_skus || []).map(s => s.toLowerCase())
+      )
       const receivedSet = new Set(
-        (r.received_skus || []).map((s) => s.toLowerCase()),
-      );
-      const pendingSkus = [...dispatchedSet].filter((s) => !receivedSet.has(s));
+        (r.received_skus || []).map(s => s.toLowerCase())
+      )
+      const pendingSkus = [...dispatchedSet].filter(s => !receivedSet.has(s))
       return {
         vendor: r.vendor,
         batch_label: r.batch_label,
@@ -6366,51 +6306,49 @@ app.get("/api/dispatch/branch-pending", async (req, res) => {
         dispatched_count: dispatchedSet.size,
         received_count: receivedSet.size,
         pending_count: pendingSkus.length,
-        fully_received: dispatchedSet.size > 0 && pendingSkus.length === 0,
-      };
-    });
+        fully_received: dispatchedSet.size > 0 && pendingSkus.length === 0
+      }
+    })
 
-    res.json({ ok: true, rows: result });
+    res.json({ ok: true, rows: result })
   } catch (e) {
-    console.error("branch-pending error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('branch-pending error', e)
+    res.status(500).json({ ok: false, error: e.message })
   }
-});
+})
 
 /* ----------------------------------------------------------------
    Server start + graceful shutdown
    (no DB pool to close with BigQuery, so only the HTTP server is stopped)
 ---------------------------------------------------------------- */
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 8080
 const server = app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+  console.log(`Server running on http://localhost:${PORT}`)
+})
 
-let isShuttingDown = false;
+let isShuttingDown = false
 
-function gracefulShutdown(signal) {
-  if (isShuttingDown) return;
-  isShuttingDown = true;
-  console.log(`${signal} received — starting graceful shutdown`);
+function gracefulShutdown (signal) {
+  if (isShuttingDown) return
+  isShuttingDown = true
+  console.log(`${signal} received — starting graceful shutdown`)
 
   const forceExitTimer = setTimeout(() => {
-    console.error("Forced shutdown — requests did not finish in time");
-    process.exit(1);
-  }, 10000);
+    console.error('Forced shutdown — requests did not finish in time')
+    process.exit(1)
+  }, 10000)
 
   server.close(() => {
-    clearTimeout(forceExitTimer);
-    console.log("HTTP server closed cleanly");
-    process.exit(0);
-  });
+    clearTimeout(forceExitTimer)
+    console.log('HTTP server closed cleanly')
+    process.exit(0)
+  })
 }
 
-process.on("SIGINT", () => gracefulShutdown("SIGINT"));
-process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'))
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
 //
 // const PORT = process.env.PORT || 8080;
 // app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 //
-
-
 
