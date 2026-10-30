@@ -1341,6 +1341,175 @@
     }
   }
 
+  /* ---------- busy overlay ---------- */
+  @keyframes busyFade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes busyPop {
+    from {
+      opacity: 0;
+      transform: translateY(16px) scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  @keyframes busySpin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes busySpinRev {
+    to {
+      transform: rotate(-360deg);
+    }
+  }
+  @keyframes busyFloat {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-4px);
+    }
+  }
+  @keyframes busySlide {
+    0% {
+      transform: translateX(-120%);
+    }
+    100% {
+      transform: translateX(320%);
+    }
+  }
+  @keyframes busyDot {
+    0%,
+    80%,
+    100% {
+      opacity: 0.2;
+    }
+    40% {
+      opacity: 1;
+    }
+  }
+
+  .busy-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    background: rgba(244, 242, 236, 0.62);
+    backdrop-filter: blur(7px);
+    animation: busyFade 0.2s ease-out;
+    cursor: progress;
+  }
+  .busy-card {
+    width: min(380px, 100%);
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    box-shadow: var(--shadow-lg);
+    padding: 30px 28px 24px;
+    text-align: center;
+    animation: busyPop 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  }
+  .busy-orbit {
+    position: relative;
+    width: 92px;
+    height: 92px;
+    margin: 0 auto 20px;
+  }
+  .busy-orbit .ring {
+    position: absolute;
+    border-radius: 50%;
+    border: 3px solid transparent;
+  }
+  .busy-orbit .r1 {
+    inset: 0;
+    border-top-color: var(--sage-deep);
+    border-right-color: var(--sage);
+    animation: busySpin 1.1s linear infinite;
+  }
+  .busy-orbit .r2 {
+    inset: 11px;
+    border-bottom-color: var(--sky);
+    border-left-color: var(--lav);
+    animation: busySpinRev 1.6s linear infinite;
+  }
+  .busy-orbit .core {
+    position: absolute;
+    inset: 27px;
+    border-radius: 13px;
+    background: linear-gradient(150deg, var(--sage), var(--sage-deep));
+    display: grid;
+    place-items: center;
+    box-shadow: 0 6px 16px rgba(124, 166, 125, 0.4);
+    animation: busyFloat 1.6s ease-in-out infinite;
+  }
+  .busy-title {
+    font-family: var(--serif);
+    font-size: 19px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .busy-dots {
+    display: inline-flex;
+    gap: 3px;
+    margin-left: 4px;
+  }
+  .busy-dots i {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--sage-deep);
+    animation: busyDot 1.2s infinite;
+  }
+  .busy-dots i:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+  .busy-dots i:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+  .busy-sub {
+    margin-top: 6px;
+    font-size: 13px;
+    color: var(--muted);
+    min-height: 19px;
+  }
+  .busy-bar {
+    position: relative;
+    height: 6px;
+    margin: 20px 0 14px;
+    background: var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .busy-bar i {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 34%;
+    border-radius: 6px;
+    background: linear-gradient(
+      90deg,
+      var(--sage),
+      var(--sage-deep),
+      var(--sky)
+    );
+    animation: busySlide 1.3s ease-in-out infinite;
+  }
+  .busy-hint {
+    font-size: 11.5px;
+    color: var(--faint);
+  }
+
   /* ---------- login ---------- */
   .loginwrap {
     min-height: 100vh;
@@ -3235,12 +3404,7 @@
 
     const saveAssignments = useCallback(
       async next => {
-        if (assignmentSaveLockRef.current) {
-          alert(
-            'Another assignment save is in progress — please wait a moment and try again.'
-          )
-          return { ok: false }
-        }
+        if (assignmentSaveLockRef.current) return { ok: false }
         assignmentSaveLockRef.current = true
         try {
           const res = await gsPost('setAssignments', next)
@@ -13739,6 +13903,37 @@
     )
   }
 
+  function BusyOverlay({ busy }) {
+    if (!busy) return null
+    return ReactDOM.createPortal(
+      <div className='busy-scrim' role='alertdialog' aria-busy='true'>
+        <div className='busy-card'>
+          <div className='busy-orbit'>
+            <span className='ring r1' />
+            <span className='ring r2' />
+            <span className='core'>{I.box({ stroke: '#fff' })}</span>
+          </div>
+          <div className='busy-title'>
+            {busy.title}
+            <span className='busy-dots'>
+              <i />
+              <i />
+              <i />
+            </span>
+          </div>
+          <div className='busy-sub'>{busy.sub}</div>
+          <div className='busy-bar'>
+            <i />
+          </div>
+          <div className='busy-hint'>
+            Please don't click anything — saving to the database.
+          </div>
+        </div>
+      </div>,
+      document.body
+    )
+  }
+
   function AssignWork({
     division,
     products,
@@ -13773,7 +13968,8 @@
       a => a.division === division && a.stage === 'branchupload'
     )
 
-    const assignBranches = async () => {
+    const assignBranches = () => {
+      if (busyRef.current) return
       if (!selBranchMember || selBranches.length === 0) {
         setBranchErr('Select a team member and at least one branch.')
         return
@@ -13783,48 +13979,80 @@
         setBranchErr('Member not found.')
         return
       }
-
-      let updated = [...assignments]
-      selBranches.forEach(branch => {
-        updated = updated.filter(
-          a =>
-            !(
-              a.division === division &&
-              a.memberId === selBranchMember &&
-              a.stage === 'branchupload' &&
-              a.sku.trim().toLowerCase() === branch.trim().toLowerCase()
+      runExclusive(
+        'Assigning branches',
+        `${selBranches.length} branch(es) → ${member.name}`,
+        async () => {
+          let updated = [...assignments]
+          selBranches.forEach(branch => {
+            updated = updated.filter(
+              a =>
+                !(
+                  a.division === division &&
+                  a.memberId === selBranchMember &&
+                  a.stage === 'branchupload' &&
+                  a.sku.trim().toLowerCase() === branch.trim().toLowerCase()
+                )
             )
-        )
-        updated.push({
-          id: uid(),
-          memberId: selBranchMember,
-          managerId: isMasterOrAdmin ? 'master' : myMemberId,
-          sku: branch,
-          stage: 'branchupload',
-          division,
-          assignedAt: now()
-        })
-      })
-
-      setBranchErr('')
-      setBranchMsg('')
-      const result = await onSaveAssignments(updated)
-      if (!result || result.ok === false) {
-        setBranchErr(
-          `Could not save${result?.error ? ': ' + result.error : ''}.`
-        )
-        return
-      }
-      setSelBranches([])
-      setBranchMsg(
-        `✓ Assigned ${selBranches.length} branch(es) to ${member.name}.`
+            updated.push({
+              id: uid(),
+              memberId: selBranchMember,
+              managerId: isMasterOrAdmin ? 'master' : myMemberId,
+              sku: branch,
+              stage: 'branchupload',
+              division,
+              assignedAt: now()
+            })
+          })
+          setBranchErr('')
+          setBranchMsg('')
+          const result = await onSaveAssignments(updated)
+          if (!result || result.ok === false) {
+            setBranchErr(
+              `Could not save${result?.error ? ': ' + result.error : ''}.`
+            )
+            return
+          }
+          setBranchMsg(
+            `✓ Assigned ${selBranches.length} branch(es) to ${member.name}.`
+          )
+          setSelBranches([])
+        }
       )
     }
 
-    const unassignBranch = (id, branch, memberName) => {
-      onSaveAssignments(assignments.filter(a => a.id !== id))
-      setBranchMsg(`✓ Removed ${branch} from ${memberName}.`)
-    }
+    const unassignBranch = (id, branch, memberName) =>
+      runExclusive(
+        'Removing branch',
+        `${branch} from ${memberName}`,
+        async () => {
+          await onSaveAssignments(assignments.filter(a => a.id !== id))
+          setBranchMsg(`✓ Removed ${branch} from ${memberName}.`)
+        }
+      )
+
+    const unassign = (id, sku, memberName) =>
+      runExclusive(
+        'Removing assignment',
+        `${sku} from ${memberName}`,
+        async () => {
+          await gsPost('appendAssignmentHistory', {
+            id: uid(),
+            action: 'unassigned',
+            sku,
+            division,
+            fromMemberId: id,
+            toMemberId: null,
+            managerId: isMasterOrAdmin ? 'master' : myMemberId,
+            stage: '',
+            note: `Removed by ${auth.name}`,
+            at: now()
+          })
+          await onSaveAssignments(assignments.filter(a => a.id !== id))
+          setAssErr('')
+          setAssMsg(`✓ Removed ${sku} from ${memberName}.`)
+        }
+      )
     // const [selStage, setSelStage] = useState("");
     const [selVendor, setSelVendor] = useState('')
     const [selSetNo, setSelSetNo] = useState('')
@@ -13833,7 +14061,21 @@
     const [expandedMember, setExpandedMember] = useState(null)
     const [assErr, setAssErr] = useState('')
     const [assMsg, setAssMsg] = useState('')
-    const [skuSearch, setSkuSearch] = useState('')
+    const [skuSearch, setSkuSearch] = useState('') // <-- put this back
+    const [busy, setBusy] = useState(null) // { title, sub } while saving
+    const busyRef = useRef(false) // instant lock (state is too slow for double-clicks)
+
+    const runExclusive = async (title, sub, fn) => {
+      if (busyRef.current) return // already running → ignore the extra click
+      busyRef.current = true
+      setBusy({ title, sub })
+      try {
+        return await fn(nextSub => setBusy({ title, sub: nextSub }))
+      } finally {
+        busyRef.current = false
+        setBusy(null)
+      }
+    }
     const [showSkuSug, setShowSkuSug] = useState(false)
 
     const isMasterOrAdmin = auth.role === 'master' || auth.role === 'admin'
@@ -14179,7 +14421,8 @@
 
     // const [selStages, setSelStages] = useState([]);
 
-    const assignSku = async () => {
+    const assignSku = () => {
+      if (busyRef.current) return
       if (!selMember || selSkus.length === 0 || selStages.length === 0) {
         setAssErr('Select a member, at least one SKU, and at least one stage.')
         return
@@ -14190,100 +14433,123 @@
         return
       }
 
-      let updatedAssignments = [...assignments]
-      const memberStageKeys = (member?.stages || '')
-        .split(',')
-        .map(s => s.trim())
-        .filter(s => s && !['assign', 'qcaudit', 'bulk'].includes(s))
-      const effectiveStages = selStages.includes('all')
-        ? memberStageKeys
-        : selStages
+      runExclusive(
+        'Assigning cards',
+        `${selSkus.length} SKU(s) → ${member.name}`,
+        async update => {
+          let updatedAssignments = [...assignments]
+          const memberStageKeys = (member?.stages || '')
+            .split(',')
+            .map(s => s.trim())
+            .filter(s => s && !['assign', 'qcaudit', 'bulk'].includes(s))
+          const effectiveStages = selStages.includes('all')
+            ? memberStageKeys
+            : selStages
 
-      selSkus.forEach(sku => {
-        const skuLower = sku.trim().toLowerCase()
-        updatedAssignments = updatedAssignments.filter(
-          a =>
-            !(
-              a.division === division &&
-              a.memberId === selMember &&
-              a.sku.trim().toLowerCase() === skuLower &&
-              a.stage === 'all'
+          selSkus.forEach(sku => {
+            const skuLower = sku.trim().toLowerCase()
+            updatedAssignments = updatedAssignments.filter(
+              a =>
+                !(
+                  a.division === division &&
+                  a.memberId === selMember &&
+                  a.sku.trim().toLowerCase() === skuLower &&
+                  a.stage === 'all'
+                )
             )
-        )
-        effectiveStages.forEach(stageKey => {
-          updatedAssignments = updatedAssignments.filter(
-            a =>
-              !(
-                a.division === division &&
-                a.memberId === selMember &&
-                a.sku.trim().toLowerCase() === skuLower &&
-                a.stage === stageKey
+            effectiveStages.forEach(stageKey => {
+              updatedAssignments = updatedAssignments.filter(
+                a =>
+                  !(
+                    a.division === division &&
+                    a.memberId === selMember &&
+                    a.sku.trim().toLowerCase() === skuLower &&
+                    a.stage === stageKey
+                  )
               )
+              updatedAssignments.push({
+                id: uid(),
+                memberId: selMember,
+                managerId: isMasterOrAdmin ? 'master' : myMemberId,
+                sku,
+                stage: stageKey,
+                division,
+                assignedAt: now()
+              })
+            })
+          })
+
+          setAssErr('')
+          setAssMsg('')
+          update('Saving assignments…')
+          const result = await onSaveAssignments(updatedAssignments)
+          if (!result || result.ok === false) {
+            setAssErr(
+              `Could not save this assignment${
+                result?.error ? ': ' + result.error : ''
+              } — nothing was written, please retry.`
+            )
+            return
+          }
+
+          // History log — awaited in small batches instead of hundreds in parallel
+          const historyRows = []
+          selSkus.forEach(sku =>
+            effectiveStages.forEach(stageKey =>
+              historyRows.push({
+                id: uid(),
+                action: 'assigned',
+                sku,
+                division,
+                fromMemberId: null,
+                toMemberId: selMember,
+                managerId: isMasterOrAdmin ? 'master' : myMemberId,
+                stage: stageKey,
+                note: '',
+                at: now()
+              })
+            )
           )
-          updatedAssignments.push({
-            id: uid(),
-            memberId: selMember,
-            managerId: isMasterOrAdmin ? 'master' : myMemberId,
-            sku,
-            stage: stageKey,
-            division,
-            assignedAt: now()
-          })
-        })
-      })
+          const BATCH = 5
+          for (let i = 0; i < historyRows.length; i += BATCH) {
+            update(
+              `Writing history ${Math.min(i + BATCH, historyRows.length)} / ${
+                historyRows.length
+              }`
+            )
+            await Promise.all(
+              historyRows
+                .slice(i, i + BATCH)
+                .map(r => gsPost('appendAssignmentHistory', r))
+            )
+          }
 
-      setAssErr('')
-      setAssMsg('')
-      const result = await onSaveAssignments(updatedAssignments)
-      if (!result || result.ok === false) {
-        setAssErr(
-          `Could not save this assignment${
-            result?.error ? ': ' + result.error : ''
-          } — nothing was written, please retry.`
-        )
-        return
-      }
-
-      selSkus.forEach(sku => {
-        effectiveStages.forEach(stageKey => {
-          gsPost('appendAssignmentHistory', {
-            id: uid(),
-            action: 'assigned',
-            sku,
-            division,
-            fromMemberId: null,
-            toMemberId: selMember,
-            managerId: isMasterOrAdmin ? 'master' : myMemberId,
-            stage: stageKey,
-            note: '',
-            at: now()
-          })
-        })
-      })
-      setSelSkus([])
-      setSelStages([])
-      setAssMsg(
-        `✓ Assigned ${selSkus.length} SKU(s) × ${selStages.length} stage(s) to ${member.name}.`
+          setAssMsg(
+            `✓ Assigned ${selSkus.length} SKU(s) × ${effectiveStages.length} stage(s) to ${member.name}.`
+          )
+          setSelSkus([])
+          setSelStages([])
+        }
       )
     }
 
-    const unassign = (id, sku, memberName) => {
-      gsPost('appendAssignmentHistory', {
-        id: uid(),
-        action: 'unassigned',
-        sku,
-        division,
-        fromMemberId: id, // the assignment id being removed
-        toMemberId: null,
-        managerId: isMasterOrAdmin ? 'master' : myMemberId,
-        stage: '',
-        note: `Removed by ${auth.name}`,
-        at: now()
-      })
-      onSaveAssignments(assignments.filter(a => a.id !== id))
-      setAssErr('')
-      setAssMsg(`✓ Removed ${sku} from ${memberName}.`)
-    }
+    // const unassign = (id, sku, memberName) => {
+    //   gsPost('appendAssignmentHistory', {
+    //     id: uid(),
+    //     action: 'unassigned',
+    //     sku,
+    //     division,
+    //     fromMemberId: id, // the assignment id being removed
+    //     toMemberId: null,
+    //     managerId: isMasterOrAdmin ? 'master' : myMemberId,
+    //     stage: '',
+    //     note: `Removed by ${auth.name}`,
+    //     at: now()
+    //   })
+    //   onSaveAssignments(assignments.filter(a => a.id !== id))
+    //   setAssErr('')
+    //   setAssMsg(`✓ Removed ${sku} from ${memberName}.`)
+    // }
 
     const selectTop = n => {
       setAssMsg('')
@@ -14347,6 +14613,7 @@
     // const assignableStages = STAGES.filter(s => s.k !== "qc" && s.k !== "scan");
     return (
       <div>
+        <BusyOverlay busy={busy} />
         <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
           {(canManageMembers
             ? [
@@ -15936,8 +16203,11 @@
                 className='primary'
                 style={{ marginTop: 12 }}
                 onClick={assignSku}
+                disabled={!!busy}
               >
-                Assign{selSkus.length > 0 ? ` (${selSkus.length})` : ''}
+                {busy
+                  ? 'Assigning…'
+                  : `Assign${selSkus.length > 0 ? ` (${selSkus.length})` : ''}`}
               </button>
               {assErr && (
                 <div
