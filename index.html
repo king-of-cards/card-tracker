@@ -1692,17 +1692,9 @@
 </style>
 <div id="root"></div>
 <script type="text/babel">
-  import React, {
-    useState,
-    useEffect,
-    useMemo,
-    useRef,
-    useCallback
-  } from 'react'
-  import { createPortal } from 'react-dom'
-  import * as XLSX from 'xlsx'
-  import Chart from 'chart.js/auto'
-  import './index.css'
+  const { useState, useEffect, useMemo, useRef, useCallback } = React
+  const { createPortal } = ReactDOM
+  // XLSX and Chart are already globals from the CDN scripts
 
   /* ---------- constants ---------- */
   const DIVISIONS = ['KOC Cards', 'Bombay Cards']
