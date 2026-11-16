@@ -1,17 +1,35 @@
 /* ===================== TOP OF FILE ===================== */
+//
+// Changes in this version (search for the tags):
+//   🆕 SKIP    — "skip a stage" (single + bulk): a skipped stage counts as done everywhere
+//   🆕 ASSIGN  — Assign Work page: updateMember, removeMember, removeAssignments,
+//                branch access rows in setAssignments
+//   🆕 QC      — POST /api/bulkQcApprove (approve many cards at once)
+//   🆕 LOGIN   — POST /api/login: passwords are checked on the server
+//   🐞 FIX     — bugs found along the way:
+//                • comments wiped on bulk change
+//                • export: QC approval counts as the QC stage being done,
+//                  QC-flagged stages count as issues (same rules as the dashboard)
+//                • teamStageStats: QC-flagged stages count as issues
+//                • memberStageDetail: cards with no stage row count as Not Started,
+//                  and the set_no filter works
 
 require('dotenv').config()
 const express = require('express')
 const mysql = require('mysql2/promise')
 const cors = require('cors')
-const { randomUUID, createHash } = require('node:crypto')
+const {
+  randomUUID,
+  createHash,
+  scryptSync,
+  timingSafeEqual
+} = require('node:crypto')
 
 const app = express()
-app.use(cors({ origin: '*' }))
+app.use(cors({ origin: '*', maxAge: 86400 }))
 app.use(express.json({ limit: '25mb' }))
 
-/* ===================== 🔄 CHANGED: connection ===================== */
-// Removed: PROJECT_ID, APP_DATASET, DEST_DATASET, LOCATION, new BigQuery(...)
+/* ===================== connection ===================== */
 
 const mysqlPool = mysql.createPool({
   host: process.env.MYSQL_HOST,
@@ -28,7 +46,7 @@ const mysqlPool = mysql.createPool({
   multipleStatements: false,
   connectTimeout: 20000,
 
-  // new: keep connections alive and drop idle ones before the network kills them
+  // keep connections alive and drop idle ones before the network kills them
   enableKeepAlive: true,
   keepAliveInitialDelay: 10000,
   maxIdle: 2,
@@ -40,10 +58,9 @@ mysqlPool
   .then(() => console.log('MySQL connected'))
   .catch(e => console.error('MySQL connection failed:', e.message))
 
-/* ===================== 🔄 CHANGED: query layer ===================== */
-// Removed: toBqParams, isWrite queue, writeQueue, BigQuery execQuery
+/* ===================== query layer ===================== */
 
-// Same name, same usage: T('products'). Only the quoting changed.
+// Usage: T('products') -> `products`
 const T = table => `\`${table}\``
 
 // $1, $2 -> ?  (handles reused / out-of-order placeholders)
@@ -100,9 +117,6 @@ async function runQuery (sql, params = []) {
   throw lastErr
 }
 
-// FIXED: passes a client object with .query(), so it works with
-// functions like loadFullProduct(client, id) and hydrateProducts(client, rows)
-//
 //   await db.transaction(async client => {
 //     await client.query('UPDATE ... WHERE id = $1', [id])
 //     await client.query('INSERT ...', [...])
@@ -123,11 +137,9 @@ async function transaction (fn) {
   }
 }
 
-const db = { query: runQuery, transaction } // 🔄 CHANGED (added transaction)
-const pool = db // ✅ NO CHANGE
-const MAX_PRODUCTS = 100000 // ✅ NO CHANGE
-
-/* ===================== ✅ NO CHANGE ===================== */
+const db = { query: runQuery, transaction }
+const pool = db // eslint-disable-line no-unused-vars
+const MAX_PRODUCTS = 100000
 
 async function getProductCount (client = db) {
   const { rows } = await client.query(
@@ -166,20 +178,24 @@ const STORES = [
   'Chitradurga'
 ]
 
-const PIPELINE_STAGE_COUNT = STAGE_KEYS.filter(k => k !== 'finalqc').length // 11
+// The 11 production stages a card goes through ('scan' and 'finalqc' are not
+// part of the pipeline). A card is complete when all 11 are done.
+const PIPELINE_STAGE_COUNT = STAGE_KEYS.filter(
+  k => k !== 'finalqc' && k !== 'scan'
+).length // 11
 
 app.get('/', (req, res) =>
   res.json({ message: 'Card Tracker API is running!' })
 )
 
-/* ===================== 🔄 CHANGED: health routes ===================== */
+/* ===================== health routes ===================== */
 
 app.get('/health', async (req, res) => {
   try {
     await db.query('SELECT 1')
     res.json({
       ok: true,
-      version: 'assignments-no-txn-mysql',
+      version: 'mysql-skip-assign-qc-login-v3', // shows the new code is running
       db: 'connected to MySQL successfully!'
     })
   } catch (e) {
@@ -198,9 +214,8 @@ app.get('/health/pool', (req, res) => {
   })
 })
 
-/* ===================== ✅ NO CHANGE ===================== */
-
 async function loadFullProduct (client, productId) {
+  // eslint-disable-line no-unused-vars
   const { rows: prows } = await client.query(
     `SELECT * FROM ${T('products')} WHERE id = $1`,
     [productId]
@@ -209,8 +224,7 @@ async function loadFullProduct (client, productId) {
   return hydrateProducts(client, prows).then(arr => arr[0])
 }
 
-/* ===================== 🔄 CHANGED: value helpers ===================== */
-// Removed: BigQuery { value: "..." } handling
+/* ===================== value helpers ===================== */
 
 const toDate = v => {
   if (!v) return null
@@ -248,7 +262,7 @@ const parseJson = (v, fallback = null) => {
   return v
 }
 
-// 🆕 NEW helper: replaces `IN UNNEST($1)` and splits very large id lists
+// Splits very large id lists (used with `IN ($1)`)
 const chunk = (arr, size = 5000) => {
   const out = []
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
@@ -270,13 +284,11 @@ async function hydrateProducts (client, productRows) {
   if (productRows.length === 0) return []
   const ids = productRows.map(p => String(p.id))
 
-  // 🔄 CHANGED: was `WHERE product_id IN UNNEST($1)`
   const [stageRows, storeRows] = await Promise.all([
     selectByProductIds(client, 'stage_entries', ids),
     selectByProductIds(client, 'stores', ids)
   ])
 
-  // ✅ NO CHANGE
   const stagesByProduct = {}
   stageRows.forEach(r => {
     ;(stagesByProduct[r.product_id] ||= {})[r.stage_key] = {
@@ -295,7 +307,6 @@ async function hydrateProducts (client, productRows) {
     }
   })
 
-  // 🔄 CHANGED: dispatched/received/missing/damaged conversions
   const storesByProduct = {}
   storeRows.forEach(r => {
     ;(storesByProduct[r.product_id] ||= {})[r.store] = {
@@ -310,7 +321,6 @@ async function hydrateProducts (client, productRows) {
     }
   })
 
-  // ✅ NO CHANGE (entire return block)
   return productRows.map(p => {
     const stages = {}
     STAGE_KEYS.forEach(k => {
@@ -318,6 +328,7 @@ async function hydrateProducts (client, productRows) {
         status: 'Not Started',
         person: '',
         comments: '',
+        skipped: false,
         at: ''
       }
       if (k === 'dimensions' && !stages[k].width) {
@@ -361,12 +372,10 @@ async function hydrateProducts (client, productRows) {
   })
 }
 
-/* ===================== ✅ NO CHANGE: GET /api/getAll ===================== */
-// Only the comment changed. All queries are standard SQL and work in MySQL as they are.
+/* ===================== GET /api/getAll ===================== */
 
 app.get('/api/getAll', async (req, res) => {
   try {
-    // Independent queries run in parallel
     const [
       { rows: productRows },
       { rows: vendorRows },
@@ -404,6 +413,8 @@ app.get('/api/getAll', async (req, res) => {
       ;(vendors[v.division] ||= []).push(v.vendor_name)
     })
 
+    // NOTE: `password` is still sent because the OLD app logs in with it.
+    // Remove the password line here and in /api/getUsers once the old app is retired.
     const teamMembers = teamRows.map(u => ({
       id: u.id,
       name: u.name,
@@ -478,7 +489,7 @@ app.get('/api/getAll', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: GET /api/getUsers ===================== */
+/* ===================== GET /api/getUsers ===================== */
 
 app.get('/api/getUsers', async (req, res) => {
   try {
@@ -488,7 +499,7 @@ app.get('/api/getUsers', async (req, res) => {
         id: u.id,
         name: u.name,
         email: u.email,
-        password: u.password,
+        password: u.password, // see the NOTE in /api/getAll
         role: u.role,
         stages: parseJson(u.stages, []),
         division: u.division,
@@ -502,7 +513,100 @@ app.get('/api/getUsers', async (req, res) => {
   }
 })
 
-/* ===================== 🆕 NEW helpers (put above the two routes below) ===================== */
+/* ===================== 🆕 LOGIN: POST /api/login ===================== */
+// Checks the password on the server and returns the user WITHOUT the password.
+// Works with plain-text passwords (what is stored today) and with hashed ones
+// in the form  scrypt$<salt hex>$<hash hex>.
+// After 5 wrong passwords for the same email, that email is locked for 5 minutes.
+// Body: { email, password }
+
+const LOGIN_MAX_FAILS = 5
+const LOGIN_LOCK_MS = 5 * 60 * 1000
+const loginFails = new Map() // email -> { count, until }
+
+function passwordMatches (stored, given) {
+  stored = String(stored || '')
+  given = String(given || '')
+  if (!stored || !given) return false
+  if (stored.startsWith('scrypt$')) {
+    const [, saltHex, hashHex] = stored.split('$')
+    if (!saltHex || !hashHex) return false
+    const expected = Buffer.from(hashHex, 'hex')
+    const actual = scryptSync(
+      given,
+      Buffer.from(saltHex, 'hex'),
+      expected.length
+    )
+    return (
+      actual.length === expected.length && timingSafeEqual(actual, expected)
+    )
+  }
+  // plain text: compare hashes so the comparison takes the same time
+  const a = createHash('sha256').update(stored).digest()
+  const b = createHash('sha256').update(given).digest()
+  return timingSafeEqual(a, b)
+}
+
+app.post('/api/login', async (req, res) => {
+  const email = String(req.body?.email || '')
+    .trim()
+    .toLowerCase()
+  const password = String(req.body?.password || '')
+  if (!email || !password)
+    return res
+      .status(400)
+      .json({ ok: false, error: 'Email and password are required.' })
+
+  const now = Date.now()
+  const fails = loginFails.get(email)
+  if (fails && fails.until > now) {
+    const mins = Math.ceil((fails.until - now) / 60000)
+    return res.status(429).json({
+      ok: false,
+      error: `Too many wrong attempts. Try again in ${mins} minute${
+        mins === 1 ? '' : 's'
+      }.`
+    })
+  }
+
+  try {
+    const { rows } = await db.query(
+      `SELECT * FROM ${T('users')} WHERE LOWER(email) = $1 LIMIT 1`,
+      [email]
+    )
+    const u = rows[0]
+    if (!u || !passwordMatches(u.password, password)) {
+      const count = (fails && fails.until <= now ? 0 : fails?.count || 0) + 1
+      loginFails.set(email, {
+        count,
+        until: count >= LOGIN_MAX_FAILS ? now + LOGIN_LOCK_MS : 0
+      })
+      return res
+        .status(401)
+        .json({ ok: false, error: 'Wrong email or password.' })
+    }
+
+    loginFails.delete(email)
+    res.json({
+      ok: true,
+      user: {
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        stages: parseJson(u.stages, []),
+        division: u.division,
+        managerId: u.manager_id,
+        joinedAt: iso(u.joined_at)
+      }
+    })
+  } catch (e) {
+    console.error('login error', e)
+    res.status(500).json({ ok: false, error: 'Could not sign in right now.' })
+  }
+})
+
+/* ===================== helpers used by the routes below ===================== */
 
 // MySQL DATETIME does not accept "2026-11-06T10:30:00.000Z".
 // This converts any date/ISO value to "2026-11-06 10:30:00" (UTC), or null.
@@ -526,7 +630,7 @@ async function txWithRetry (fn) {
   throw lastErr
 }
 
-/* ===================== 🔄 CHANGED: POST /api/batchUpsertProducts ===================== */
+/* ===================== POST /api/batchUpsertProducts ===================== */
 
 const UPSERT_CHUNK_SIZE = 100
 
@@ -546,7 +650,6 @@ app.post('/api/batchUpsertProducts', async (req, res) => {
     const nowDt = toMysqlDt(new Date())
 
     // ---- Cap check ----
-    // 🔄 CHANGED: was `WHERE id IN UNNEST($1)`
     const currentCount = await getProductCount(db)
     const existingIdSet = new Set()
     for (const part of chunk([...byId.keys()])) {
@@ -604,6 +707,7 @@ app.post('/api/batchUpsertProducts', async (req, res) => {
               s.status || 'Not Started',
               s.person || null,
               s.comments || '',
+              s.skipped ? 1 : 0,
               toMysqlDt(s.at) || nowDt,
               numOrNull(s.width),
               numOrNull(s.height),
@@ -631,9 +735,8 @@ app.post('/api/batchUpsertProducts', async (req, res) => {
         }
       }
 
-      // 🔄 CHANGED: three MERGEs become three INSERT ... ON DUPLICATE KEY UPDATE,
-      // all inside one transaction (chunk is all-or-nothing, same as before).
-      // Note: created_at is not updated on existing rows, same as the old MERGE.
+      // Three INSERT ... ON DUPLICATE KEY UPDATE in one transaction.
+      // created_at is not updated on existing rows.
       await txWithRetry(async client => {
         if (productRows.length) {
           await client.query(
@@ -654,12 +757,13 @@ app.post('/api/batchUpsertProducts', async (req, res) => {
         if (stageRows.length) {
           await client.query(
             `INSERT INTO ${T('stage_entries')}
-               (product_id, stage_key, status, person, comments, updated_at,
-                width_cm, height_cm, weight_gm)
+               (product_id, stage_key, status, person, comments, skipped,
+                updated_at, width_cm, height_cm, weight_gm)
              VALUES $1
              ON DUPLICATE KEY UPDATE
                status = VALUES(status), person = VALUES(person),
-               comments = VALUES(comments), updated_at = VALUES(updated_at),
+               comments = VALUES(comments), skipped = VALUES(skipped),
+               updated_at = VALUES(updated_at),
                width_cm = VALUES(width_cm), height_cm = VALUES(height_cm),
                weight_gm = VALUES(weight_gm)`,
             [stageRows]
@@ -690,39 +794,46 @@ app.post('/api/batchUpsertProducts', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: POST /api/batchPatchStage ===================== */
+/* ===================== POST /api/batchPatchStage ===================== */
+// Changes one stage on many products.
+//   { status }          → sets the status (the frontend also sends skipped:false)
+//   { skipped: true }   → "not needed": status, person and comments are kept
+//   { skipped: false }  → needed again: the stage goes back to its last status
+// A comment is only changed when one is sent; sending "" clears it on purpose.
 
 app.post('/api/batchPatchStage', async (req, res) => {
   const { ids, stageKey, patch } = req.body
   if (!Array.isArray(ids) || !stageKey || !patch)
     return res.status(400).json({ ok: false, error: 'bad payload' })
+  if (!STAGE_KEYS.includes(String(stageKey)))
+    return res
+      .status(400)
+      .json({ ok: false, error: `unknown stage "${stageKey}"` })
   if (ids.length === 0) return res.json({ ok: true, count: 0 })
 
   try {
     const uniqueIds = [...new Set(ids.map(i => String(i)))]
     const nowDt = toMysqlDt(new Date())
 
-    // Same values as before
+    // null = "not sent" → the stored value is kept (COALESCE below)
     const status = patch.status || null
     const person = patch.person ?? null
-    const comments = patch.comments ?? ''
+    const comments = patch.comments ?? null
     const skipped = patch.skipped == null ? null : patch.skipped ? 1 : 0
 
     await txWithRetry(async client => {
       for (const part of chunk(uniqueIds, 1000)) {
-        // Rows used only when the stage entry does not exist yet (INSERT path)
+        // Used only when the stage row does not exist yet (INSERT path)
         const rows = part.map(id => [
           id,
           String(stageKey),
           status || 'Not Started',
           person,
-          comments,
+          comments ?? '',
           skipped ?? 0,
           nowDt
         ])
 
-        // If the row exists, the UPDATE part runs with COALESCE, so fields
-        // you did not send keep their current values (same as the old MERGE).
         await client.query(
           `INSERT INTO ${T('stage_entries')}
              (product_id, stage_key, status, person, comments, skipped, updated_at)
@@ -743,14 +854,14 @@ app.post('/api/batchPatchStage', async (req, res) => {
       }
     })
 
-    res.json({ ok: true, count: ids.length })
+    res.json({ ok: true, count: uniqueIds.length })
   } catch (e) {
     console.error('batchPatchStage error', e.message)
     res.status(500).json({ ok: false, error: e.message })
   }
 })
 
-/* ===================== 🔄 CHANGED: POST /api/patchQCVerdict ===================== */
+/* ===================== POST /api/patchQCVerdict ===================== */
 
 app.post('/api/patchQCVerdict', async (req, res) => {
   const { id, verdict, issues } = req.body
@@ -768,7 +879,7 @@ app.post('/api/patchQCVerdict', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: POST /api/appendQCAudit ===================== */
+/* ===================== POST /api/appendQCAudit ===================== */
 
 app.post('/api/appendQCAudit', async (req, res) => {
   const e = req.body
@@ -801,7 +912,67 @@ app.post('/api/appendQCAudit', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: POST /api/upsertStore ===================== */
+/* ===================== POST /api/bulkQcApprove ===================== */
+// Approves many cards in one transaction and writes one qc_audit row per card,
+// exactly like approving them one by one. Used by the QC Audit bulk bar.
+// Body: { ids: [...], auditor: "Rahul", comments?: "" }
+
+app.post('/api/bulkQcApprove', async (req, res) => {
+  const ids = Array.isArray(req.body?.ids)
+    ? [...new Set(req.body.ids.map(String).filter(Boolean))]
+    : []
+  const auditor = String(req.body?.auditor || '').trim() || 'Unattributed'
+  const comments = String(req.body?.comments || '')
+  if (!ids.length)
+    return res.status(400).json({ ok: false, error: 'ids required' })
+
+  try {
+    const nowDt = toMysqlDt(new Date())
+    let count = 0
+    await txWithRetry(async client => {
+      count = 0 // reset if the transaction is retried
+      for (const part of chunk(ids, 1000)) {
+        const { rows } = await client.query(
+          `SELECT id, sku, division FROM ${T('products')} WHERE id IN ($1)`,
+          [part]
+        )
+        if (!rows.length) continue
+        const found = rows.map(r => String(r.id))
+        await client.query(
+          `UPDATE ${T('products')}
+           SET verdict = 'Approved', issues = $1, updated_at = $2
+           WHERE id IN ($3)`,
+          [comments, nowDt, found]
+        )
+        await client.query(
+          `INSERT INTO ${T('qc_audit')}
+             (id, audited_at, auditor_name, product_id, sku, division, verdict, comments, stages_sent_back)
+           VALUES $1`,
+          [
+            rows.map(r => [
+              randomUUID(),
+              nowDt,
+              auditor,
+              String(r.id),
+              r.sku,
+              r.division,
+              'Approved',
+              comments,
+              '[]'
+            ])
+          ]
+        )
+        count += rows.length
+      }
+    })
+    res.json({ ok: true, count })
+  } catch (e) {
+    console.error('bulkQcApprove error', e)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+/* ===================== POST /api/upsertStore ===================== */
 
 app.post('/api/upsertStore', async (req, res) => {
   const { productId, store, storeData } = req.body
@@ -855,7 +1026,7 @@ app.post('/api/upsertStore', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: POST /api/appendAssignmentHistory ===================== */
+/* ===================== POST /api/appendAssignmentHistory ===================== */
 
 app.post('/api/appendAssignmentHistory', async (req, res) => {
   const e = req.body
@@ -884,7 +1055,7 @@ app.post('/api/appendAssignmentHistory', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: POST /api/appendAssignmentHistoryBatch ===================== */
+/* ===================== POST /api/appendAssignmentHistoryBatch ===================== */
 
 app.post('/api/appendAssignmentHistoryBatch', async (req, res) => {
   const list = Array.isArray(req.body) ? req.body : []
@@ -925,9 +1096,7 @@ app.post('/api/appendAssignmentHistoryBatch', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: GET /api/assignmentHistory ===================== */
-// `($1 IS NULL OR ah.division = $1)` works in MySQL as is. The placeholder
-// converter handles the reused $1.
+/* ===================== GET /api/assignmentHistory ===================== */
 
 app.get('/api/assignmentHistory', async (req, res) => {
   try {
@@ -952,7 +1121,7 @@ app.get('/api/assignmentHistory', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: POST /api/deleteProduct ===================== */
+/* ===================== POST /api/deleteProduct ===================== */
 
 app.post('/api/deleteProduct', async (req, res) => {
   const { id } = req.body
@@ -960,9 +1129,7 @@ app.post('/api/deleteProduct', async (req, res) => {
   try {
     const pid = String(id)
 
-    // MySQL cannot run several statements in one query (multipleStatements is
-    // off, which is safer). They now run in one transaction, so either
-    // everything is deleted or nothing is. The product row goes last.
+    // One transaction: either everything is deleted or nothing is.
     await txWithRetry(async client => {
       await client.query(
         `DELETE FROM ${T('stage_entries')} WHERE product_id = $1`,
@@ -988,7 +1155,7 @@ app.post('/api/deleteProduct', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: GET /api/checkStage ===================== */
+/* ===================== GET /api/checkStage ===================== */
 
 app.get('/api/checkStage', async (req, res) => {
   const { productId, stageKey } = req.query
@@ -1007,7 +1174,7 @@ app.get('/api/checkStage', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: POST /api/setVendors ===================== */
+/* ===================== POST /api/setVendors ===================== */
 
 app.post('/api/setVendors', async (req, res) => {
   try {
@@ -1023,8 +1190,7 @@ app.post('/api/setVendors', async (req, res) => {
     }
     if (rows.length === 0) return res.json({ ok: true })
 
-    // Insert only new vendors. Existing ones are left as they are, the same as
-    // the old "WHEN NOT MATCHED" only MERGE.
+    // Insert only new vendors. Existing ones are left as they are.
     await txWithRetry(async client => {
       for (const part of chunk(rows, 1000)) {
         await client.query(
@@ -1043,7 +1209,7 @@ app.post('/api/setVendors', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: auth helpers ===================== */
+/* ===================== auth helpers (vendor notes) ===================== */
 
 async function attachUserFromHeader (req, res, next) {
   try {
@@ -1080,7 +1246,7 @@ function requireVendorIssueMaster (req, res, next) {
   next()
 }
 
-/* ===================== ✅ NO CHANGE: GET /api/vendor-issues ===================== */
+/* ===================== GET /api/vendor-issues ===================== */
 
 app.get('/api/vendor-issues', async (req, res) => {
   try {
@@ -1111,7 +1277,7 @@ app.get('/api/vendor-issues', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: POST /api/vendor-issues ===================== */
+/* ===================== POST /api/vendor-issues ===================== */
 
 app.post(
   '/api/vendor-issues',
@@ -1167,7 +1333,7 @@ app.post(
   }
 )
 
-/* ===================== 🔄 CHANGED: PATCH /api/vendor-issues/:id ===================== */
+/* ===================== PATCH /api/vendor-issues/:id ===================== */
 
 app.patch(
   '/api/vendor-issues/:id',
@@ -1215,12 +1381,12 @@ app.patch(
   }
 )
 
-/* ===================== ✅ NO CHANGE: stagesToStr ===================== */
+/* ===================== stagesToStr ===================== */
 // Arrays are stored as JSON text.
 const stagesToStr = v => (Array.isArray(v) ? JSON.stringify(v) : v || '')
 
-/* ===================== 🔄 CHANGED: POST /api/setTeamMembers ===================== */
-// joined_at is only set on insert, never updated (same as before).
+/* ===================== POST /api/setTeamMembers ===================== */
+// joined_at is only set on insert, never updated.
 
 app.post('/api/setTeamMembers', async (req, res) => {
   const members = req.body
@@ -1270,8 +1436,149 @@ app.post('/api/setTeamMembers', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: POST /api/saveUsers ===================== */
+/* ===================== POST /api/updateMember ===================== */
+// Changes ONE person. Only the fields sent are changed, so the page never
+// has to load and resend everyone's password.
+// Body: { id, name?, email?, stages?, division?, password? }
+
+app.post('/api/updateMember', async (req, res) => {
+  const { id, name, email, stages, division, password } = req.body || {}
+  if (!id) return res.status(400).json({ ok: false, error: 'id required' })
+
+  const sets = []
+  const params = []
+  const add = (col, v) => {
+    params.push(v)
+    sets.push(`${col} = $${params.length}`)
+  }
+  if (typeof name === 'string' && name.trim()) add('name', name.trim())
+  if (typeof email === 'string' && email.trim()) add('email', email.trim())
+  if (stages !== undefined) add('stages', stagesToStr(stages))
+  if (division !== undefined) add('division', division || null)
+  if (typeof password === 'string' && password) add('password', password)
+  if (!sets.length)
+    return res.status(400).json({ ok: false, error: 'nothing to change' })
+
+  try {
+    const { rows: found } = await db.query(
+      `SELECT id FROM ${T('users')} WHERE id = $1 LIMIT 1`,
+      [String(id)]
+    )
+    if (!found.length)
+      return res.status(404).json({ ok: false, error: 'User not found' })
+
+    if (typeof email === 'string' && email.trim()) {
+      const { rows: clash } = await db.query(
+        `SELECT id FROM ${T('users')}
+         WHERE LOWER(email) = LOWER($1) AND id != $2 LIMIT 1`,
+        [email.trim(), String(id)]
+      )
+      if (clash.length)
+        return res.status(409).json({
+          ok: false,
+          error: 'This email is already used by someone else.'
+        })
+    }
+
+    params.push(String(id))
+    await db.query(
+      `UPDATE ${T('users')} SET ${sets.join(', ')} WHERE id = $${
+        params.length
+      }`,
+      params
+    )
+    res.json({ ok: true })
+  } catch (e) {
+    console.error('updateMember error', e)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+/* ===================== POST /api/removeMember ===================== */
+// Deletes one person safely, in one transaction:
+//   - their own assignments are deleted (the cards go back to "nobody")
+//   - cards THEY handed to their team stay with that team, now under the admin
+//   - their team members no longer have a manager (the admin manages them)
+//   - their login is deleted
+// Work already done on cards (stage_entries) is never touched.
+// Body: { id }
+
+app.post('/api/removeMember', async (req, res) => {
+  const id = String(req.body?.id || '').trim()
+  if (!id) return res.status(400).json({ ok: false, error: 'id required' })
+  try {
+    const { rows } = await db.query(
+      `SELECT id, role FROM ${T('users')} WHERE id = $1 LIMIT 1`,
+      [id]
+    )
+    if (!rows.length)
+      return res.status(404).json({ ok: false, error: 'User not found' })
+    if (['master', 'admin'].includes(String(rows[0].role).toLowerCase()))
+      return res
+        .status(400)
+        .json({ ok: false, error: 'Admins can’t be removed from this page.' })
+
+    let removedAssignments = 0
+    await txWithRetry(async client => {
+      const r = await client.query(
+        `DELETE FROM ${T('assignments')} WHERE member_id = $1`,
+        [id]
+      )
+      removedAssignments = r.affectedRows || 0
+      await client.query(
+        `UPDATE ${T(
+          'assignments'
+        )} SET manager_id = 'master' WHERE manager_id = $1`,
+        [id]
+      )
+      await client.query(
+        `UPDATE ${T('users')} SET manager_id = NULL WHERE manager_id = $1`,
+        [id]
+      )
+      await client.query(`DELETE FROM ${T('users')} WHERE id = $1`, [id])
+    })
+
+    res.json({ ok: true, removedAssignments })
+  } catch (e) {
+    console.error('removeMember error', e)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+/* ===================== POST /api/removeAssignments ===================== */
+// Deletes exactly the assignment rows asked for ("Take back", "Move to …",
+// un-ticking a branch). Safer than re-sending the whole list to
+// /api/setAssignments, which could delete rows another manager just added.
+// Body: { ids: ["…", "…"] }
+
+app.post('/api/removeAssignments', async (req, res) => {
+  const ids = Array.isArray(req.body?.ids)
+    ? [...new Set(req.body.ids.map(String).filter(Boolean))]
+    : []
+  if (!ids.length)
+    return res.status(400).json({ ok: false, error: 'ids required' })
+  try {
+    let deleted = 0
+    await txWithRetry(async client => {
+      deleted = 0 // reset if the transaction is retried
+      for (const part of chunk(ids, 1000)) {
+        const r = await client.query(
+          `DELETE FROM ${T('assignments')} WHERE id IN ($1)`,
+          [part]
+        )
+        deleted += r.affectedRows || 0
+      }
+    })
+    res.json({ ok: true, deleted })
+  } catch (e) {
+    console.error('removeAssignments error', e)
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
+
+/* ===================== POST /api/saveUsers ===================== */
 // Replace-by-email: users whose email is not in the payload are DELETED.
+// (The new Assign Work page no longer uses this; it uses updateMember/removeMember.)
 
 app.post('/api/saveUsers', async (req, res) => {
   const users = req.body
@@ -1298,8 +1605,7 @@ app.post('/api/saveUsers', async (req, res) => {
     const emails = [...new Set(rows.map(r => String(r[2]).toLowerCase()))]
 
     await txWithRetry(async client => {
-      // `NOT IN ()` is a syntax error in MySQL, so the empty case is handled
-      // separately. It deletes everyone, same as the old query did.
+      // `NOT IN ()` is a syntax error in MySQL, so the empty case is handled separately.
       if (emails.length === 0) {
         await client.query(`DELETE FROM ${T('users')}`)
       } else {
@@ -1329,7 +1635,7 @@ app.post('/api/saveUsers', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: POST /api/setAssignments ===================== */
+/* ===================== POST /api/setAssignments ===================== */
 // - plain array            -> full sync per division (with safety guards)
 // - { mode:"add", ... }    -> insert/update only, never deletes
 
@@ -1352,7 +1658,7 @@ app.post('/api/setAssignments', async (req, res) => {
   const divisionsInPayload = [...new Set(assignments.map(a => a.division))]
 
   try {
-    // ---- ✅ NO CHANGE: per-division safety guards (skipped in add mode) ----
+    // ---- per-division safety guards (skipped in add mode) ----
     if (!isAddMode) {
       const counts = await Promise.all(
         divisionsInPayload.map(div =>
@@ -1394,7 +1700,7 @@ app.post('/api/setAssignments', async (req, res) => {
       }
     }
 
-    // ---- 🔄 CHANGED: resolve product ids (was IN UNNEST($1)) ----
+    // ---- resolve product ids ----
     const prodMap = {}
     if (assignments.length > 0) {
       const skusLower = [
@@ -1413,14 +1719,19 @@ app.post('/api/setAssignments', async (req, res) => {
       }
     }
 
-    // ---- 🔄 CHANGED: build rows as arrays (deduplicated by id) ----
+    // ---- build rows as arrays (deduplicated by id) ----
     const nowDt = toMysqlDt(new Date())
     const rowsById = new Map()
     const skipped = []
 
     assignments.forEach(a => {
-      const pid = prodMap[a.division + '||' + String(a.sku || '').toLowerCase()]
-      if (!pid) {
+      // Branch access rows (stage 'branchupload') point at a branch name,
+      // not a product, so they have no product_id.
+      const isBranch = a.stage === 'branchupload'
+      const pid = isBranch
+        ? null
+        : prodMap[a.division + '||' + String(a.sku || '').toLowerCase()]
+      if (!pid && !isBranch) {
         skipped.push({ sku: a.sku, division: a.division })
         return
       }
@@ -1446,7 +1757,7 @@ app.post('/api/setAssignments', async (req, res) => {
       })
     }
 
-    // ---- 🔄 CHANGED: upsert, then delete leftovers, in ONE transaction ----
+    // ---- upsert, then delete leftovers, in ONE transaction ----
     if (rows.length > 0) {
       const divisionsWithRows = [
         ...new Set(rows.map(r => r[5]).filter(Boolean))
@@ -1469,8 +1780,7 @@ app.post('/api/setAssignments', async (req, res) => {
           )
         }
 
-        // Replaces "WHEN NOT MATCHED BY SOURCE AND t.division IN (...) THEN DELETE":
-        // remove rows of the same divisions that are not in the payload.
+        // Remove rows of the same divisions that are not in the payload.
         if (withDelete) {
           await client.query(
             `DELETE FROM ${T('assignments')}
@@ -1488,7 +1798,7 @@ app.post('/api/setAssignments', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: POST /api/clearAssignments ===================== */
+/* ===================== POST /api/clearAssignments ===================== */
 
 app.post('/api/clearAssignments', async (req, res) => {
   if (req.body?.confirm !== true) {
@@ -1508,7 +1818,7 @@ app.post('/api/clearAssignments', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: POST /api/appendAudit ===================== */
+/* ===================== POST /api/appendAudit ===================== */
 
 app.post('/api/appendAudit', async (req, res) => {
   const e = req.body
@@ -1534,9 +1844,8 @@ app.post('/api/appendAudit', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: GET /api/memberStats ===================== */
-// COUNTIF(x)    -> SUM(CASE WHEN x THEN 1 ELSE 0 END)
-// LOGICAL_OR(x) -> MAX(CASE WHEN x THEN 1 ELSE 0 END)
+/* ===================== GET /api/memberStats ===================== */
+// A skipped stage counts as completed and is never an open issue.
 
 app.get('/api/memberStats', async (req, res) => {
   const { memberId, division } = req.query
@@ -1551,6 +1860,7 @@ app.get('/api/memberStats', async (req, res) => {
         SELECT DISTINCT sku
         FROM ${T('assignments')}
         WHERE member_id = $1 AND division = $2
+          AND stage != 'branchupload' -- branch rows are not cards
       ),
       pushed_skus AS (
         SELECT DISTINCT sku
@@ -1558,6 +1868,7 @@ app.get('/api/memberStats', async (req, res) => {
         WHERE manager_id = $1
           AND member_id != $1
           AND division = $2
+          AND stage != 'branchupload'
       ),
       kept_skus AS (
         SELECT sku FROM member_skus
@@ -1573,10 +1884,12 @@ app.get('/api/memberStats', async (req, res) => {
         SELECT
           ta.product_id,
           COUNT(*) AS stages_owned,
-          SUM(CASE WHEN se.status = 'Completed' THEN 1 ELSE 0 END) AS stages_completed,
+          SUM(CASE WHEN se.status = 'Completed' OR COALESCE(se.skipped, 0) = 1
+                   THEN 1 ELSE 0 END) AS stages_completed,
           MAX(CASE
-                WHEN COALESCE(se.status, 'Not Started') = 'Issue'
-                  OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
+                WHEN COALESCE(se.skipped, 0) = 0
+                 AND (COALESCE(se.status, 'Not Started') = 'Issue'
+                      OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%'))
                 THEN 1 ELSE 0
               END) AS has_open_issue
         FROM target_assignments ta
@@ -1612,7 +1925,7 @@ app.get('/api/memberStats', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: GET /api/allMemberStats ===================== */
+/* ===================== GET /api/allMemberStats ===================== */
 
 app.get('/api/allMemberStats', async (req, res) => {
   const { division } = req.query
@@ -1632,10 +1945,12 @@ app.get('/api/allMemberStats', async (req, res) => {
           ta.member_id,
           ta.product_id,
           COUNT(*) AS stages_owned,
-          SUM(CASE WHEN se.status = 'Completed' THEN 1 ELSE 0 END) AS stages_completed,
+          SUM(CASE WHEN se.status = 'Completed' OR COALESCE(se.skipped, 0) = 1
+                   THEN 1 ELSE 0 END) AS stages_completed,
           MAX(CASE
-                WHEN se.status = 'Issue'
-                  OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
+                WHEN COALESCE(se.skipped, 0) = 0
+                 AND (se.status = 'Issue'
+                      OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%'))
                 THEN 1 ELSE 0
               END) AS has_open_issue
         FROM target_assignments ta
@@ -1676,7 +1991,7 @@ app.get('/api/allMemberStats', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: GET /api/pipelineStats ===================== */
+/* ===================== GET /api/pipelineStats ===================== */
 
 app.get('/api/pipelineStats', async (req, res) => {
   const { memberId, division } = req.query
@@ -1696,13 +2011,18 @@ app.get('/api/pipelineStats', async (req, res) => {
       )
       SELECT
         se.stage_key,
-        SUM(CASE WHEN se.status = 'Not Started' THEN 1 ELSE 0 END) AS not_started,
-        SUM(CASE WHEN se.status = 'In Progress'
+        SUM(CASE WHEN COALESCE(se.skipped, 0) = 0
+                  AND se.status = 'Not Started' THEN 1 ELSE 0 END) AS not_started,
+        SUM(CASE WHEN COALESCE(se.skipped, 0) = 0
+                  AND se.status = 'In Progress'
                   AND se.comments NOT LIKE 'QC flagged:%' THEN 1 ELSE 0 END) AS in_progress,
-        SUM(CASE WHEN se.status = 'Completed' THEN 1 ELSE 0 END) AS completed,
-        SUM(CASE WHEN se.status = 'Issue'
-                  OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
-                 THEN 1 ELSE 0 END) AS issue
+        SUM(CASE WHEN se.status = 'Completed'
+                  OR COALESCE(se.skipped, 0) = 1 THEN 1 ELSE 0 END) AS completed,
+        SUM(CASE WHEN COALESCE(se.skipped, 0) = 0
+                  AND (se.status = 'Issue'
+                       OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%'))
+                 THEN 1 ELSE 0 END) AS issue,
+        SUM(CASE WHEN COALESCE(se.skipped, 0) = 1 THEN 1 ELSE 0 END) AS skipped
       FROM member_skus ms
       JOIN ${T('stage_entries')} se
         ON se.product_id = ms.product_id
@@ -1718,7 +2038,8 @@ app.get('/api/pipelineStats', async (req, res) => {
         notStarted: Number(r.not_started),
         inProgress: Number(r.in_progress),
         completed: Number(r.completed),
-        issue: Number(r.issue)
+        issue: Number(r.issue),
+        skipped: Number(r.skipped)
       }
     })
 
@@ -1729,16 +2050,14 @@ app.get('/api/pipelineStats', async (req, res) => {
   }
 })
 
-/* ===================== ❌ DELETE this old block ===================== */
-// const toDate = v => { ... new Date(v.value ?? v) ... }
-// The toDate from my earlier message already does this and also handles
-// MySQL date strings. Keeping both would crash with
-// "Identifier 'toDate' has already been declared".
-
-/* ===================== 🔄 CHANGED: export helpers ===================== */
-// COUNTIF           -> SUM(CASE WHEN ... )
-// IS DISTINCT FROM  -> NOT (a <=> b)    (<=> is MySQL's NULL-safe equals)
-// { p3: 'INT64' }   -> removed
+/* ===================== export helpers ===================== */
+// 🐞 FIX: same rules as the dashboard.
+//   A stage is done when it is Completed, or skipped, or (QC stage only) the
+//   card's QC verdict is Approved — your team records QC with the verdict,
+//   not by ticking the QC stage.
+//   An issue is an Issue stage, a QC-flagged stage ("In Progress" with a
+//   "QC flagged:" comment), or the verdict "Issues Found".
+//   An issue card is never also counted as completed or pending.
 
 async function getExportRowsForDivision (client, division, scope) {
   const { rows } = await client.query(
@@ -1746,12 +2065,19 @@ async function getExportRowsForDivision (client, division, scope) {
     WITH stage_counts AS (
       SELECT
         p.id AS product_id,
-        SUM(CASE WHEN se.status = 'Completed' THEN 1 ELSE 0 END) AS completed_stages,
-        SUM(CASE WHEN se.status = 'Issue' THEN 1 ELSE 0 END) AS issue_stages,
-        MIN(CASE WHEN NOT (se.status <=> 'Completed') THEN se.stage_key END) AS next_pending_stage
+        SUM(CASE WHEN se.status = 'Completed' OR COALESCE(se.skipped, 0) = 1
+                   OR (se.stage_key = 'qc' AND p.verdict = 'Approved')
+                 THEN 1 ELSE 0 END) AS completed_stages,
+        SUM(CASE WHEN COALESCE(se.skipped, 0) = 0
+                  AND (se.status = 'Issue'
+                       OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%'))
+                 THEN 1 ELSE 0 END) AS issue_stages,
+        MIN(CASE WHEN NOT (se.status <=> 'Completed') AND COALESCE(se.skipped, 0) = 0
+                  AND NOT (se.stage_key = 'qc' AND p.verdict <=> 'Approved')
+                 THEN se.stage_key END) AS next_pending_stage
       FROM ${T('products')} p
       LEFT JOIN ${T('stage_entries')} se
-        ON se.product_id = p.id AND se.stage_key != 'finalqc'
+        ON se.product_id = p.id AND se.stage_key NOT IN ('finalqc', 'scan')
       WHERE p.division = $1
       GROUP BY p.id
     )
@@ -1762,8 +2088,10 @@ async function getExportRowsForDivision (client, division, scope) {
     WHERE p.division = $1
       AND (
         $2 = 'all'
-        OR ($2 = 'completed' AND sc.completed_stages = $3)
-        OR ($2 = 'pending'   AND sc.completed_stages < $3)
+        OR ($2 = 'completed' AND sc.completed_stages = $3 AND sc.issue_stages = 0
+                             AND NOT (p.verdict <=> 'Issues Found'))
+        OR ($2 = 'pending'   AND sc.completed_stages < $3 AND sc.issue_stages = 0
+                             AND NOT (p.verdict <=> 'Issues Found'))
         OR ($2 = 'issues'    AND (p.verdict = 'Issues Found' OR sc.issue_stages > 0))
       )
     ORDER BY p.sku
@@ -1785,15 +2113,23 @@ async function getExportRowsForMember (client, division, memberId, scope) {
       SELECT DISTINCT a.sku, a.stage
       FROM ${T('assignments')} a
       WHERE a.member_id = $1 AND a.division = $2
+        AND a.stage != 'branchupload'
     ),
     card_level AS (
       SELECT
         p.id AS product_id,
         p.sku, p.name, p.vendor, p.division, p.qty, p.verdict, p.updated_at,
         COUNT(*) AS stages_owned,
-        SUM(CASE WHEN se.status = 'Completed' THEN 1 ELSE 0 END) AS stages_completed,
-        SUM(CASE WHEN se.status = 'Issue' THEN 1 ELSE 0 END) AS stages_issue,
-        MIN(CASE WHEN NOT (se.status <=> 'Completed') THEN ma.stage END) AS next_pending_stage
+        SUM(CASE WHEN se.status = 'Completed' OR COALESCE(se.skipped, 0) = 1
+                   OR (ma.stage = 'qc' AND p.verdict = 'Approved')
+                 THEN 1 ELSE 0 END) AS stages_completed,
+        SUM(CASE WHEN COALESCE(se.skipped, 0) = 0
+                  AND (se.status = 'Issue'
+                       OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%'))
+                 THEN 1 ELSE 0 END) AS stages_issue,
+        MIN(CASE WHEN NOT (se.status <=> 'Completed') AND COALESCE(se.skipped, 0) = 0
+                  AND NOT (ma.stage = 'qc' AND p.verdict <=> 'Approved')
+                 THEN ma.stage END) AS next_pending_stage
       FROM my_assignments ma
       JOIN ${T('products')} p ON p.sku = ma.sku AND p.division = $2
       LEFT JOIN ${T('stage_entries')} se
@@ -1803,8 +2139,10 @@ async function getExportRowsForMember (client, division, memberId, scope) {
     SELECT * FROM card_level
     WHERE
       $3 = 'all'
-      OR ($3 = 'completed' AND stages_completed = stages_owned)
-      OR ($3 = 'pending'   AND stages_completed < stages_owned)
+      OR ($3 = 'completed' AND stages_completed = stages_owned AND stages_issue = 0
+                           AND NOT (verdict <=> 'Issues Found'))
+      OR ($3 = 'pending'   AND stages_completed < stages_owned AND stages_issue = 0
+                           AND NOT (verdict <=> 'Issues Found'))
       OR ($3 = 'issues'    AND (verdict = 'Issues Found' OR stages_issue > 0))
     ORDER BY sku
   `,
@@ -1819,7 +2157,7 @@ async function getExportRowsForMember (client, division, memberId, scope) {
   }))
 }
 
-/* ===================== ✅ NO CHANGE: normStatusServer ===================== */
+/* ===================== normStatusServer ===================== */
 
 function normStatusServer (v) {
   if (!v) return null
@@ -1838,9 +2176,9 @@ function normStatusServer (v) {
   return m[String(v).trim().toLowerCase()] || null
 }
 
-/* ===================== 🆕 NEW helpers for bulkImportProducts ===================== */
+/* ===================== helpers for bulkImportProducts ===================== */
 
-// Replaces SAFE_CAST(SUBSTR(x,1,10) AS DATE): returns "YYYY-MM-DD" or null
+// Returns "YYYY-MM-DD" or null
 const safeDate = v => {
   if (!v) return null
   const s = String(v).trim().slice(0, 10)
@@ -1850,8 +2188,8 @@ const safeDate = v => {
 }
 
 // Stage upsert. Rows with a status overwrite it. Rows WITHOUT a status keep
-// the existing one (same as COALESCE(s.status, t.status) in the old MERGE),
-// and a brand-new row gets 'Not Started'.
+// the existing one, and a brand-new row gets 'Not Started'.
+// (skipped is not touched by imports, so a skip set in the app survives a re-import.)
 const stageUpsertSql = withStatus => `
   INSERT INTO ${T('stage_entries')}
     (product_id, stage_key, status, person, comments, updated_at,
@@ -1866,7 +2204,7 @@ const stageUpsertSql = withStatus => `
     height_cm = COALESCE(VALUES(height_cm), height_cm),
     weight_gm = COALESCE(VALUES(weight_gm), weight_gm)`
 
-/* ===================== 🔄 CHANGED: POST /api/bulkImportProducts ===================== */
+/* ===================== POST /api/bulkImportProducts ===================== */
 
 const IMPORT_CHUNK_SIZE = 200
 
@@ -1893,7 +2231,7 @@ app.post('/api/bulkImportProducts', async (req, res) => {
     validRows.forEach(r => byKey.set(keyOf(r), r))
     const uniqueRows = [...byKey.values()]
 
-    // ---- Look up existing products (🔄 was IN UNNEST($1)) ----
+    // ---- Look up existing products ----
     const divisionsInBatch = [
       ...new Set(uniqueRows.map(r => r.division).filter(Boolean))
     ]
@@ -1910,7 +2248,7 @@ app.post('/api/bulkImportProducts', async (req, res) => {
       )
     }
 
-    // ---- Cap check (✅ no change) ----
+    // ---- Cap check ----
     const currentCount = await getProductCount(db)
     const newRowsCount = uniqueRows.filter(
       r => !existingIdByKey.has(keyOf(r))
@@ -1922,7 +2260,7 @@ app.post('/api/bulkImportProducts', async (req, res) => {
       })
     }
 
-    // ---- 1. Vendors (🔄 MERGE -> INSERT ... ON DUPLICATE KEY) ----
+    // ---- 1. Vendors ----
     const vendorSeen = new Set()
     const vendorRows = []
     uniqueRows.forEach(r => {
@@ -1950,7 +2288,7 @@ app.post('/api/bulkImportProducts', async (req, res) => {
 
     // ---- 2. Products + stages + verdicts, chunk by chunk ----
     for (let i = 0; i < uniqueRows.length; i += IMPORT_CHUNK_SIZE) {
-      const part = uniqueRows.slice(i, i + IMPORT_CHUNK_SIZE) // 🔄 renamed from `chunk`
+      const part = uniqueRows.slice(i, i + IMPORT_CHUNK_SIZE)
 
       const productRows = []
       const stageRowsWithStatus = []
@@ -2019,7 +2357,7 @@ app.post('/api/bulkImportProducts', async (req, res) => {
         }
       }
 
-      // One transaction per chunk: all-or-nothing (same as before)
+      // One transaction per chunk: all-or-nothing
       await txWithRetry(async client => {
         await client.query(
           `INSERT INTO ${T('products')}
@@ -2044,8 +2382,6 @@ app.post('/api/bulkImportProducts', async (req, res) => {
           await client.query(stageUpsertSql(false), [stageRowsNoStatus])
         }
 
-        // 🔄 was UPDATE ... FROM (subquery). MySQL has no UPDATE ... FROM,
-        // so each verdict is a small UPDATE inside the same transaction.
         for (const [id, verdict, issues] of verdictRows) {
           await client.query(
             `UPDATE ${T('products')}
@@ -2068,7 +2404,7 @@ app.post('/api/bulkImportProducts', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: GET /api/exportProducts ===================== */
+/* ===================== GET /api/exportProducts ===================== */
 
 app.get('/api/exportProducts', async (req, res) => {
   const { division, scope, memberId } = req.query
@@ -2089,7 +2425,7 @@ app.get('/api/exportProducts', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: GET /api/stageIssueStats ===================== */
+/* ===================== GET /api/stageIssueStats ===================== */
 
 app.get('/api/stageIssueStats', async (req, res) => {
   const { division } = req.query
@@ -2106,6 +2442,7 @@ app.get('/api/stageIssueStats', async (req, res) => {
           se.status = 'Issue'
           OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
         )
+        AND COALESCE(se.skipped, 0) = 0
       GROUP BY se.stage_key
     `,
       [String(division)]
@@ -2122,14 +2459,28 @@ app.get('/api/stageIssueStats', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: GET /api/pipelineBreakdown ===================== */
-// COUNTIF(x) -> SUM(CASE WHEN x THEN 1 ELSE 0 END)
-// The `($3 IS NULL OR p.vendor = $3)` filters work in MySQL as they are.
+/* ===================== GET /api/pipelineBreakdown ===================== */
 
 app.get('/api/pipelineBreakdown', async (req, res) => {
   const { division, memberId, vendor, setNo } = req.query
   if (!division)
     return res.status(400).json({ ok: false, error: 'division required' })
+
+  // Same five counts for both queries. A skipped stage counts as completed
+  // and also in `skipped`; it never counts as not started / in progress / issue.
+  const COUNTS = `
+    SUM(CASE WHEN COALESCE(se.skipped, 0) = 0
+              AND COALESCE(se.status, 'Not Started') = 'Not Started' THEN 1 ELSE 0 END) AS not_started,
+    SUM(CASE WHEN COALESCE(se.skipped, 0) = 0
+              AND se.status = 'In Progress'
+              AND COALESCE(se.comments, '') NOT LIKE 'QC flagged:%' THEN 1 ELSE 0 END) AS in_progress,
+    SUM(CASE WHEN se.status = 'Completed'
+              OR COALESCE(se.skipped, 0) = 1 THEN 1 ELSE 0 END) AS completed,
+    SUM(CASE WHEN COALESCE(se.skipped, 0) = 0
+              AND (se.status = 'Issue'
+                   OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%'))
+             THEN 1 ELSE 0 END) AS issue,
+    SUM(CASE WHEN COALESCE(se.skipped, 0) = 1 THEN 1 ELSE 0 END) AS skipped`
 
   try {
     let rows
@@ -2146,16 +2497,7 @@ app.get('/api/pipelineBreakdown', async (req, res) => {
             AND ($3 IS NULL OR p.vendor = $3)
             AND ($4 IS NULL OR p.set_no = $4)
         )
-        SELECT
-          ms.stage_key,
-          ms.vendor,
-          SUM(CASE WHEN COALESCE(se.status, 'Not Started') = 'Not Started' THEN 1 ELSE 0 END) AS not_started,
-          SUM(CASE WHEN se.status = 'In Progress'
-                    AND COALESCE(se.comments, '') NOT LIKE 'QC flagged:%' THEN 1 ELSE 0 END) AS in_progress,
-          SUM(CASE WHEN se.status = 'Completed' THEN 1 ELSE 0 END) AS completed,
-          SUM(CASE WHEN se.status = 'Issue'
-                    OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
-                   THEN 1 ELSE 0 END) AS issue
+        SELECT ms.stage_key, ms.vendor, ${COUNTS}
         FROM member_scope ms
         LEFT JOIN ${T('stage_entries')} se
           ON se.product_id = ms.product_id AND se.stage_key = ms.stage_key
@@ -2173,20 +2515,11 @@ app.get('/api/pipelineBreakdown', async (req, res) => {
     } else {
       const { rows: r } = await db.query(
         `
-        SELECT
-          se.stage_key,
-          p.vendor AS vendor,
-          SUM(CASE WHEN se.status = 'Not Started' THEN 1 ELSE 0 END) AS not_started,
-          SUM(CASE WHEN se.status = 'In Progress'
-                    AND se.comments NOT LIKE 'QC flagged:%' THEN 1 ELSE 0 END) AS in_progress,
-          SUM(CASE WHEN se.status = 'Completed' THEN 1 ELSE 0 END) AS completed,
-          SUM(CASE WHEN se.status = 'Issue'
-                    OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')
-                   THEN 1 ELSE 0 END) AS issue
+        SELECT se.stage_key, p.vendor AS vendor, ${COUNTS}
         FROM ${T('stage_entries')} se
         JOIN ${T('products')} p ON p.id = se.product_id
         WHERE p.division = $1
-          AND se.stage_key != 'finalqc'
+          AND se.stage_key NOT IN ('finalqc', 'scan')
           AND ($2 IS NULL OR p.vendor = $2)
           AND ($3 IS NULL OR p.set_no = $3)
         GROUP BY se.stage_key, p.vendor
@@ -2205,6 +2538,13 @@ app.get('/api/pipelineBreakdown', async (req, res) => {
     // `byVendor` - { vendorName: { stageKey: {...} } }
     const stages = {}
     const byVendor = {}
+    const empty = () => ({
+      notStarted: 0,
+      inProgress: 0,
+      completed: 0,
+      issue: 0,
+      skipped: 0
+    })
 
     rows.forEach(r => {
       const vendorKey = r.vendor || '—'
@@ -2212,24 +2552,12 @@ app.get('/api/pipelineBreakdown', async (req, res) => {
         notStarted: Number(r.not_started),
         inProgress: Number(r.in_progress),
         completed: Number(r.completed),
-        issue: Number(r.issue)
+        issue: Number(r.issue),
+        skipped: Number(r.skipped)
       }
-
-      if (!stages[r.stage_key]) {
-        stages[r.stage_key] = {
-          notStarted: 0,
-          inProgress: 0,
-          completed: 0,
-          issue: 0
-        }
-      }
-      stages[r.stage_key].notStarted += cell.notStarted
-      stages[r.stage_key].inProgress += cell.inProgress
-      stages[r.stage_key].completed += cell.completed
-      stages[r.stage_key].issue += cell.issue
-
-      if (!byVendor[vendorKey]) byVendor[vendorKey] = {}
-      byVendor[vendorKey][r.stage_key] = cell
+      const total = (stages[r.stage_key] ||= empty())
+      for (const k of Object.keys(cell)) total[k] += cell[k]
+      ;(byVendor[vendorKey] ||= {})[r.stage_key] = cell
     })
 
     res.json({ ok: true, stages, byVendor })
@@ -2239,8 +2567,7 @@ app.get('/api/pipelineBreakdown', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: GET /api/stageSpeedStats ===================== */
-// Uses the shared toDate() helper, which already handles MySQL date strings.
+/* ===================== GET /api/stageSpeedStats ===================== */
 
 app.get('/api/stageSpeedStats', async (req, res) => {
   const { division } = req.query
@@ -2294,7 +2621,7 @@ app.get('/api/stageSpeedStats', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: GET /api/memberSpeedStats ===================== */
+/* ===================== GET /api/memberSpeedStats ===================== */
 
 app.get('/api/memberSpeedStats', async (req, res) => {
   const { division } = req.query
@@ -2386,7 +2713,7 @@ app.get('/api/memberSpeedStats', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: team stage key lists ===================== */
+/* ===================== team stage key lists ===================== */
 
 const TEAM_BACKEND_STAGE_KEYS = [
   'content',
@@ -2402,10 +2729,10 @@ const TEAM_PHOTO_STAGE_KEYS = [
   'videoedit'
 ]
 
-/* ===================== 🔄 CHANGED: GET /api/teamStageStats ===================== */
-// a.stage IN UNNEST($2)   -> a.stage IN ($2)
-// TIMESTAMP($n)           -> value converted in JS with toMysqlDt()
-// Everything from `buildGroup` down is unchanged.
+/* ===================== GET /api/teamStageStats ===================== */
+// Skipped stages are left out: neither pending nor completed for the member.
+// 🐞 FIX: a QC-flagged stage ("In Progress" + "QC flagged:" comment) now counts
+// as an issue, the same as in memberStageDetail and on the dashboard.
 
 app.get('/api/teamStageStats', async (req, res) => {
   const { division, vendor, set_no, dateFrom, dateTo } = req.query
@@ -2423,7 +2750,7 @@ app.get('/api/teamStageStats', async (req, res) => {
       managerIdOf[u.id] = u.manager_id
     })
 
-    const conditions = ['a.division = $1', 'a.stage IN ($2)'] // 🔄 CHANGED
+    const conditions = ['a.division = $1', 'a.stage IN ($2)']
     const params = [String(division), allStageKeys]
 
     if (vendor) {
@@ -2434,8 +2761,7 @@ app.get('/api/teamStageStats', async (req, res) => {
       params.push(String(set_no))
       conditions.push(`p.set_no = $${params.length}`)
     }
-    // 🔄 CHANGED: dates are converted in JS. An unparsable date is ignored
-    // instead of silently matching nothing.
+    // An unparsable date is ignored instead of silently matching nothing.
     const fromDt = dateFrom ? toMysqlDt(String(dateFrom)) : null
     if (fromDt) {
       params.push(fromDt)
@@ -2450,7 +2776,10 @@ app.get('/api/teamStageStats', async (req, res) => {
     // shrink the row set, or Total Assigned would change with it.
 
     const { rows } = await db.query(
-      `SELECT a.member_id, u.name AS member_name, a.stage, a.sku, se.status AS stage_status
+      `SELECT a.member_id, u.name AS member_name, a.stage, a.sku,
+              se.status AS stage_status,
+              se.comments AS stage_comments,
+              COALESCE(se.skipped, 0) AS stage_skipped
        FROM ${T('assignments')} a
        JOIN ${T('users')} u ON u.id = a.member_id
        JOIN ${T('products')} p ON p.id = a.product_id
@@ -2471,7 +2800,14 @@ app.get('/api/teamStageStats', async (req, res) => {
         })
 
         acc.skus.add(r.sku)
-        ;(acc.skuStage[r.sku] ||= {})[r.stage] = r.stage_status
+        const skuStages = (acc.skuStage[r.sku] ||= {})
+        // A skipped stage is left out of the counts
+        if (!Number(r.stage_skipped)) {
+          const qcFlagged =
+            r.stage_status === 'In Progress' &&
+            String(r.stage_comments || '').startsWith('QC flagged:')
+          skuStages[r.stage] = qcFlagged ? 'Issue' : r.stage_status
+        }
       })
 
       // Subtract reports' skus from their manager's set — same as totalAssigned.
@@ -2503,7 +2839,7 @@ app.get('/api/teamStageStats', async (req, res) => {
             })
           })
 
-          // Never assigned that stage -> null so the frontend shows "—"
+          // Never assigned that stage -> null so the frontend shows "not assigned"
           stageKeys.forEach(k => {
             const s = perStage[k]
             if (s.completed + s.pending + s.issue === 0) perStage[k] = null
@@ -2530,13 +2866,14 @@ app.get('/api/teamStageStats', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: GET /api/memberStageDetail ===================== */
-// SAFE_CAST($n AS TIMESTAMP) -> the dates are converted in JS before the query.
-// The SQL itself is unchanged: IF(), COUNT(DISTINCT IF(...)) and the CTEs all
-// work in MySQL 8.
+/* ===================== GET /api/memberStageDetail ===================== */
+// Skipped stages are left out of in progress / not started / issue, and
+// counted separately as skipped_skus.
+// 🐞 FIX: a card with no stage row counts as Not Started (it used to vanish),
+// and ?set_no= filters by set.
 
 app.get('/api/memberStageDetail', async (req, res) => {
-  const { division, completedFrom, completedTo, vendor } = req.query
+  const { division, completedFrom, completedTo, vendor, set_no } = req.query
 
   try {
     const fromDt = completedFrom ? toMysqlDt(String(completedFrom)) : null
@@ -2552,6 +2889,7 @@ app.get('/api/memberStageDetail', async (req, res) => {
           WHERE a.division IN ('KOC Cards', 'Bombay Cards')
             AND ($1 IS NULL OR a.division = $1)
             AND ($4 IS NULL OR p.vendor = $4)
+            AND ($5 IS NULL OR p.set_no = $5)
       ),
       pushed AS (
           SELECT DISTINCT manager_id, division, assigned_stage, sku
@@ -2591,15 +2929,23 @@ app.get('/api/memberStageDetail', async (req, res) => {
               )) AS completed_skus,
               -- Pending/issue always reflect the current live state
               COUNT(DISTINCT IF(
-                  se.status = 'In Progress' AND se.comments NOT LIKE 'QC flagged:%',
+                  COALESCE(se.skipped, 0) = 0
+                    AND se.status = 'In Progress'
+                    AND COALESCE(se.comments, '') NOT LIKE 'QC flagged:%',
                   e.sku, NULL
               )) AS in_progress_skus,
-              COUNT(DISTINCT IF(se.status = 'Not Started', e.sku, NULL)) AS not_started_skus,
               COUNT(DISTINCT IF(
-                  se.status = 'Issue'
-                    OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%'),
+                  COALESCE(se.skipped, 0) = 0
+                    AND COALESCE(se.status, 'Not Started') = 'Not Started',
                   e.sku, NULL
-              )) AS issue_skus
+              )) AS not_started_skus,
+              COUNT(DISTINCT IF(
+                  COALESCE(se.skipped, 0) = 0
+                    AND (se.status = 'Issue'
+                         OR (se.status = 'In Progress' AND se.comments LIKE 'QC flagged:%')),
+                  e.sku, NULL
+              )) AS issue_skus,
+              COUNT(DISTINCT IF(COALESCE(se.skipped, 0) = 1, e.sku, NULL)) AS skipped_skus
           FROM effective e
           LEFT JOIN ${T('stage_entries')} se
               ON se.product_id = e.product_id
@@ -2623,16 +2969,22 @@ app.get('/api/memberStageDetail', async (req, res) => {
           ps.completed_skus,
           ps.in_progress_skus,
           ps.not_started_skus,
-          ps.issue_skus
+          ps.issue_skus,
+          ps.skipped_skus
       FROM totals t
       JOIN ${T('users')} u ON u.id = t.member_id
       JOIN per_stage ps ON ps.member_id = t.member_id AND ps.division = t.division
       ORDER BY t.division, u.name, ps.stage
       `,
-      [division || null, fromDt, toDt, vendor || null]
+      [
+        division || null,
+        fromDt,
+        toDt,
+        vendor || null,
+        set_no ? String(set_no) : null
+      ]
     )
 
-    // ---- ✅ NO CHANGE from here down ----
     const flatRows = rows.map(r => ({
       ...r,
       total_assigned_skus: Number(r.total_assigned_skus),
@@ -2641,6 +2993,7 @@ app.get('/api/memberStageDetail', async (req, res) => {
       in_progress_skus: Number(r.in_progress_skus),
       not_started_skus: Number(r.not_started_skus),
       issue_skus: Number(r.issue_skus),
+      skipped_skus: Number(r.skipped_skus || 0),
       last_assigned_at: iso(r.last_assigned_at) || null,
       last_completed_at: iso(r.last_completed_at) || null
     }))
@@ -2665,7 +3018,8 @@ app.get('/api/memberStageDetail', async (req, res) => {
         completedSkus: r.completed_skus,
         inProgressSkus: r.in_progress_skus,
         notStartedSkus: r.not_started_skus,
-        issueSkus: r.issue_skus
+        issueSkus: r.issue_skus,
+        skippedSkus: r.skipped_skus
       })
     })
 
@@ -2680,9 +3034,7 @@ app.get('/api/memberStageDetail', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: GET /api/memberDailyActivity ===================== */
-// ARRAY_AGG(sku ORDER BY ...) does not exist in MySQL. The rows are fetched
-// in order and grouped in JS, so the response shape stays the same.
+/* ===================== GET /api/memberDailyActivity ===================== */
 
 app.get('/api/memberDailyActivity', async (req, res) => {
   const { person, division, from, to } = req.query
@@ -2727,7 +3079,7 @@ app.get('/api/memberDailyActivity', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: GET /api/teamStageActivity ===================== */
+/* ===================== GET /api/teamStageActivity ===================== */
 
 app.get('/api/teamStageActivity', async (req, res) => {
   const { division, from, to } = req.query
@@ -2771,7 +3123,6 @@ app.get('/api/teamStageActivity', async (req, res) => {
       )
     ])
 
-    // ---- ✅ NO CHANGE from here down ----
     const totalsByPerson = {}
     totalsRows.forEach(r => {
       totalsByPerson[r.member_name] = Number(r.total_cards)
@@ -2802,8 +3153,7 @@ app.get('/api/teamStageActivity', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: GET /api/store-list ===================== */
-// Plain SQL that works in MySQL. See the notes about the string_field_0 column.
+/* ===================== GET /api/store-list ===================== */
 
 app.get('/api/store-list', async (req, res) => {
   try {
@@ -2821,7 +3171,7 @@ app.get('/api/store-list', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: dispatchValidate ===================== */
+/* ===================== dispatchValidate ===================== */
 
 async function dispatchValidate (division, vendor, branchName) {
   const [{ rows: vcheck }, { rows: scheck }] = await Promise.all([
@@ -2842,16 +3192,15 @@ async function dispatchValidate (division, vendor, branchName) {
   return null
 }
 
-/* ===================== 🆕 NEW helper for admin-upload ===================== */
-// Replaces ABS(FARM_FINGERPRINT(CONCAT(batch_id, '|', sku))).
-// Gives the same kind of stable BIGINT id for a (batch, sku) pair.
+/* ===================== helper for admin-upload ===================== */
+// Stable BIGINT id for a (batch, sku) pair.
 const itemId = (batchId, sku) =>
   BigInt(
     '0x' +
       createHash('md5').update(`${batchId}|${sku}`).digest('hex').slice(0, 15)
   ).toString()
 
-/* ===================== 🔄 CHANGED: POST /api/dispatch/admin-upload ===================== */
+/* ===================== POST /api/dispatch/admin-upload ===================== */
 
 app.post('/api/dispatch/admin-upload', async (req, res) => {
   const {
@@ -2946,7 +3295,7 @@ app.post('/api/dispatch/admin-upload', async (req, res) => {
         )
       }
 
-      // scan_count is ADDED to on duplicates, like the old MERGE
+      // scan_count is ADDED to on duplicates
       for (const part of chunk(itemRows, 1000)) {
         await client.query(
           `INSERT INTO ${T('dispatch_batch_items')}
@@ -2967,7 +3316,7 @@ app.post('/api/dispatch/admin-upload', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: POST /api/dispatch/branch-upload ===================== */
+/* ===================== POST /api/dispatch/branch-upload ===================== */
 
 app.post('/api/dispatch/branch-upload', async (req, res) => {
   const {
@@ -3015,7 +3364,7 @@ app.post('/api/dispatch/branch-upload', async (req, res) => {
         [String(division), String(vendor), String(batchLabel)]
       )
       setLabel = `Set ${Number(cntRow[0].n) + 1}`
-      batchId = randomUUID() // 🔄 was require('crypto').randomUUID()
+      batchId = randomUUID()
     }
     const setNumber = setLabel
       ? Number((setLabel.match(/\d+/) || [])[0]) || null
@@ -3091,9 +3440,7 @@ app.post('/api/dispatch/branch-upload', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: GET /api/dispatch/comparison ===================== */
-// ARRAY_AGG(DISTINCT ... IGNORE NULLS) does not exist in MySQL.
-// The rows are fetched one per SKU and grouped in JS, so the response is the same.
+/* ===================== GET /api/dispatch/comparison ===================== */
 
 app.get('/api/dispatch/comparison', async (req, res) => {
   const { division, vendor, batchLabel, setLabel, branchName } = req.query
@@ -3119,7 +3466,7 @@ app.get('/api/dispatch/comparison', async (req, res) => {
       ]
     )
 
-    // Same grouping as the old GROUP BY: branch_name, source, uploaded_by, uploaded_at
+    // Grouped by branch_name, source, uploaded_by, uploaded_at
     const groups = new Map()
     rows.forEach(r => {
       const key = [r.branch_name, r.source, r.uploaded_by, r.uploaded_at].join(
@@ -3145,7 +3492,6 @@ app.get('/api/dispatch/comparison', async (req, res) => {
       ;(byBranch[g.branch_name] ||= {})[g.source] = g
     })
 
-    // ---- ✅ NO CHANGE from here down ----
     const results = Object.entries(byBranch).map(([branch, sides]) => {
       const dispatched = new Set(
         (sides.dispatched?.skus || []).map(s => s.toLowerCase())
@@ -3181,8 +3527,7 @@ app.get('/api/dispatch/comparison', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: GET /api/dispatch/groups ===================== */
-// COUNT(DISTINCT IF(...)) works in MySQL as is.
+/* ===================== GET /api/dispatch/groups ===================== */
 
 app.get('/api/dispatch/groups', async (req, res) => {
   const { division } = req.query
@@ -3212,7 +3557,7 @@ app.get('/api/dispatch/groups', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: GET /api/dispatch/batch-labels ===================== */
+/* ===================== GET /api/dispatch/batch-labels ===================== */
 
 app.get('/api/dispatch/batch-labels', async (req, res) => {
   const { division, vendor } = req.query
@@ -3233,7 +3578,7 @@ app.get('/api/dispatch/batch-labels', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: GET /api/dispatch/set-labels ===================== */
+/* ===================== GET /api/dispatch/set-labels ===================== */
 
 app.get('/api/dispatch/set-labels', async (req, res) => {
   const { division, vendor, batchLabel, branchName } = req.query
@@ -3262,7 +3607,7 @@ app.get('/api/dispatch/set-labels', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: GET /api/dispatch/set-summary ===================== */
+/* ===================== GET /api/dispatch/set-summary ===================== */
 
 app.get('/api/dispatch/set-summary', async (req, res) => {
   const { division, vendor, batchLabel } = req.query
@@ -3316,7 +3661,7 @@ app.get('/api/dispatch/set-summary', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: POST /api/dispatch/delete-batch ===================== */
+/* ===================== POST /api/dispatch/delete-batch ===================== */
 
 app.post('/api/dispatch/delete-batch', async (req, res) => {
   const { batchId } = req.body
@@ -3330,7 +3675,6 @@ app.post('/api/dispatch/delete-batch', async (req, res) => {
     if (!rows.length)
       return res.status(404).json({ ok: false, error: 'Batch not found' })
 
-    // 🔄 was a BEGIN TRANSACTION script; now a real transaction
     await txWithRetry(async client => {
       await client.query(
         `DELETE FROM ${T('dispatch_batch_items')} WHERE batch_id = $1`,
@@ -3356,7 +3700,7 @@ app.post('/api/dispatch/delete-batch', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: GET /api/dispatch/batches ===================== */
+/* ===================== GET /api/dispatch/batches ===================== */
 
 app.get('/api/dispatch/batches', async (req, res) => {
   const { division, vendor, batchLabel } = req.query
@@ -3390,7 +3734,7 @@ app.get('/api/dispatch/batches', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: POST /api/dispatch/rename-batch ===================== */
+/* ===================== POST /api/dispatch/rename-batch ===================== */
 
 app.post('/api/dispatch/rename-batch', async (req, res) => {
   const { division, vendor, oldBatchLabel, newBatchLabel } = req.body
@@ -3443,11 +3787,7 @@ app.post('/api/dispatch/rename-batch', async (req, res) => {
   }
 })
 
-/* ===================== ❌ DELETE the old withRetry() helper ===================== */
-// It checked for BigQuery error messages ("concurrent update" etc.), which
-// MySQL never raises. txWithRetry() now does this job for deadlocks.
-
-/* ===================== 🔄 CHANGED: POST /api/dispatch/scan-undo ===================== */
+/* ===================== POST /api/dispatch/scan-undo ===================== */
 // The row is locked (FOR UPDATE) while it is read, so two quick undo clicks
 // can't both read the same count.
 
@@ -3498,7 +3838,7 @@ app.post('/api/dispatch/scan-undo', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: POST /api/dispatch/scan ===================== */
+/* ===================== POST /api/dispatch/scan ===================== */
 
 app.post('/api/dispatch/scan', async (req, res) => {
   const {
@@ -3545,7 +3885,7 @@ app.post('/api/dispatch/scan', async (req, res) => {
       String(branchName)
     ]
 
-    // ---- ✅ NO CHANGE: a "received" scan must match something dispatched ----
+    // A "received" scan must match something dispatched
     if (source === 'received') {
       const { rows: dcheck } = await db.query(
         `SELECT id FROM ${T('dispatch_batches')}
@@ -3582,10 +3922,10 @@ app.post('/api/dispatch/scan', async (req, res) => {
       [...keyParams, String(source)]
     )
     const isNew = batchRows.length === 0
-    const batchId = isNew ? randomUUID() : String(batchRows[0].id) // 🔄
+    const batchId = isNew ? randomUUID() : String(batchRows[0].id)
     const nowDt = toMysqlDt(new Date())
 
-    // 🔄 CHANGED: script -> transaction. Batch row + item upsert together.
+    // Batch row + item upsert together
     await txWithRetry(async client => {
       if (isNew) {
         await client.query(
@@ -3610,7 +3950,7 @@ app.post('/api/dispatch/scan', async (req, res) => {
         )
       }
 
-      // MERGE -> INSERT ... ON DUPLICATE KEY UPDATE (needs uq_batch_sku)
+      // needs the unique key uq_batch_sku
       await client.query(
         `INSERT INTO ${T('dispatch_batch_items')}
            (id, batch_id, sku, qty, scan_count, first_scanned_at, last_scanned_at)
@@ -3622,7 +3962,7 @@ app.post('/api/dispatch/scan', async (req, res) => {
       )
     })
 
-    // ---- ✅ NO CHANGE: one read for the scanned SKU's count + batch totals ----
+    // One read for the scanned SKU's count + batch totals
     const { rows } = await db.query(
       `SELECT
          IFNULL(SUM(IF(sku = $2, scan_count, 0)), 0) AS scan_count,
@@ -3649,7 +3989,7 @@ app.post('/api/dispatch/scan', async (req, res) => {
   }
 })
 
-/* ===================== ✅ NO CHANGE: GET /api/dispatch/scan-log ===================== */
+/* ===================== GET /api/dispatch/scan-log ===================== */
 
 app.get('/api/dispatch/scan-log', async (req, res) => {
   const { division, vendor, batchLabel, setLabel, branchName, source } =
@@ -3696,10 +4036,7 @@ app.get('/api/dispatch/scan-log', async (req, res) => {
   }
 })
 
-/* ===================== 🔄 CHANGED: GET /api/dispatch/branch-pending ===================== */
-// The SKU arrays are no longer built in SQL. One query returns the
-// dispatched/received batch pairs, a second returns the (batch_id, sku) rows
-// for this branch, and the arrays are built in JS. The response is the same.
+/* ===================== GET /api/dispatch/branch-pending ===================== */
 
 app.get('/api/dispatch/branch-pending', async (req, res) => {
   const { division, branchName } = req.query
@@ -3773,7 +4110,6 @@ app.get('/api/dispatch/branch-pending', async (req, res) => {
 
 /* ===================== Server start + graceful shutdown ===================== */
 
-// ✅ NO CHANGE
 const PORT = process.env.PORT || 8080
 const server = app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`)
@@ -3781,7 +4117,7 @@ const server = app.listen(PORT, () => {
 
 let isShuttingDown = false
 
-// 🔄 CHANGED: after the HTTP server stops, the MySQL pool is closed too
+// After the HTTP server stops, the MySQL pool is closed too
 function gracefulShutdown (signal) {
   if (isShuttingDown) return
   isShuttingDown = true
@@ -3807,5 +4143,3 @@ function gracefulShutdown (signal) {
 
 process.on('SIGINT', () => gracefulShutdown('SIGINT'))
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
-
-// ❌ DELETE the commented-out PORT / app.listen lines that were at the bottom.
