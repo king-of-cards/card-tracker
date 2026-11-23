@@ -6,6 +6,9 @@
 //                branch access rows in setAssignments
 //   🆕 QC      — POST /api/bulkQcApprove (approve many cards at once)
 //   🆕 LOGIN   — POST /api/login: passwords are checked on the server
+//   🐞 QC FIX  — batchPatchStage saves dimensions itself and clears "Issues Found"
+//                once no QC-flagged stage is left (single + bulk saves)
+//   🆕 SPEED   — responses are gzip-compressed (needs: npm install compression)
 //   🐞 FIX     — bugs found along the way:
 //                • comments wiped on bulk change
 //                • export: QC approval counts as the QC stage being done,
@@ -18,6 +21,7 @@ require('dotenv').config()
 const express = require('express')
 const mysql = require('mysql2/promise')
 const cors = require('cors')
+const compression = require('compression') // 🆕 SPEED: gzip responses
 const {
   randomUUID,
   createHash,
@@ -27,6 +31,9 @@ const {
 
 const app = express()
 app.use(cors({ origin: '*', maxAge: 86400 }))
+// 🆕 SPEED: compress every response. /api/getAll goes from ~11.7 MB to ~0.25 MB,
+// so the app loads in a fraction of the time, especially on slow connections.
+app.use(compression({ threshold: 1024 }))
 app.use(express.json({ limit: '25mb' }))
 
 /* ===================== connection ===================== */
@@ -195,7 +202,7 @@ app.get('/health', async (req, res) => {
     await db.query('SELECT 1')
     res.json({
       ok: true,
-      version: 'mysql-skip-assign-qc-login-v3', // shows the new code is running
+      version: 'mysql-skip-assign-qc-login-v5', // shows the new code is running
       db: 'connected to MySQL successfully!'
     })
   } catch (e) {
@@ -809,7 +816,7 @@ app.post('/api/batchPatchStage', async (req, res) => {
     return res
       .status(400)
       .json({ ok: false, error: `unknown stage "${stageKey}"` })
-  if (ids.length === 0) return res.json({ ok: true, count: 0 })
+  if (ids.length === 0) return res.json({ ok: true, count: 0, cleared: [] })
 
   try {
     const uniqueIds = [...new Set(ids.map(i => String(i)))]
@@ -821,7 +828,21 @@ app.post('/api/batchPatchStage', async (req, res) => {
     const comments = patch.comments ?? null
     const skipped = patch.skipped == null ? null : patch.skipped ? 1 : 0
 
+    // 🐞 FIX (QC): dimensions are saved here too. Before, the app re-sent the
+    // WHOLE card through batchUpsertProducts just to store them, which could
+    // overwrite a newer QC verdict / sent-back stages with an old copy.
+    const isDim = String(stageKey) === 'dimensions'
+    const dim = v =>
+      v === undefined || v === null || v === '' ? null : Number(v) || null
+    const width = isDim ? dim(patch.width) : null
+    const height = isDim ? dim(patch.height) : null
+    const weight = isDim ? dim(patch.weight) : null
+
+    // Cards whose "Issues Found" verdict was cleared because nothing is left to fix
+    const cleared = []
+
     await txWithRetry(async client => {
+      cleared.length = 0 // reset if the transaction is retried
       for (const part of chunk(uniqueIds, 1000)) {
         // Used only when the stage row does not exist yet (INSERT path)
         const rows = part.map(id => [
@@ -831,30 +852,78 @@ app.post('/api/batchPatchStage', async (req, res) => {
           person,
           comments ?? '',
           skipped ?? 0,
-          nowDt
+          nowDt,
+          width,
+          height,
+          weight
         ])
 
         await client.query(
           `INSERT INTO ${T('stage_entries')}
-             (product_id, stage_key, status, person, comments, skipped, updated_at)
+             (product_id, stage_key, status, person, comments, skipped, updated_at,
+              width_cm, height_cm, weight_gm)
            VALUES $1
            ON DUPLICATE KEY UPDATE
              status     = COALESCE($2, status),
              person     = COALESCE($3, person),
              comments   = COALESCE($4, comments),
              skipped    = COALESCE($5, skipped),
-             updated_at = $6`,
-          [rows, status, person, comments, skipped, nowDt]
+             updated_at = $6,
+             width_cm   = COALESCE($7, width_cm),
+             height_cm  = COALESCE($8, height_cm),
+             weight_gm  = COALESCE($9, weight_gm)`,
+          [
+            rows,
+            status,
+            person,
+            comments,
+            skipped,
+            nowDt,
+            width,
+            height,
+            weight
+          ]
         )
 
         await client.query(
           `UPDATE ${T('products')} SET updated_at = $1 WHERE id IN ($2)`,
           [nowDt, part]
         )
+
+        // 🐞 FIX (QC): when a stage is completed (or skipped) and the card has
+        // NO QC-flagged stage left, clear its "Issues Found" verdict so it moves
+        // to "Fixed, check again" in QC Audit. Done here on the server, so it
+        // works for single saves, bulk saves and the old app, and always uses
+        // the latest data instead of one browser's copy.
+        if (status === 'Completed' || skipped === 1) {
+          const { rows: fixed } = await client.query(
+            `SELECT p.id FROM ${T('products')} p
+             WHERE p.id IN ($1)
+               AND p.verdict = 'Issues Found'
+               AND NOT EXISTS (
+                 SELECT 1 FROM ${T('stage_entries')} se
+                 WHERE se.product_id = p.id
+                   AND COALESCE(se.skipped, 0) = 0
+                   AND se.status = 'In Progress'
+                   AND se.comments LIKE 'QC flagged:%'
+               )`,
+            [part]
+          )
+          const fixedIds = fixed.map(r => String(r.id))
+          if (fixedIds.length) {
+            await client.query(
+              `UPDATE ${T('products')}
+               SET verdict = NULL, issues = '', updated_at = $1
+               WHERE id IN ($2)`,
+              [nowDt, fixedIds]
+            )
+            cleared.push(...fixedIds)
+          }
+        }
       }
     })
 
-    res.json({ ok: true, count: uniqueIds.length })
+    res.json({ ok: true, count: uniqueIds.length, cleared })
   } catch (e) {
     console.error('batchPatchStage error', e.message)
     res.status(500).json({ ok: false, error: e.message })
